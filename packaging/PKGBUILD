@@ -1,0 +1,48 @@
+# Maintainer: Karol Gbur
+pkgname=syspilot
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Token-Lean Autonomous SRE Desktop Copilot & Health Sentinel for Arch Linux"
+arch=('any')
+url="https://github.com/KarolGbur/SysPilot"
+license=('Apache-2.0')
+depends=(
+    'bash'
+    'python'
+    'python-pyqt6'
+    'pacman-contrib'
+    'jq'
+    'libnotify'
+)
+optdepends=(
+    'goose-cli: for autonomous AI-powered error diagnostics and automated fixes'
+    'gamemode: for automatic diagnostics inhibition during active gaming sessions'
+    'yay: for AUR updates triage'
+    'paru: for AUR updates triage'
+    'bubblewrap: for sandboxed gaming runners (FAF)'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+
+    # Install main executables
+    install -dm755 "$pkgdir/usr/lib/$pkgname"
+    cp -r core gui copilot assets "$pkgdir/usr/lib/$pkgname/"
+    install -Dm755 bin/sys-health.sh "$pkgdir/usr/lib/$pkgname/bin/sys-health.sh"
+    install -Dm755 bin/syspilot-sentinel "$pkgdir/usr/lib/$pkgname/bin/syspilot-sentinel"
+    install -Dm755 bin/syspilot "$pkgdir/usr/bin/syspilot"
+
+    # Install desktop entry
+    install -Dm644 autostart/syspilot.desktop "$pkgdir/etc/xdg/autostart/syspilot.desktop"
+    install -Dm644 autostart/syspilot.desktop "$pkgdir/usr/share/applications/syspilot.desktop"
+
+    # Install systemd user services
+    install -Dm644 systemd/syspilot-sentinel.service "$pkgdir/usr/lib/systemd/user/syspilot-sentinel.service"
+    install -Dm644 systemd/syspilot-sentinel.timer "$pkgdir/usr/lib/systemd/user/syspilot-sentinel.timer"
+
+    # Install documentation and license
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

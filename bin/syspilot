@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# SysPilot — Token-Lean Autonomous SRE Desktop Copilot
+# Universal system health sentinel, tray manager & AI Copilot for Arch Linux
+# ==============================================================================
+
+set -eo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Color definitions
+BOLD="\033[1m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+RED="\033[31m"
+CYAN="\033[36m"
+MAGENTA="\033[35m"
+RESET="\033[0m"
+
+show_help() {
+    cat << EOF
+${BOLD}SysPilot — Token-Lean Autonomous SRE Desktop Copilot${RESET}
+Universal health sentinel, system tray daemon & AI Copilot for Arch Linux & derivatives.
+
+${BOLD}Usage:${RESET}
+  syspilot [COMMAND | OPTIONS]
+
+${BOLD}GUI & Tray Operations:${RESET}
+  syspilot                Launch the graphical dashboard & tray sentinel
+  syspilot --tray         Launch minimized to system tray (used for autostart)
+
+${BOLD}CLI Fast-Paths (0-Token Local Telemetry):${RESET}
+  -s, --status            Print formatted terminal flight readiness scorecard
+  -j, --json              Run fast zero-root triage and output JSON
+  -a, --audit             Run comprehensive sys-health audit & report
+  -u, --upgrade           Run guarded system upgrade
+  -m, --maintenance       Run safe system maintenance & cache cleaning
+  -g, --gaming            Run gaming readiness & Proton/Vulkan audit
+
+${BOLD}AI Copilot (Goose Integration):${RESET}
+  --copilot "QUESTION"    Ask SysPilot Copilot to diagnose/fix an issue
+  --copilot-shell         Launch interactive Copilot session in terminal
+
+${BOLD}Daemon & Autostart:${RESET}
+  --sentinel              Run background sentinel loop (monitoring & notification)
+  --enable-autostart      Create XDG autostart entry (~/.config/autostart/syspilot.desktop)
+  --disable-autostart     Remove XDG autostart entry
+
+  -h, --help              Show this help message
+EOF
+}
+
+print_terminal_status() {
+    # Run triage and parse json
+    local json_out
+    json_out="$("$PROJECT_ROOT/core/triage.py")"
+
+    local status reasons up_tot up_core up_reg up_aur disk_pct disk_avail p_count gm
+    status="$(echo "$json_out" | jq -r '.status // "UNKNOWN"')"
+    gm="$(echo "$json_out" | jq -r '.gaming_mode // false')"
+    up_tot="$(echo "$json_out" | jq -r '.updates.total // 0')"
+    up_core="$(echo "$json_out" | jq -r '.updates.core_count // 0')"
+    up_reg="$(echo "$json_out" | jq -r '.updates.regular_count // 0')"
+    up_aur="$(echo "$json_out" | jq -r '.updates.aur_count // 0')"
+    disk_pct="$(echo "$json_out" | jq -r '.disk.root.used_pct // 0')"
+    disk_avail="$(echo "$json_out" | jq -r '.disk.root.avail_gb // 0')"
+    p_count="$(echo "$json_out" | jq -r '.pacnew.count // 0')"
+
+    echo ""
+    echo -e "${BOLD}${CYAN}✈ SysPilot — System Flight Readiness Scorecard${RESET}"
+    echo -e "${BOLD}────────────────────────────────────────────────────────${RESET}"
+    
+    if [[ "$status" == "FLIGHT_READY" ]]; then
+        echo -e "Overall Status:   ${BOLD}${GREEN}✔ FLIGHT READY${RESET}"
+    elif [[ "$status" == "PRE_FLIGHT_ATTENTION" ]]; then
+        echo -e "Overall Status:   ${BOLD}${YELLOW}ℹ PRE-FLIGHT ATTENTION${RESET}"
+    elif [[ "$status" == "ACTION_REQUIRED" ]]; then
+        echo -e "Overall Status:   ${BOLD}${RED}✖ ACTION REQUIRED${RESET}"
+    else
+        echo -e "Overall Status:   ${BOLD}${MAGENTA}? $status${RESET}"
+    fi
+
+    if [[ "$gm" == "true" ]]; then
+        echo -e "Gaming Mode:      ${BOLD}${CYAN}🎮 ACTIVE (GameMode detected - diagnostics inhibited)${RESET}"
+    else
+        echo -e "Gaming Mode:      Inactive (Standard desktop operation)"
+    fi
+
+    echo -e "Pending Updates:  ${up_tot} total (${BOLD}${YELLOW}${up_core} core${RESET}, ${up_reg} regular, ${up_aur} AUR)"
+    echo -e "Root Storage (/): ${disk_pct}% used (${disk_avail} GB free)"
+    echo -e "Config Conflicts: ${p_count} .pacnew files pending review"
+    
+    # Check failed services
+    local sys_failed usr_failed
+    sys_failed="$(echo "$json_out" | jq -r '.failed_services.system[]?' 2>/dev/null || true)"
+    usr_failed="$(echo "$json_out" | jq -r '.failed_services.user[]?' 2>/dev/null || true)"
+    if [[ -n "$sys_failed" || -n "$usr_failed" ]]; then
+        echo -e "Failed Units:     ${BOLD}${RED}System: [${sys_failed}] User: [${usr_failed}]${RESET}"
+    else
+        echo -e "Systemd Units:    ${GREEN}✔ All active units operational${RESET}"
+    fi
+
+    echo -e "${BOLD}────────────────────────────────────────────────────────${RESET}"
+    echo -e "Launch GUI: ${CYAN}syspilot${RESET} | Copilot: ${CYAN}syspilot --copilot \"issue\"${RESET}"
+    echo ""
+}
+
+# Parse options
+case "${1:-}" in
+    -h|--help)
+        show_help
+        exit 0
+        ;;
+    -s|--status)
+        print_terminal_status
+        exit 0
+        ;;
+    -j|--json)
+        shift
+        python3 "$PROJECT_ROOT/core/triage.py" "$@"
+        exit 0
+        ;;
+    -a|--audit)
+        shift
+        "$PROJECT_ROOT/bin/sys-health.sh" --audit "$@"
+        exit $?
+        ;;
+    -u|--upgrade)
+        shift
+        "$PROJECT_ROOT/bin/sys-health.sh" --upgrade "$@"
+        exit $?
+        ;;
+    -m|--maintenance)
+        shift
+        "$PROJECT_ROOT/bin/sys-health.sh" --maintenance "$@"
+        exit $?
+        ;;
+    -g|--gaming)
+        shift
+        "$PROJECT_ROOT/bin/sys-health.sh" --gaming "$@"
+        exit $?
+        ;;
+    --copilot)
+        shift
+        if [[ -z "$*" ]]; then
+            echo "Error: Please provide a prompt or question for SysPilot Copilot."
+            exit 1
+        fi
+        echo -e "${CYAN}🤖 Invoking SysPilot Copilot (Token-Lean SRE)...${RESET}"
+        goose run --recipe "$PROJECT_ROOT/copilot/recipe.yaml" --params "user_query=$*" -q
+        exit $?
+        ;;
+    --copilot-shell)
+        echo -e "${CYAN}🤖 Starting interactive SysPilot Copilot session...${RESET}"
+        goose run --recipe "$PROJECT_ROOT/copilot/recipe.yaml" -s
+        exit $?
+        ;;
+    --sentinel)
+        shift
+        python3 "$PROJECT_ROOT/bin/syspilot-sentinel" "$@"
+        exit $?
+        ;;
+    --enable-autostart)
+        mkdir -p ~/.config/autostart
+        cat << EOF > ~/.config/autostart/syspilot.desktop
+[Desktop Entry]
+Type=Application
+Name=SysPilot
+Comment=Autonomous Token-Lean SRE Copilot for Arch Linux
+Exec=$PROJECT_ROOT/bin/syspilot --tray
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+X-GNOME-Autostart-enabled=true
+EOF
+        echo -e "${GREEN}✔ Autostart enabled at ~/.config/autostart/syspilot.desktop${RESET}"
+        exit 0
+        ;;
+    --disable-autostart)
+        rm -f ~/.config/autostart/syspilot.desktop
+        echo -e "${YELLOW}✔ Autostart disabled (entry removed)${RESET}"
+        exit 0
+        ;;
+    --tray)
+        python3 "$PROJECT_ROOT/gui/syspilot_gui.py" --tray
+        exit 0
+        ;;
+    "")
+        python3 "$PROJECT_ROOT/gui/syspilot_gui.py"
+        exit 0
+        ;;
+    *)
+        echo "Unknown option: $1"
+        show_help
+        exit 1
+        ;;
+esac

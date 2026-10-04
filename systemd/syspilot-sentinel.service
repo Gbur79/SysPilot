@@ -1,0 +1,16 @@
+[Unit]
+Description=SysPilot System Health Sentinel
+Documentation=https://github.com/SysPilot/SysPilot
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/Projects/sysPilot/bin/syspilot-sentinel --once
+StandardOutput=journal
+StandardError=journal
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+
+[Install]
+WantedBy=default.target

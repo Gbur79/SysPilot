@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""
+SysPilot Sentinel Daemon
+Watches system health in the background, respects GameMode, and updates status cache.
+"""
+
+import os
+import sys
+import time
+import subprocess
+import shutil
+
+# Add project root to sys.path
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, PROJECT_ROOT)
+
+from core.triage import run_triage, is_gamemode_active, STATUS_FILE
+
+
+def notify(title: str, message: str, urgency: str = "normal", icon: str = "dialog-information"):
+    """Send desktop notification via notify-send if not in game."""
+    if is_gamemode_active():
+        return
+    if shutil.which("notify-send"):
+        try:
+            subprocess.run([
+                "notify-send",
+                "-a", "SysPilot",
+                "-u", urgency,
+                "-i", icon,
+                title, message
+            ], timeout=2.0)
+        except Exception:
+            pass
+
+
+def run_cycle(check_pkgs: bool = True):
+    """Run one evaluation cycle."""
+    if is_gamemode_active():
+        # In gaming mode: do nothing, preserve FPS
+        return
+
+    data = run_triage(check_pkgs=check_pkgs)
+    status = data.get("status")
+
+    if status == "ACTION_REQUIRED":
+        reasons = "\n".join(data.get("status_reasons", []))
+        notify("SysPilot: Action Required ⚠️", f"Attention needed:\n{reasons}", urgency="critical", icon="dialog-warning")
+    elif status == "PRE_FLIGHT_ATTENTION":
+        reasons = "\n".join(data.get("status_reasons", []))
+        # Only notify once on core updates
+        core_count = data.get("updates", {}).get("core_count", 0)
+        if core_count > 0:
+            notify("SysPilot: Core Updates Available ℹ️", f"{core_count} core package(s) pending update.", urgency="normal")
+
+
+def main():
+    # If run with --once, execute one cycle and exit
+    if "--once" in sys.argv:
+        run_cycle(check_pkgs=True)
+        return
+
+    # Continuous sentinel loop (default: checks every 3 hours, or quick check every 5 mins)
+    # Quick loop checks services/disk/gamemode; heavy package check runs every 3 hours
+    last_pkg_check = 0.0
+    PKG_INTERVAL = 3 * 3600  # 3 hours
+
+    while True:
+        try:
+            now = time.time()
+            do_pkg = (now - last_pkg_check) >= PKG_INTERVAL
+            if do_pkg:
+                last_pkg_check = now
+            
+            run_cycle(check_pkgs=do_pkg)
+        except Exception as e:
+            pass
+
+        time.sleep(300)  # 5 minutes sleep between light checks
+
+
+if __name__ == "__main__":
+    main()

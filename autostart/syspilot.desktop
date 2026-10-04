@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=SysPilot
+GenericName=System Health Sentinel & AI Copilot
+Comment=Autonomous Token-Lean SRE Copilot for Arch Linux
+Exec=/home/gbur/Projects/sysPilot/bin/syspilot --tray
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;Utility;
+X-GNOME-Autostart-enabled=true
+StartupNotify=false

@@ -1,0 +1,11 @@
+[Unit]
+Description=SysPilot Periodic Sentinel Evaluation Timer
+Documentation=https://github.com/SysPilot/SysPilot
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=3h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

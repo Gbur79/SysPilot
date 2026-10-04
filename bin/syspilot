@@ -67,6 +67,11 @@ print_terminal_status() {
     disk_avail="$(echo "$json_out" | jq -r '.disk.root.avail_gb // 0')"
     p_count="$(echo "$json_out" | jq -r '.pacnew.count // 0')"
 
+    local sa_tot sa_aur sa_fp
+    sa_tot="$(echo "$json_out" | jq -r '.standalone_software.total_updates // 0')"
+    sa_aur="$(echo "$json_out" | jq -r '.standalone_software.aur_pending // 0')"
+    sa_fp="$(echo "$json_out" | jq -r '.standalone_software.flatpak_pending // 0')"
+
     echo ""
     echo -e "${BOLD}${CYAN}✈ SysPilot — System Flight Readiness Scorecard${RESET}"
     echo -e "${BOLD}────────────────────────────────────────────────────────${RESET}"
@@ -87,7 +92,8 @@ print_terminal_status() {
         echo -e "Gaming Mode:      Inactive (Standard desktop operation)"
     fi
 
-    echo -e "Pending Updates:  ${up_tot} total (${BOLD}${YELLOW}${up_core} core${RESET}, ${up_reg} regular, ${up_aur} AUR)"
+    echo -e "Repo Updates:     ${up_tot} total (${BOLD}${YELLOW}${up_core} core packages${RESET}, ${up_reg} regular)"
+    echo -e "Standalone Apps:  ${sa_tot} pending (${sa_aur} AUR, ${sa_fp} Flatpak, runtimes up to date)"
     echo -e "Root Storage (/): ${disk_pct}% used (${disk_avail} GB free)"
     echo -e "Config Conflicts: ${p_count} .pacnew files pending review"
     
@@ -131,9 +137,29 @@ case "${1:-}" in
         "$PROJECT_ROOT/bin/sys-health.sh" --upgrade "$@"
         exit $?
         ;;
+    --software)
+        shift
+        "$PROJECT_ROOT/bin/sys-health.sh" --software "$@"
+        exit $?
+        ;;
+    -o|--orphans)
+        shift
+        "$PROJECT_ROOT/bin/sys-health.sh" --orphans "$@"
+        exit $?
+        ;;
+    --mirrors)
+        shift
+        "$PROJECT_ROOT/bin/sys-health.sh" --mirrors "$@"
+        exit $?
+        ;;
     -m|--maintenance)
         shift
         "$PROJECT_ROOT/bin/sys-health.sh" --maintenance "$@"
+        exit $?
+        ;;
+    -d|--deep-clean)
+        shift
+        "$PROJECT_ROOT/bin/sys-health.sh" --deep-clean "$@"
         exit $?
         ;;
     -g|--gaming)

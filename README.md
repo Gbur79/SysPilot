@@ -52,6 +52,17 @@ By having the local bash/Python engine perform 100% of the heavy lifting for fre
   - Distinguishes **Core System Updates** (kernel, systemd, glibc, dracut, grub, mesa, nvidia) from regular packages.
   - Queries active and failed `systemd` units (system and user sessions).
   - Detects `.pacnew` configuration conflicts and un-rebooted kernel upgrades.
+- **Standalone & Third-Party Apps Update Triage:**
+  - Audits standalone and user-level applications: AUR packages, Flatpak runtimes, UV/Python, Goose CLI, Pipx, and Steam.
+- **Dedicated System Maintenance Suite:**
+  - 1) **Orphan Package Triage & Prune:** Interactive 3-tier orphan purger that preserves optional dependencies (`optdepends`).
+  - 2) **Refresh & Rank Regional Mirrors:** Benchmarks and ranks fastest regional mirrors with an atomic fallback safety gate.
+  - 3) **Clean (Safe Maintenance):** Safe pacman package cache trimming (retains latest 2), journal vacuuming, and temporary run cleanup.
+  - 4) **Deep Clean:** Purges user Trash, browser caches, thumbnail caches, and legacy diagnostic runs.
+- **Layman-Friendly AI Copilot Onboarding (30 Seconds Setup):**
+  - Zero terminal hassle: on first run, a clean graphical setup wizard guides users to connect their preferred AI engine.
+  - Recommends **Google Gemini Flash** (ultra-fast, generous free tier on Google AI Studio, no credit card required).
+  - Seamlessly configures Goose CLI profiles, API key secrets (`0600` permissions), and registers the `sys-pilot-admin` SRE skill automatically.
 - **Smart GameMode Inhibit (Zero FPS Stutter):**
   - Queries Feral GameMode (`gamemoded` / D-Bus) and active game processes.
   - Automatically suspends all background scans and desktop notifications during gaming sessions.

@@ -9,8 +9,8 @@ parameters:
     description: "The issue or question from the user (e.g. 'why is audio stuttering' or 'setup FAF')"
 
 settings:
-  goose_provider: "gemini-cli"
-  goose_model: "gemini-2.5-flash"
+  goose_provider: "google"
+  goose_model: "gemini-3.8-flash"
   temperature: 0.1
   max_turns: 15
 

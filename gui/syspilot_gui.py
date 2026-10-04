@@ -10,15 +10,16 @@ import json
 import shutil
 import subprocess
 import threading
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QBrush
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QUrl
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QBrush, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTabWidget, QProgressBar, QTextEdit,
     QLineEdit, QFrame, QScrollArea, QSystemTrayIcon, QMenu,
-    QCheckBox, QComboBox, QMessageBox
+    QCheckBox, QComboBox, QMessageBox, QRadioButton, QButtonGroup,
+    QStackedWidget
 )
 
 # Ensure project root is in sys.path
@@ -27,6 +28,10 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, PROJECT_ROOT)
 
 from core.triage import run_triage, is_gamemode_active, STATUS_FILE
+from core.copilot_config import (
+    is_goose_installed, is_copilot_ready, get_configured_providers,
+    configure_provider, find_goose_binary
+)
 
 AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
 AUTOSTART_FILE = os.path.join(AUTOSTART_DIR, "syspilot.desktop")
@@ -73,11 +78,11 @@ def make_status_icon(color_hex: str, symbol: str = "") -> QIcon:
 
 DARK_STYLESHEET = """
 QMainWindow {
-    background-color: #0f172a;
+    background-color: #0b1120;
     color: #f8fafc;
 }
 QWidget {
-    background-color: #0f172a;
+    background-color: #0b1120;
     color: #f8fafc;
     font-family: 'Segoe UI', 'Ubuntu', 'Cantarell', sans-serif;
     font-size: 13px;
@@ -91,14 +96,14 @@ QTabWidget::pane {
 QTabBar::tab {
     background-color: #1e293b;
     color: #94a3b8;
-    padding: 8px 18px;
+    padding: 9px 18px;
     margin-right: 4px;
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;
     font-weight: bold;
 }
 QTabBar::tab:selected {
-    background-color: #3b82f6;
+    background-color: #2563eb;
     color: #ffffff;
 }
 QTabBar::tab:hover:!selected {
@@ -115,14 +120,14 @@ QLabel.sectionTitle {
     font-size: 15px;
     font-weight: bold;
     color: #38bdf8;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
 QPushButton {
     background-color: #2563eb;
     color: #ffffff;
     border: none;
     border-radius: 6px;
-    padding: 7px 14px;
+    padding: 8px 16px;
     font-weight: bold;
 }
 QPushButton:hover {
@@ -150,11 +155,17 @@ QPushButton.warning {
 QPushButton.warning:hover {
     background-color: #b45309;
 }
+QPushButton.purple {
+    background-color: #7c3aed;
+}
+QPushButton.purple:hover {
+    background-color: #6d28d9;
+}
 QProgressBar {
     border: 1px solid #334155;
     border-radius: 5px;
     text-align: center;
-    background-color: #0f172a;
+    background-color: #020617;
     color: #ffffff;
     font-weight: bold;
 }
@@ -175,7 +186,7 @@ QTextEdit:focus, QLineEdit:focus {
 }
 QScrollBar:vertical {
     border: none;
-    background: #0f172a;
+    background: #0b1120;
     width: 8px;
     border-radius: 4px;
 }
@@ -197,16 +208,13 @@ class CopilotWorker(QObject):
 
     def run(self):
         recipe_path = os.path.join(PROJECT_ROOT, "copilot", "recipe.yaml")
-        goose_bin = shutil.which("goose")
-        if not goose_bin:
-            goose_bin = os.path.expanduser("~/.local/bin/goose")
+        goose_bin = find_goose_binary()
 
-        if not os.path.exists(goose_bin):
+        if not goose_bin:
             self.output_signal.emit("[Error] Goose CLI is not found on your system.\nPlease install goose via AUR or goose.ai.\n")
             self.finished_signal.emit()
             return
 
-        # Prepare execution
         self.output_signal.emit(f"🚀 Calling SysPilot Copilot with query:\n\"{self.query}\"\n(Token-Lean mode: reading local telemetry & playbooks...)\n\n")
 
         try:
@@ -241,7 +249,7 @@ class SysPilotWindow(QMainWindow):
         super().__init__()
         self.tray_app = tray_app
         self.setWindowTitle("SysPilot — Autonomous SRE Desktop Copilot")
-        self.resize(850, 680)
+        self.resize(880, 720)
         self.setStyleSheet(DARK_STYLESHEET)
 
         self.central_widget = QWidget()
@@ -251,7 +259,7 @@ class SysPilotWindow(QMainWindow):
         # Header Status Banner
         self.header_frame = QFrame()
         self.header_frame.setProperty("class", "card")
-        self.header_frame.setStyleSheet("background-color: #1e293b; border-radius: 8px; padding: 14px;")
+        self.header_frame.setStyleSheet("background-color: #1e293b; border-radius: 8px; padding: 12px;")
         header_layout = QHBoxLayout(self.header_frame)
 
         self.status_icon_label = QLabel("🟢")
@@ -274,21 +282,26 @@ class SysPilotWindow(QMainWindow):
 
         self.main_layout.addWidget(self.header_frame)
 
-        # Tabs
+        # Main Navigation Tabs
         self.tabs = QTabWidget()
         self.main_layout.addWidget(self.tabs)
 
-        # Tab 1: Dashboard
+        # Tab 1: Lean Dashboard
         self.dashboard_tab = QWidget()
-        self.setup_dashboard_tab()
-        self.tabs.addTab(self.dashboard_tab, "✈ Dashboard & Telemetry")
+        self.setup_lean_dashboard_tab()
+        self.tabs.addTab(self.dashboard_tab, "✈ Dashboard")
 
-        # Tab 2: Copilot AI
+        # Tab 2: System Maintenance
+        self.maintenance_tab = QWidget()
+        self.setup_maintenance_tab()
+        self.tabs.addTab(self.maintenance_tab, "🛠 System Maintenance")
+
+        # Tab 3: Copilot AI (With Layman Onboarding Wizard)
         self.copilot_tab = QWidget()
         self.setup_copilot_tab()
         self.tabs.addTab(self.copilot_tab, "🤖 AI Copilot (Goose SRE)")
 
-        # Tab 3: Settings
+        # Tab 4: Settings & Autostart
         self.settings_tab = QWidget()
         self.setup_settings_tab()
         self.tabs.addTab(self.settings_tab, "⚙ Settings & Autostart")
@@ -296,27 +309,27 @@ class SysPilotWindow(QMainWindow):
         # Load initial data
         self.update_ui_from_state()
 
-    def setup_dashboard_tab(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        content = QWidget()
-        layout = QVBoxLayout(content)
+    # --------------------------------------------------------------------------
+    # TAB 1: LEAN DASHBOARD
+    # --------------------------------------------------------------------------
+    def setup_lean_dashboard_tab(self):
+        layout = QVBoxLayout(self.dashboard_tab)
 
-        # Grid of Cards
-        # 1. Updates Card
-        self.updates_card = QFrame()
-        self.updates_card.setProperty("class", "card")
-        u_layout = QVBoxLayout(self.updates_card)
-        u_title = QLabel("📦 Software & System Updates")
+        # Card 1: Official System Updates
+        self.card_updates = QFrame()
+        self.card_updates.setProperty("class", "card")
+        u_layout = QVBoxLayout(self.card_updates)
+
+        u_title = QLabel("📦 Official Repository & Core System Updates")
         u_title.setProperty("class", "sectionTitle")
         u_layout.addWidget(u_title)
 
-        self.updates_lbl = QLabel("0 pending updates (0 core, 0 regular, 0 AUR)")
+        self.updates_lbl = QLabel("0 pending updates (0 core system packages)")
+        self.updates_lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
         u_layout.addWidget(self.updates_lbl)
 
-        self.core_pkgs_lbl = QLabel("")
-        self.core_pkgs_lbl.setStyleSheet("color: #fbbf24; font-size: 11px;")
+        self.core_pkgs_lbl = QLabel("All core packages (kernel, systemd, drivers, bootloader) are up to date.")
+        self.core_pkgs_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
         u_layout.addWidget(self.core_pkgs_lbl)
 
         u_btn_box = QHBoxLayout()
@@ -325,70 +338,216 @@ class SysPilotWindow(QMainWindow):
         self.btn_guarded_upgrade.clicked.connect(self.run_guarded_upgrade_terminal)
         u_btn_box.addWidget(self.btn_guarded_upgrade)
 
-        self.btn_safe_clean = QPushButton("🧹 Safe Maintenance")
-        self.btn_safe_clean.setProperty("class", "secondary")
-        self.btn_safe_clean.clicked.connect(self.run_maintenance_terminal)
-        u_btn_box.addWidget(self.btn_safe_clean)
-        u_layout.addLayout(u_btn_box)
-        layout.addWidget(self.updates_card)
+        self.btn_quick_audit = QPushButton("🔍 Full Diagnostic Audit")
+        self.btn_quick_audit.setProperty("class", "secondary")
+        self.btn_quick_audit.clicked.connect(self.run_audit_terminal)
+        u_btn_box.addWidget(self.btn_quick_audit)
 
-        # 2. Services & System Health Card
-        self.health_card = QFrame()
-        self.health_card.setProperty("class", "card")
-        h_layout = QVBoxLayout(self.health_card)
-        h_title = QLabel("🛡 Systemd Units & Storage Health")
+        u_layout.addLayout(u_btn_box)
+        layout.addWidget(self.card_updates)
+
+        # Card 2: Standalone & Third-Party Apps Update Check
+        self.card_software = QFrame()
+        self.card_software.setProperty("class", "card")
+        s_layout = QVBoxLayout(self.card_software)
+
+        s_title = QLabel("🚀 Standalone & Third-Party Apps Update Check")
+        s_title.setProperty("class", "sectionTitle")
+        s_layout.addWidget(s_title)
+
+        self.software_lbl = QLabel("AUR: 0 pending | Flatpak: Not installed | Goose: 1.53.0 (up to date) | UV: 0.12.23 (up to date)")
+        self.software_lbl.setStyleSheet("color: #cbd5e1; font-size: 13px;")
+        s_layout.addWidget(self.software_lbl)
+
+        s_btn_box = QHBoxLayout()
+        self.btn_check_apps = QPushButton("📦 Standalone & 3rd-Party Update Triage")
+        self.btn_check_apps.setProperty("class", "purple")
+        self.btn_check_apps.clicked.connect(self.run_software_terminal)
+        s_btn_box.addWidget(self.btn_check_apps)
+        s_layout.addLayout(s_btn_box)
+
+        layout.addWidget(self.card_software)
+
+        # Card 3: Core Health & Storage Overview
+        self.card_health = QFrame()
+        self.card_health.setProperty("class", "card")
+        h_layout = QVBoxLayout(self.card_health)
+
+        h_title = QLabel("🛡 System Health & Disk State")
         h_title.setProperty("class", "sectionTitle")
         h_layout.addWidget(h_title)
 
-        self.services_lbl = QLabel("Systemd Units: All active units operational.")
+        self.services_lbl = QLabel("✔ Systemd Units: All system and user units operational.")
+        self.services_lbl.setStyleSheet("color: #10b981; font-weight: bold;")
         h_layout.addWidget(self.services_lbl)
 
-        # Disk bar
+        # Root Disk Bar
         h_layout.addWidget(QLabel("Root Partition Usage (/):"))
         self.disk_bar = QProgressBar()
         self.disk_bar.setValue(23)
-        self.disk_bar.setFormat("%v% (334.6 GB free)")
+        self.disk_bar.setFormat("%v% used")
         h_layout.addWidget(self.disk_bar)
 
-        self.pacnew_lbl = QLabel("Configuration Conflicts: 0 .pacnew files.")
-        h_layout.addWidget(self.pacnew_lbl)
+        self.disk_sub_lbl = QLabel("334.6 GB available")
+        self.disk_sub_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        h_layout.addWidget(self.disk_sub_lbl)
 
-        self.btn_full_audit = QPushButton("🔍 Launch Comprehensive Sys-Health Audit")
-        self.btn_full_audit.clicked.connect(self.run_audit_terminal)
-        h_layout.addWidget(self.btn_full_audit)
-        layout.addWidget(self.health_card)
+        self.gaming_lbl = QLabel("🎮 Gaming Mode: Inactive (Normal desktop state)")
+        self.gaming_lbl.setStyleSheet("color: #94a3b8; font-size: 12px; margin-top: 4px;")
+        h_layout.addWidget(self.gaming_lbl)
 
-        # 3. Gaming & Performance Card
-        self.gaming_card = QFrame()
-        self.gaming_card.setProperty("class", "card")
-        g_layout = QVBoxLayout(self.gaming_card)
-        g_title = QLabel("🎮 Gaming & Performance Sentinel")
-        g_title.setProperty("class", "sectionTitle")
-        g_layout.addWidget(g_title)
+        layout.addWidget(self.card_health)
+        layout.addStretch()
 
-        self.gamemode_lbl = QLabel("GameMode: Inactive (Desktop state)")
-        g_layout.addWidget(self.gamemode_lbl)
+    # --------------------------------------------------------------------------
+    # TAB 2: SYSTEM MAINTENANCE
+    # --------------------------------------------------------------------------
+    def setup_maintenance_tab(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
 
-        self.gaming_details_lbl = QLabel("Vulkan & 32-bit: Primed | Custom Proton: Detected")
-        g_layout.addWidget(self.gaming_details_lbl)
-        layout.addWidget(self.gaming_card)
+        # Header info
+        m_intro = QLabel("<b>Universal SRE Maintenance Suite:</b> Safe, atomic maintenance utilities that maintain system stability without breaking package dependencies or user data.")
+        m_intro.setStyleSheet("background-color: #1e293b; border-left: 4px solid #10b981; padding: 10px; border-radius: 4px;")
+        layout.addWidget(m_intro)
+
+        # 1. Orphan Package Triage & Prune
+        c1 = QFrame()
+        c1.setProperty("class", "card")
+        l1 = QVBoxLayout(c1)
+        t1 = QLabel("1) 🗑 Orphan Package Triage & Prune")
+        t1.setProperty("class", "sectionTitle")
+        l1.addWidget(t1)
+        d1 = QLabel("Interactive 3-tier orphan package resolver. Safely purges truly abandoned dependencies without breaking optional dependencies (optdepends).")
+        d1.setStyleSheet("color: #94a3b8;")
+        l1.addWidget(d1)
+        b1 = QPushButton("Run Orphan Package Triage (Interactive)")
+        b1.setProperty("class", "warning")
+        b1.clicked.connect(lambda: self.run_custom_terminal(f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --orphans", "SysPilot Orphan Triage"))
+        l1.addWidget(b1)
+        layout.addWidget(c1)
+
+        # 2. Refresh & Rank Mirrors
+        c2 = QFrame()
+        c2.setProperty("class", "card")
+        l2 = QVBoxLayout(c2)
+        t2 = QLabel("2) 🌐 Refresh & Rank Regional Mirrors")
+        t2.setProperty("class", "sectionTitle")
+        l2.addWidget(t2)
+        d2 = QLabel("Benchmarks and ranks the fastest, most reliable regional Arch and EndeavourOS/distro mirrors using an atomic fallback gate.")
+        d2.setStyleSheet("color: #94a3b8;")
+        l2.addWidget(d2)
+        b2 = QPushButton("Benchmark & Rank Fastest Mirrors")
+        b2.setProperty("class", "secondary")
+        b2.clicked.connect(lambda: self.run_custom_terminal(f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --mirrors", "SysPilot Mirror Ranking"))
+        l2.addWidget(b2)
+        layout.addWidget(c2)
+
+        # 3. Clean (Safe Maintenance)
+        c3 = QFrame()
+        c3.setProperty("class", "card")
+        l3 = QVBoxLayout(c3)
+        t3 = QLabel("3) 🧹 Safe Maintenance & Cache Trimming")
+        t3.setProperty("class", "sectionTitle")
+        l3.addWidget(t3)
+        d3 = QLabel("Trims pacman package cache to latest 2 versions, vacuums systemd journal logs (>14 days), and purges obsolete temporary run logs.")
+        d3.setStyleSheet("color: #94a3b8;")
+        l3.addWidget(d3)
+        b3 = QPushButton("Execute Safe Maintenance")
+        b3.setProperty("class", "success")
+        b3.clicked.connect(self.run_maintenance_terminal)
+        l3.addWidget(b3)
+        layout.addWidget(c3)
+
+        # 4. Deep Clean
+        c4 = QFrame()
+        c4.setProperty("class", "card")
+        l4 = QVBoxLayout(c4)
+        t4 = QLabel("4) 🧼 Deep Clean (Trash, Browser, Thumbnails)")
+        t4.setProperty("class", "sectionTitle")
+        l4.addWidget(t4)
+        d4 = QLabel("Deep non-destructive reclamation: empties user Trash, clears thumbnail caches, browser cache tempfiles, and old diagnostic runs.")
+        d4.setStyleSheet("color: #94a3b8;")
+        l4.addWidget(d4)
+        b4 = QPushButton("Execute Deep Clean")
+        b4.setProperty("class", "secondary")
+        b4.clicked.connect(lambda: self.run_custom_terminal(f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --deep-clean", "SysPilot Deep Clean"))
+        l4.addWidget(b4)
+        layout.addWidget(c4)
+
+        # 5. Pacnew Configuration Conflicts
+        c5 = QFrame()
+        c5.setProperty("class", "card")
+        l5 = QVBoxLayout(c5)
+        t5 = QLabel("5) 🔧 Configuration Conflicts (.pacnew Reconciler)")
+        t5.setProperty("class", "sectionTitle")
+        l5.addWidget(t5)
+        self.pacnew_desc_lbl = QLabel("Configuration files (.pacnew) created during package updates.")
+        self.pacnew_desc_lbl.setStyleSheet("color: #94a3b8;")
+        l5.addWidget(self.pacnew_desc_lbl)
+        b5 = QPushButton("Ask AI Copilot to Reconcile .pacnew Files")
+        b5.clicked.connect(lambda: self.ask_copilot("Scan for any active .pacnew configuration files and guide me through surgical, non-destructive merging"))
+        l5.addWidget(b5)
+        layout.addWidget(c5)
 
         layout.addStretch()
         scroll.setWidget(content)
+        m_layout = QVBoxLayout(self.maintenance_tab)
+        m_layout.addWidget(scroll)
 
-        dash_layout = QVBoxLayout(self.dashboard_tab)
-        dash_layout.addWidget(scroll)
-
+    # --------------------------------------------------------------------------
+    # TAB 3: AI COPILOT (WITH ONBOARDING WIZARD)
+    # --------------------------------------------------------------------------
     def setup_copilot_tab(self):
-        layout = QVBoxLayout(self.copilot_tab)
+        self.copilot_layout = QVBoxLayout(self.copilot_tab)
+        self.copilot_stack = QStackedWidget()
+        self.copilot_layout.addWidget(self.copilot_stack)
 
-        # Info banner
-        info_banner = QLabel("🤖 <b>Token-Lean SRE Copilot:</b> Powered by pre-gathered local telemetry.<br>Solves complex Linux & gaming issues with zero token waste and surgical accuracy.")
-        info_banner.setStyleSheet("background-color: #1e293b; border-left: 4px solid #3b82f6; padding: 10px; border-radius: 4px;")
-        layout.addWidget(info_banner)
+        # Page 0: Active Copilot Workspace
+        self.copilot_active_page = QWidget()
+        self.setup_copilot_active_page()
+        self.copilot_stack.addWidget(self.copilot_active_page)
 
-        # Quick action pills
-        layout.addWidget(QLabel("<b>Quick Troubleshooting Playbooks:</b>"))
+        # Page 1: Layman Onboarding Wizard (First-Run or Key Setup)
+        self.copilot_setup_page = QWidget()
+        self.setup_copilot_setup_page()
+        self.copilot_stack.addWidget(self.copilot_setup_page)
+
+        # Switch page according to current configuration
+        self.refresh_copilot_page()
+
+    def refresh_copilot_page(self):
+        ready, _ = is_copilot_ready()
+        if ready:
+            self.copilot_stack.setCurrentIndex(0)
+            providers = get_configured_providers()
+            active_p = [k for k, v in providers.items() if v]
+            p_name = active_p[0].capitalize() if active_p else "Configured"
+            self.badge_lbl.setText(f"🟢 Connected to {p_name} | Token-Lean Mode Active")
+        else:
+            self.copilot_stack.setCurrentIndex(1)
+
+    def setup_copilot_active_page(self):
+        layout = QVBoxLayout(self.copilot_active_page)
+
+        # Top connection bar
+        conn_bar = QHBoxLayout()
+        self.badge_lbl = QLabel("🟢 Connected to AI Provider | Token-Lean Mode Active")
+        self.badge_lbl.setStyleSheet("font-weight: bold; color: #10b981; font-size: 13px;")
+        conn_bar.addWidget(self.badge_lbl)
+        conn_bar.addStretch()
+
+        btn_reconfig = QPushButton("⚙ Change Provider / API Key")
+        btn_reconfig.setProperty("class", "secondary")
+        btn_reconfig.clicked.connect(lambda: self.copilot_stack.setCurrentIndex(1))
+        conn_bar.addWidget(btn_reconfig)
+        layout.addLayout(conn_bar)
+
+        # Playbook buttons
+        layout.addWidget(QLabel("<b>Battle-Tested SRE Playbooks (1-Click Solutions):</b>"))
         pills_layout = QHBoxLayout()
 
         btn_faf = QPushButton("⚡ Setup / Repair FAF Client")
@@ -413,7 +572,7 @@ class SysPilotWindow(QMainWindow):
 
         layout.addLayout(pills_layout)
 
-        # Terminal interactive button
+        # Interactive Terminal Launcher
         btn_interactive = QPushButton("💻 Open Interactive Copilot Session in Terminal")
         btn_interactive.clicked.connect(self.open_copilot_terminal)
         layout.addWidget(btn_interactive)
@@ -421,7 +580,7 @@ class SysPilotWindow(QMainWindow):
         # Query input
         input_layout = QHBoxLayout()
         self.query_input = QLineEdit()
-        self.query_input.setPlaceholderText("Ask SysPilot Copilot anything (e.g. 'Why is my game lagging?' or 'Fix failed service X')...")
+        self.query_input.setPlaceholderText("Ask SysPilot Copilot anything (e.g. 'Why did my audio fail?' or 'Fix service XYZ')...")
         self.query_input.returnPressed.connect(self.submit_custom_query)
         input_layout.addWidget(self.query_input, stretch=1)
 
@@ -436,6 +595,187 @@ class SysPilotWindow(QMainWindow):
         self.copilot_output.setPlaceholderText("SysPilot Copilot telemetry and surgical recommendations will stream here...")
         layout.addWidget(self.copilot_output, stretch=1)
 
+    def setup_copilot_setup_page(self):
+        """Layman-friendly, 1-minute onboarding wizard."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+
+        # Header card
+        header_card = QFrame()
+        header_card.setProperty("class", "card")
+        header_card.setStyleSheet("background-color: #1e293b; border-left: 5px solid #3b82f6; padding: 16px; border-radius: 8px;")
+        hc_layout = QVBoxLayout(header_card)
+
+        t = QLabel("✈️ Welcome to SysPilot AI Copilot Setup")
+        t.setStyleSheet("font-size: 18px; font-weight: bold; color: #38bdf8;")
+        hc_layout.addWidget(t)
+
+        sub = QLabel(
+            "SysPilot includes an autonomous Site Reliability Engineer (Copilot) powered by <b>Goose</b>.<br>"
+            "To activate your Copilot, simply choose an AI provider and paste your API key below.<br>"
+            "<i>(No terminal commands or YAML editing required — SysPilot configures everything automatically).</i>"
+        )
+        sub.setStyleSheet("color: #cbd5e1; font-size: 13px; line-height: 1.4;")
+        hc_layout.addWidget(sub)
+        layout.addWidget(header_card)
+
+        # Step 1: Provider selection
+        p_card = QFrame()
+        p_card.setProperty("class", "card")
+        p_layout = QVBoxLayout(p_card)
+        p_title = QLabel("Step 1: Choose Your AI Provider")
+        p_title.setProperty("class", "sectionTitle")
+        p_layout.addWidget(p_title)
+
+        self.rb_google = QRadioButton("Google Gemini Flash (Recommended — Fastest, lowest cost & generous free tier)")
+        self.rb_google.setChecked(True)
+        self.rb_google.setStyleSheet("font-weight: bold; color: #10b981; font-size: 13px;")
+        p_layout.addWidget(self.rb_google)
+
+        self.rb_openai = QRadioButton("OpenAI (GPT-4o / GPT-4o-mini)")
+        p_layout.addWidget(self.rb_openai)
+
+        self.rb_anthropic = QRadioButton("Anthropic Claude (Claude 3.5 Sonnet / Haiku)")
+        p_layout.addWidget(self.rb_anthropic)
+
+        self.rb_ollama = QRadioButton("Local Ollama (Self-hosted offline, e.g. qwen2.5-coder)")
+        p_layout.addWidget(self.rb_ollama)
+
+        self.provider_group = QButtonGroup()
+        self.provider_group.addButton(self.rb_google, 1)
+        self.provider_group.addButton(self.rb_openai, 2)
+        self.provider_group.addButton(self.rb_anthropic, 3)
+        self.provider_group.addButton(self.rb_ollama, 4)
+        self.provider_group.buttonClicked.connect(self.on_provider_changed)
+
+        layout.addWidget(p_card)
+
+        # Step 2: API Key input & Free Link
+        k_card = QFrame()
+        k_card.setProperty("class", "card")
+        k_layout = QVBoxLayout(k_card)
+        k_title = QLabel("Step 2: Enter Your API Key")
+        k_title.setProperty("class", "sectionTitle")
+        k_layout.addWidget(k_title)
+
+        self.free_link_lbl = QLabel(
+            "👉 <b>Don't have a Google Gemini key?</b> "
+            "<a href='https://aistudio.google.com/app/apikey' style='color: #38bdf8; text-decoration: underline;'>"
+            "Click here to get a free API Key from Google AI Studio</a> (Takes 30 seconds, no credit card required)."
+        )
+        self.free_link_lbl.setOpenExternalLinks(True)
+        k_layout.addWidget(self.free_link_lbl)
+
+        key_box = QHBoxLayout()
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setPlaceholderText("Paste your API key here (e.g. AIzaSy...)")
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        key_box.addWidget(self.api_key_input, stretch=1)
+
+        self.btn_show_key = QPushButton("👁 Show")
+        self.btn_show_key.setProperty("class", "secondary")
+        self.btn_show_key.clicked.connect(self.toggle_show_key)
+        key_box.addWidget(self.btn_show_key)
+        k_layout.addLayout(key_box)
+
+        layout.addWidget(k_card)
+
+        # Step 3: Save & Test Button
+        act_box = QHBoxLayout()
+        self.btn_save_copilot = QPushButton("🚀 Save & Connect Copilot")
+        self.btn_save_copilot.setProperty("class", "success")
+        self.btn_save_copilot.setStyleSheet("padding: 10px 20px; font-size: 14px;")
+        self.btn_save_copilot.clicked.connect(self.save_and_test_copilot)
+        act_box.addWidget(self.btn_save_copilot)
+
+        self.btn_cancel_setup = QPushButton("Back to Copilot")
+        self.btn_cancel_setup.setProperty("class", "secondary")
+        self.btn_cancel_setup.clicked.connect(lambda: self.copilot_stack.setCurrentIndex(0))
+        act_box.addWidget(self.btn_cancel_setup)
+        act_box.addStretch()
+
+        layout.addLayout(act_box)
+
+        # Feedback label
+        self.setup_feedback_lbl = QLabel("")
+        self.setup_feedback_lbl.setStyleSheet("font-size: 13px; margin-top: 8px;")
+        layout.addWidget(self.setup_feedback_lbl)
+
+        layout.addStretch()
+        scroll.setWidget(content)
+        s_layout = QVBoxLayout(self.copilot_setup_page)
+        s_layout.addWidget(scroll)
+
+    def on_provider_changed(self, button):
+        if self.rb_google.isChecked():
+            self.free_link_lbl.setText(
+                "👉 <b>Don't have a Google Gemini key?</b> "
+                "<a href='https://aistudio.google.com/app/apikey' style='color: #38bdf8; text-decoration: underline;'>"
+                "Click here to get a free API Key from Google AI Studio</a> (Takes 30 seconds, no credit card required)."
+            )
+            self.api_key_input.setPlaceholderText("Paste your Google API key (e.g. AIzaSy...)")
+        elif self.rb_openai.isChecked():
+            self.free_link_lbl.setText(
+                "👉 <b>Need an OpenAI key?</b> "
+                "<a href='https://platform.openai.com/api-keys' style='color: #38bdf8; text-decoration: underline;'>"
+                "Click here to get an OpenAI API Key</a>"
+            )
+            self.api_key_input.setPlaceholderText("Paste your OpenAI API key (e.g. sk-...)")
+        elif self.rb_anthropic.isChecked():
+            self.free_link_lbl.setText(
+                "👉 <b>Need an Anthropic key?</b> "
+                "<a href='https://console.anthropic.com/settings/keys' style='color: #38bdf8; text-decoration: underline;'>"
+                "Click here to get an Anthropic API Key</a>"
+            )
+            self.api_key_input.setPlaceholderText("Paste your Anthropic key (e.g. sk-ant-...)")
+        elif self.rb_ollama.isChecked():
+            self.free_link_lbl.setText("👉 <b>Offline Local LLM:</b> Make sure Ollama is running (`ollama serve`).")
+            self.api_key_input.setPlaceholderText("Ollama Host URL (default: http://localhost:11434)")
+
+    def toggle_show_key(self):
+        if self.api_key_input.echoMode() == QLineEdit.EchoMode.Password:
+            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.btn_show_key.setText("🔒 Hide")
+        else:
+            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.btn_show_key.setText("👁 Show")
+
+    def save_and_test_copilot(self):
+        p_type = "google"
+        if self.rb_openai.isChecked(): p_type = "openai"
+        elif self.rb_anthropic.isChecked(): p_type = "anthropic"
+        elif self.rb_ollama.isChecked(): p_type = "ollama"
+
+        key = self.api_key_input.text().strip()
+        if not key and p_type != "ollama":
+            self.setup_feedback_lbl.setText("⚠️ Please paste your API key before connecting.")
+            self.setup_feedback_lbl.setStyleSheet("color: #f59e0b; font-weight: bold;")
+            return
+
+        self.setup_feedback_lbl.setText("⏳ Saving configuration and testing Copilot connection...")
+        self.setup_feedback_lbl.setStyleSheet("color: #38bdf8;")
+        self.btn_save_copilot.setEnabled(False)
+
+        success, msg = configure_provider(p_type, key)
+        if not success:
+            self.setup_feedback_lbl.setText(f"❌ Error: {msg}")
+            self.setup_feedback_lbl.setStyleSheet("color: #ef4444; font-weight: bold;")
+            self.btn_save_copilot.setEnabled(True)
+            return
+
+        self.setup_feedback_lbl.setText(f"✔ {msg} SysPilot Copilot is primed and ready!")
+        self.setup_feedback_lbl.setStyleSheet("color: #10b981; font-weight: bold;")
+        self.btn_save_copilot.setEnabled(True)
+
+        # Switch to active Copilot page after 1.5 seconds
+        QTimer.singleShot(1500, self.refresh_copilot_page)
+
+    # --------------------------------------------------------------------------
+    # TAB 4: SETTINGS & AUTOSTART
+    # --------------------------------------------------------------------------
     def setup_settings_tab(self):
         layout = QVBoxLayout(self.settings_tab)
 
@@ -447,31 +787,28 @@ class SysPilotWindow(QMainWindow):
         a_title.setProperty("class", "sectionTitle")
         a_layout.addWidget(a_title)
 
-        self.chk_autostart = QCheckBox("Start SysPilot silently in System Tray at login")
+        self.chk_autostart = QCheckBox("Start SysPilot quietly in System Tray at login")
         self.chk_autostart.setChecked(os.path.exists(AUTOSTART_FILE))
         self.chk_autostart.stateChanged.connect(self.toggle_autostart)
         a_layout.addWidget(self.chk_autostart)
 
-        a_layout.addWidget(QLabel("SysPilot will quietly monitor updates and system health in the system tray, automatically pausing during gaming sessions."))
+        a_layout.addWidget(QLabel("When enabled, SysPilot monitors updates and system health in the system tray, automatically pausing during gaming sessions."))
         layout.addWidget(autostart_card)
 
-        # Model card
+        # Model preference card
         model_card = QFrame()
         model_card.setProperty("class", "card")
         m_layout = QVBoxLayout(model_card)
-        m_title = QLabel("🧠 AI Copilot Model Configuration")
+        m_title = QLabel("🧠 Copilot AI Engine & Reasoning Level")
         m_title.setProperty("class", "sectionTitle")
         m_layout.addWidget(m_title)
 
-        m_layout.addWidget(QLabel("Recommended: <b>Google Gemini 2.5 / 3.8 Flash</b> (Highest performance & lowest token cost)."))
-        self.model_combo = QComboBox()
-        self.model_combo.addItems([
-            "gemini-2.5-flash (Default - Ultra Fast & Lean)",
-            "gemini-3.8-flash (Advanced Reasoning)",
-            "local-ollama (qwen2.5-coder / deepseek)",
-            "gpt-4o-mini"
-        ])
-        m_layout.addWidget(self.model_combo)
+        m_layout.addWidget(QLabel("Recommended model: <b>Google Gemini 3.8 / 2.5 Flash</b> (Fastest, ultra-lean token cost)."))
+
+        b_reconf = QPushButton("⚙ Launch AI Copilot Setup Wizard")
+        b_reconf.setProperty("class", "secondary")
+        b_reconf.clicked.connect(lambda: (self.tabs.setCurrentWidget(self.copilot_tab), self.copilot_stack.setCurrentIndex(1)))
+        m_layout.addWidget(b_reconf)
         layout.addWidget(model_card)
 
         layout.addStretch()
@@ -503,6 +840,9 @@ X-GNOME-Autostart-enabled=true
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Could not remove autostart entry: {e}")
 
+    # --------------------------------------------------------------------------
+    # DATA BINDING & REFRESH
+    # --------------------------------------------------------------------------
     def update_ui_from_state(self):
         """Read status file and refresh all widgets."""
         if not os.path.exists(STATUS_FILE):
@@ -517,6 +857,7 @@ X-GNOME-Autostart-enabled=true
         status = data.get("status", "FLIGHT_READY")
         reasons = data.get("status_reasons", [])
         updates = data.get("updates", {})
+        standalone = data.get("standalone_software", {})
         disk = data.get("disk", {}).get("root", {})
         failed_services = data.get("failed_services", {})
         pacnew = data.get("pacnew", {})
@@ -543,14 +884,33 @@ X-GNOME-Autostart-enabled=true
         tot_up = updates.get("total", 0)
         c_up = updates.get("core_count", 0)
         r_up = updates.get("regular_count", 0)
-        a_up = updates.get("aur_count", 0)
-        self.updates_lbl.setText(f"{tot_up} pending updates ({c_up} core, {r_up} regular, {a_up} AUR)")
+        self.updates_lbl.setText(f"{tot_up} pending system updates ({c_up} core packages, {r_up} regular packages)")
         
         core_pkgs = updates.get("core_packages", [])
         if core_pkgs:
             self.core_pkgs_lbl.setText(f"Core packages pending: {', '.join([p.split()[0] for p in core_pkgs])}")
+            self.core_pkgs_lbl.setStyleSheet("color: #fbbf24; font-size: 12px; font-weight: bold;")
         else:
-            self.core_pkgs_lbl.setText("No core kernel/system packages pending.")
+            self.core_pkgs_lbl.setText("All core packages (kernel, systemd, drivers, bootloader) are up to date.")
+            self.core_pkgs_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
+
+        # Standalone apps
+        if standalone.get("checked", False):
+            aur_p = standalone.get("aur_pending", 0)
+            fp_p = standalone.get("flatpak_pending", 0)
+            g_det = standalone.get("details", {}).get("goose", {})
+            g_ver = g_det.get("version", "N/A")
+            g_up = "Update available" if g_det.get("update_available") else "up to date"
+            
+            uv_det = standalone.get("details", {}).get("uv", {})
+            uv_ver = uv_det.get("version", "N/A")
+            uv_up = "Update available" if uv_det.get("update_available") else "up to date"
+
+            self.software_lbl.setText(
+                f"AUR: {aur_p} pending | Flatpak: {fp_p} pending | Goose: {g_ver} ({g_up}) | UV: {uv_ver} ({uv_up})"
+            )
+        else:
+            self.software_lbl.setText("Standalone apps triage pending. Click below to inspect.")
 
         # Services
         sys_f = failed_services.get("system", [])
@@ -562,31 +922,32 @@ X-GNOME-Autostart-enabled=true
             self.services_lbl.setText(f"⚠️ Failed Units Detected: {' | '.join(f_str)}")
             self.services_lbl.setStyleSheet("color: #ef4444; font-weight: bold;")
         else:
-            self.services_lbl.setText("✔ Systemd Units: All active units operational.")
-            self.services_lbl.setStyleSheet("color: #10b981;")
+            self.services_lbl.setText("✔ Systemd Units: All system and user units operational.")
+            self.services_lbl.setStyleSheet("color: #10b981; font-weight: bold;")
 
         # Disk
         used_pct = disk.get("used_pct", 0)
         avail_gb = disk.get("avail_gb", 0)
         self.disk_bar.setValue(used_pct)
-        self.disk_bar.setFormat(f"%v% used ({avail_gb} GB available)")
+        self.disk_bar.setFormat(f"%v% used")
+        self.disk_sub_lbl.setText(f"{avail_gb} GB free on root mount (/)")
 
         # Pacnew
         p_count = pacnew.get("count", 0)
         if p_count > 0:
-            self.pacnew_lbl.setText(f"⚠️ Configuration Conflicts: {p_count} .pacnew files pending review.")
-            self.pacnew_lbl.setStyleSheet("color: #f59e0b; font-weight: bold;")
+            self.pacnew_desc_lbl.setText(f"⚠️ {p_count} .pacnew configuration file(s) require review to prevent service deprecations.")
+            self.pacnew_desc_lbl.setStyleSheet("color: #f59e0b; font-weight: bold;")
         else:
-            self.pacnew_lbl.setText("✔ Configuration Conflicts: 0 .pacnew files.")
-            self.pacnew_lbl.setStyleSheet("color: #10b981;")
+            self.pacnew_desc_lbl.setText("✔ No .pacnew configuration conflicts detected.")
+            self.pacnew_desc_lbl.setStyleSheet("color: #10b981;")
 
         # Gaming
         if gaming_mode:
-            self.gamemode_lbl.setText("🎮 GameMode: ACTIVE (Background diagnostics paused)")
-            self.gamemode_lbl.setStyleSheet("color: #38bdf8; font-weight: bold;")
+            self.gaming_lbl.setText("🎮 GameMode: ACTIVE (Background diagnostics inhibited)")
+            self.gaming_lbl.setStyleSheet("color: #38bdf8; font-weight: bold;")
         else:
-            self.gamemode_lbl.setText("GameMode: Inactive (Standard desktop operation)")
-            self.gamemode_lbl.setStyleSheet("color: #f8fafc;")
+            self.gaming_lbl.setText("🎮 GameMode: Inactive (Normal desktop operation)")
+            self.gaming_lbl.setStyleSheet("color: #94a3b8;")
 
         # Update tray icon
         self.tray_app.update_tray_icon(status, gaming_mode)
@@ -598,7 +959,6 @@ X-GNOME-Autostart-enabled=true
 
     def _run_bg_refresh(self):
         run_triage(check_pkgs=True)
-        # Notify UI thread
         QTimer.singleShot(0, self._on_refresh_finished)
 
     def _on_refresh_finished(self):
@@ -606,19 +966,31 @@ X-GNOME-Autostart-enabled=true
         self.refresh_btn.setEnabled(True)
         self.refresh_btn.setText("↻ Refresh Triage")
 
+    # --------------------------------------------------------------------------
+    # TERMINAL RUNNERS
+    # --------------------------------------------------------------------------
     def run_guarded_upgrade_terminal(self):
         cmd = f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --upgrade"
         term_cmd = get_terminal_cmd(cmd, "SysPilot Guarded Upgrade")
         subprocess.Popen(term_cmd)
 
+    def run_software_terminal(self):
+        cmd = f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --software"
+        term_cmd = get_terminal_cmd(cmd, "SysPilot Standalone Software Triage")
+        subprocess.Popen(term_cmd)
+
     def run_maintenance_terminal(self):
         cmd = f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --maintenance"
-        term_cmd = get_terminal_cmd(cmd, "SysPilot Maintenance")
+        term_cmd = get_terminal_cmd(cmd, "SysPilot Safe Maintenance")
         subprocess.Popen(term_cmd)
 
     def run_audit_terminal(self):
         cmd = f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --audit"
         term_cmd = get_terminal_cmd(cmd, "SysPilot Full Audit")
+        subprocess.Popen(term_cmd)
+
+    def run_custom_terminal(self, command: str, title: str):
+        term_cmd = get_terminal_cmd(command, title)
         subprocess.Popen(term_cmd)
 
     def open_copilot_terminal(self):
@@ -627,6 +999,9 @@ X-GNOME-Autostart-enabled=true
         term_cmd = get_terminal_cmd(cmd, "SysPilot AI Copilot Interactive")
         subprocess.Popen(term_cmd)
 
+    # --------------------------------------------------------------------------
+    # COPILOT EXECUTION
+    # --------------------------------------------------------------------------
     def submit_custom_query(self):
         query = self.query_input.text().strip()
         if query:
@@ -634,7 +1009,14 @@ X-GNOME-Autostart-enabled=true
             self.query_input.clear()
 
     def ask_copilot(self, query: str):
+        ready, _ = is_copilot_ready()
+        if not ready:
+            self.tabs.setCurrentWidget(self.copilot_tab)
+            self.copilot_stack.setCurrentIndex(1)
+            return
+
         self.tabs.setCurrentWidget(self.copilot_tab)
+        self.copilot_stack.setCurrentIndex(0)
         self.copilot_output.clear()
         self.btn_ask.setEnabled(False)
 
@@ -690,6 +1072,9 @@ class SysPilotApp:
         self.action_refresh = self.menu.addAction("↻ Quick Health Triage")
         self.action_refresh.triggered.connect(self.quick_triage)
 
+        self.action_maintenance = self.menu.addAction("🛠 System Maintenance")
+        self.action_maintenance.triggered.connect(self.open_maintenance)
+
         self.action_copilot = self.menu.addAction("🤖 Ask AI Copilot")
         self.action_copilot.triggered.connect(self.open_copilot)
 
@@ -707,7 +1092,7 @@ class SysPilotApp:
         # Periodic Timer (checks state every 5 minutes in memory)
         self.timer = QTimer()
         self.timer.timeout.connect(self.periodic_check)
-        self.timer.start(300000)  # 5 minutes
+        self.timer.start(300000)
 
     def update_tray_icon(self, status: str, gaming: bool):
         if gaming:
@@ -735,13 +1120,16 @@ class SysPilotApp:
     def quick_triage(self):
         self.window.trigger_refresh()
 
+    def open_maintenance(self):
+        self.show_window()
+        self.window.tabs.setCurrentWidget(self.window.maintenance_tab)
+
     def open_copilot(self):
         self.show_window()
         self.window.tabs.setCurrentWidget(self.window.copilot_tab)
 
     def periodic_check(self):
         if not is_gamemode_active():
-            # Light check without heavy package query
             run_triage(check_pkgs=False)
             self.window.update_ui_from_state()
 

@@ -199,6 +199,49 @@ def check_updates(skip_network: bool = False) -> Dict[str, Any]:
     return updates
 
 
+def check_standalone_software(skip: bool = False) -> Dict[str, Any]:
+    """Check standalone & third-party software updates (AUR, Flatpak, UV, Goose, Steam)."""
+    default_summary = {
+        "checked": False,
+        "total_updates": 0,
+        "aur_pending": 0,
+        "flatpak_pending": 0,
+        "goose_update": False,
+        "uv_update": False,
+        "details": {}
+    }
+    if skip:
+        return default_summary
+
+    script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "bin", "sys-health.sh")
+    if not os.path.isfile(script_path):
+        return default_summary
+
+    try:
+        res = subprocess.run([script_path, "--software", "--json"], capture_output=True, text=True, timeout=8.0)
+        if res.returncode == 0 and res.stdout.strip():
+            data = json.loads(res.stdout.strip())
+            aur_p = data.get("aur", {}).get("pending_count", 0)
+            goose_u = data.get("goose", {}).get("update_available", False)
+            uv_u = data.get("uv", {}).get("update_available", False)
+            flatpak_p = 1 if data.get("flatpak", {}).get("update_available", False) else 0
+
+            tot = aur_p + flatpak_p + (1 if goose_u else 0) + (1 if uv_u else 0)
+            return {
+                "checked": True,
+                "total_updates": tot,
+                "aur_pending": aur_p,
+                "flatpak_pending": flatpak_p,
+                "goose_update": goose_u,
+                "uv_update": uv_u,
+                "details": data
+            }
+    except Exception:
+        pass
+
+    return default_summary
+
+
 def get_sys_health_status() -> Dict[str, Any]:
     """Read latest sys-health.sh audit summary if available."""
     if os.path.isfile(SYS_HEALTH_SUMMARY):
@@ -234,6 +277,7 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
     pacnew = check_pacnew_files()
     reboot_pending = check_reboot_pending()
     updates = check_updates(skip_network=not check_pkgs)
+    standalone = check_standalone_software(skip=not check_pkgs)
     sys_health = get_sys_health_status()
 
     # Determine Overall Flight Status
@@ -286,6 +330,7 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
             "files": pacnew
         },
         "updates": updates,
+        "standalone_software": standalone,
         "sys_health": sys_health
     }
 

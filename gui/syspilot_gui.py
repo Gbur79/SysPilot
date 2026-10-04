@@ -31,7 +31,8 @@ from core.triage import run_triage, is_gamemode_active, STATUS_FILE
 from core.copilot_config import (
     is_goose_installed, is_copilot_ready, get_configured_providers,
     configure_provider, find_goose_binary, get_skill_info,
-    save_custom_directives, list_available_playbooks, get_playbook_content
+    save_custom_directives, list_available_playbooks, get_playbook_content,
+    get_active_model_details
 )
 
 AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
@@ -216,14 +217,24 @@ class CopilotWorker(QObject):
             self.finished_signal.emit()
             return
 
-        self.output_signal.emit(f"🚀 Calling SysPilot Copilot with query:\n\"{self.query}\"\n(Token-Lean mode: reading local telemetry & playbooks...)\n\n")
+        model_info = get_active_model_details()
+        model_name = model_info.get("model", "unknown")
+        provider_name = model_info.get("provider_display", "unknown")
+
+        self.output_signal.emit(
+            f"🚀 Calling SysPilot Copilot [{model_name} · {provider_name}]\n"
+            f"Query: \"{self.query}\"\n"
+            f"(Token-Lean mode: reading local telemetry & playbooks...)\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
 
         try:
             cmd = [
                 goose_bin, "run",
                 "--recipe", recipe_path,
                 "--params", f"user_query={self.query}",
-                "-q"
+                "--output-format", "stream-json",
+                "--no-session"
             ]
             process = subprocess.Popen(
                 cmd,
@@ -233,10 +244,56 @@ class CopilotWorker(QObject):
                 bufsize=1,
                 cwd=PROJECT_ROOT
             )
+            
+            header_shown = False
+            raw_fallback_lines = []
+            json_parsed_any = False
+
             for line in process.stdout:
-                self.output_signal.emit(line)
+                line_str = line.strip()
+                if not line_str.startswith("{"):
+                    raw_fallback_lines.append(line)
+                    continue
+                try:
+                    data = json.loads(line_str)
+                    dtype = data.get("type")
+                    if dtype == "message":
+                        msg = data.get("message", {})
+                        for c in msg.get("content", []):
+                            ctype = c.get("type")
+                            if ctype == "toolRequest":
+                                json_parsed_any = True
+                                tool_call = c.get("toolCall", {}).get("value", {})
+                                name = tool_call.get("name", "tool")
+                                args = tool_call.get("arguments", {})
+                                cmd_str = args.get("command") or args.get("name") or str(args)
+                                if len(cmd_str) > 75:
+                                    cmd_str = cmd_str[:72] + "..."
+                                self.output_signal.emit(f"⚙️ [Diagnostic Check] {name}: {cmd_str}\n")
+                            elif ctype == "text":
+                                json_parsed_any = True
+                                if not header_shown:
+                                    self.output_signal.emit("\n💬 Copilot Response:\n")
+                                    header_shown = True
+                                self.output_signal.emit(c.get("text", ""))
+                    elif dtype == "complete":
+                        json_parsed_any = True
+                        tokens = data.get("total_tokens", 0)
+                        cost = data.get("cost_usd", 0.0)
+                        self.output_signal.emit(
+                            f"\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"✔ Analysis Complete | Model: {model_name} | Total Tokens: {tokens:,} | Cost: ${cost:.4f}\n"
+                        )
+                except Exception:
+                    raw_fallback_lines.append(line)
+
             process.wait()
-            self.output_signal.emit("\n✔ Copilot analysis complete.\n")
+
+            if not json_parsed_any and raw_fallback_lines:
+                for rl in raw_fallback_lines:
+                    self.output_signal.emit(rl)
+                self.output_signal.emit("\n✔ Copilot process ended.\n")
+
         except Exception as e:
             self.output_signal.emit(f"\n[Error executing Copilot]: {str(e)}\n")
 
@@ -280,6 +337,15 @@ class SysPilotWindow(QMainWindow):
         self.refresh_btn.setProperty("class", "secondary")
         self.refresh_btn.clicked.connect(self.trigger_refresh)
         header_layout.addWidget(self.refresh_btn)
+
+        model_info = get_active_model_details()
+        self.header_model_badge = QLabel(f"🤖 {model_info['model']}")
+        self.header_model_badge.setStyleSheet(
+            "background-color: #0f172a; border: 1px solid #38bdf8; color: #38bdf8; "
+            "font-size: 11px; font-weight: bold; padding: 6px 12px; border-radius: 12px;"
+        )
+        self.header_model_badge.setToolTip(f"Active AI Engine: {model_info['full_label']}\nConfigured in ~/.config/goose/config.yaml")
+        header_layout.addWidget(self.header_model_badge)
 
         self.main_layout.addWidget(self.header_frame)
 
@@ -533,12 +599,17 @@ class SysPilotWindow(QMainWindow):
 
     def refresh_copilot_page(self):
         ready, _ = is_copilot_ready()
+        model_info = get_active_model_details()
+        if hasattr(self, "header_model_badge"):
+            self.header_model_badge.setText(f"🤖 {model_info['model']}")
+            self.header_model_badge.setToolTip(f"Active AI Engine: {model_info['full_label']}\nConfigured in ~/.config/goose/config.yaml")
+
         if ready:
             self.copilot_stack.setCurrentIndex(0)
-            providers = get_configured_providers()
-            active_p = [k for k, v in providers.items() if v]
-            p_name = active_p[0].capitalize() if active_p else "Configured"
-            self.badge_lbl.setText(f"🟢 Connected to {p_name} | Token-Lean Mode Active")
+            self.badge_lbl.setText(
+                f"🟢 Active Model: <span style='color: #38bdf8;'><b>{model_info['model']}</b></span> "
+                f"<span style='color: #94a3b8;'>({model_info['provider_display']})</span> | Token-Lean Mode Active"
+            )
         else:
             self.copilot_stack.setCurrentIndex(1)
 
@@ -1081,6 +1152,12 @@ X-GNOME-Autostart-enabled=true
             self.status_title.setText("System Status: Flight Ready")
             self.status_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #10b981;")
             self.status_sub.setText("All core diagnostics pass. System is primed and stable.")
+
+        # Header AI Model Badge
+        if hasattr(self, "header_model_badge"):
+            model_info = get_active_model_details()
+            self.header_model_badge.setText(f"🤖 {model_info['model']}")
+            self.header_model_badge.setToolTip(f"Active AI Engine: {model_info['full_label']}\nProvider: {model_info['provider_display']}\nConfigured in ~/.config/goose/config.yaml")
 
         # Updates card
         tot_up = updates.get("total", 0)

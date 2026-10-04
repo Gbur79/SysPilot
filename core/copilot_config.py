@@ -118,6 +118,49 @@ def is_copilot_ready() -> Tuple[bool, str]:
     return True, "Ready"
 
 
+def get_active_model_details() -> Dict[str, Any]:
+    """
+    Retrieve currently active LLM provider and model from Goose configuration (~/.config/goose/config.yaml).
+    Returns a dictionary with keys:
+      - provider: str (e.g. 'google', 'openai', 'anthropic', 'ollama')
+      - provider_display: str (e.g. 'Google Gemini', 'OpenAI', 'Anthropic Claude', 'Ollama')
+      - model: str (e.g. 'gemini-3.8-flash', 'gpt-5.6-sol')
+      - full_label: str (e.g. 'gemini-3.8-flash (Google Gemini)')
+      - thinking_effort: str (e.g. 'high', 'medium', 'low')
+    """
+    provider = "google"
+    model = "gemini-3.8-flash"
+    thinking = "default"
+
+    if os.path.isfile(GOOSE_CONFIG_FILE):
+        try:
+            with open(GOOSE_CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+                provider = cfg.get("active_provider") or "google"
+                thinking = cfg.get("GOOSE_THINKING_EFFORT") or "default"
+                providers_dict = cfg.get("providers", {})
+                if provider in providers_dict and isinstance(providers_dict[provider], dict):
+                    model = providers_dict[provider].get("model") or model
+        except Exception:
+            pass
+
+    display_map = {
+        "google": "Google Gemini",
+        "openai": "OpenAI",
+        "anthropic": "Anthropic Claude",
+        "ollama": "Local Ollama"
+    }
+    p_disp = display_map.get(provider.lower(), provider.capitalize())
+
+    return {
+        "provider": provider,
+        "provider_display": p_disp,
+        "model": model,
+        "full_label": f"{model} ({p_disp})",
+        "thinking_effort": thinking
+    }
+
+
 def configure_provider(provider_type: str, api_key: str, model: Optional[str] = None) -> Tuple[bool, str]:
     """
     Save provider key and enable it in Goose configuration safely.
@@ -214,10 +257,11 @@ def get_skill_info() -> Dict[str, Any]:
     """Retrieve full details of the sys-pilot-admin skill."""
     ensure_syspilot_skill_linked()
     
+    model_details = get_active_model_details()
     info = {
         "name": "sys-pilot-admin",
         "description": "Token-Lean Autonomous SRE Systems Copilot for Arch Linux & derivatives",
-        "model": "gemini-3.8-flash",
+        "model": model_details.get("full_label", "gemini-3.8-flash (Google Gemini)"),
         "skill_path": SYS_PILOT_SKILL_FILE,
         "is_linked": os.path.exists(os.path.join(GOOSE_SKILLS_DIR, "sys-pilot-admin")),
         "raw_content": "",

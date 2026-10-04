@@ -17,7 +17,7 @@ Every entry follows strict SRE standards: status tracking, engineering justifica
 ## Patch Registry
 
 ### PATCH-001: Dynamic AI Model Discovery & Surgical Stream-JSON Output for Goose Copilot
-* **Status:** `[PROPOSED]` *(Successfully validated on local testing node)*
+* **Status:** `[IMPLEMENTED]` *(Shipped in v1.0.1)*
 * **Date Proposed:** 2026-10-04
 * **Priority:** HIGH (UX clarity, LLM provider agnosticism, zero console output pollution)
 * **Target Components:**

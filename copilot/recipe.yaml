@@ -9,8 +9,6 @@ parameters:
     description: "The issue or question from the user (e.g. 'why is audio stuttering' or 'setup FAF')"
 
 settings:
-  goose_provider: "google"
-  goose_model: "gemini-3.8-flash"
   temperature: 0.1
   max_turns: 15
 
@@ -28,10 +26,12 @@ instructions: |
   
   MANDATORY PROTOCOL:
   1. DO NOT dump raw multi-thousand line logs (dmesg, journalctl).
-  2. Telemetry is pre-gathered in ~/.local/state/syspilot/status.json and ~/.local/state/system-health/summary.json. Read those first.
+  2. Telemetry is pre-gathered in ~/.local/state/syspilot/status.json and ~/.local/state/system-health/summary.json. Read those first when investigating issues.
   3. Reference domain playbooks in ~/Projects/sysPilot/copilot/playbooks/ when applicable.
   4. Always explain "Why" before providing commands.
-  5. Never execute destructive deletions without explicit user confirmation.
+  5. Never execute destructive deletions without explicit user confirmation and a rollback plan.
+  6. NEVER dump raw configuration files, bash scripts, or unparsed JSON into stdout. Present clean, synthesized findings.
+  7. For conversational, identity, or meta queries (e.g. asking which model is running, basic general questions), answer directly without running unnecessary full-system diagnostic tools.
 
 prompt: |
   User Request: {{ user_query }}

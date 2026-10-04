@@ -370,6 +370,12 @@ class SysPilotWindow(QMainWindow):
         self.btn_check_apps.setProperty("class", "purple")
         self.btn_check_apps.clicked.connect(self.run_software_terminal)
         s_btn_box.addWidget(self.btn_check_apps)
+
+        self.btn_update_goose = QPushButton("⚡ Update Goose AI Agent")
+        self.btn_update_goose.setProperty("class", "success")
+        self.btn_update_goose.setVisible(False)
+        self.btn_update_goose.clicked.connect(self.run_update_goose_terminal)
+        s_btn_box.addWidget(self.btn_update_goose)
         s_layout.addLayout(s_btn_box)
 
         layout.addWidget(self.card_software)
@@ -860,8 +866,9 @@ class SysPilotWindow(QMainWindow):
         cc_layout.addWidget(cc_title)
 
         cc_desc = QLabel(
-            "Inject your own persistent rules, hardware quirks, or software preferences directly into the <code>sys-pilot-admin</code> skill prompt.<br>"
-            "<i>(These directives are permanently saved to the skill and strictly honored by the AI Copilot in every session).</i>"
+            "<b>📍 You are currently in the 'SRE Skill & Persona' tab.</b><br>"
+            "Inject your own persistent rules, hardware quirks, or software preferences directly into the <code>sys-pilot-admin</code> skill prompt in the text box below.<br>"
+            "<i>(These directives are permanently saved into the skill and strictly honored by the AI Copilot in every session).</i>"
         )
         cc_desc.setStyleSheet("color: #94a3b8; font-size: 12px;")
         cc_layout.addWidget(cc_desc)
@@ -1095,7 +1102,9 @@ X-GNOME-Autostart-enabled=true
             fp_p = standalone.get("flatpak_pending", 0)
             g_det = standalone.get("details", {}).get("goose", {})
             g_ver = g_det.get("version", "N/A")
-            g_up = "Update available" if g_det.get("update_available") else "up to date"
+            g_latest = g_det.get("latest", g_ver)
+            g_up_avail = g_det.get("update_available", False)
+            g_up = f"Update available: v{g_latest}" if g_up_avail else "up to date"
             
             uv_det = standalone.get("details", {}).get("uv", {})
             uv_ver = uv_det.get("version", "N/A")
@@ -1104,6 +1113,11 @@ X-GNOME-Autostart-enabled=true
             self.software_lbl.setText(
                 f"AUR: {aur_p} pending | Flatpak: {fp_p} pending | Goose: {g_ver} ({g_up}) | UV: {uv_ver} ({uv_up})"
             )
+            if g_up_avail:
+                self.btn_update_goose.setText(f"⚡ Update Goose AI Agent ({g_ver} → {g_latest})")
+                self.btn_update_goose.setVisible(True)
+            else:
+                self.btn_update_goose.setVisible(False)
         else:
             self.software_lbl.setText("Standalone apps triage pending. Click below to inspect.")
 
@@ -1172,6 +1186,22 @@ X-GNOME-Autostart-enabled=true
     def run_software_terminal(self):
         cmd = f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --software"
         term_cmd = get_terminal_cmd(cmd, "SysPilot Standalone Software Triage")
+        subprocess.Popen(term_cmd)
+
+    def run_update_goose_terminal(self):
+        cmd = (
+            "echo '⚡ Updating Goose AI Agent...'; "
+            "if type -P goose &>/dev/null && goose update --help &>/dev/null; then "
+            "  goose update; "
+            "elif type -P yay &>/dev/null; then "
+            "  yay -S --needed goose-cli; "
+            "elif type -P paru &>/dev/null; then "
+            "  paru -S --needed goose-cli; "
+            "else "
+            "  curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash; "
+            "fi"
+        )
+        term_cmd = get_terminal_cmd(cmd, "SysPilot Goose AI Agent Update")
         subprocess.Popen(term_cmd)
 
     def run_maintenance_terminal(self):

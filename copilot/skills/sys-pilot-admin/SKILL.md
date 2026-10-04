@@ -55,7 +55,7 @@ When addressing common troubleshooting domains, reference the surgical playbooks
 ## 5. Custom User Directives & Workstation Profile
 <!-- USER_CUSTOM_DIRECTIVES_START -->
 # User Custom System Directives & Rig Notes:
-# (You can customize these rules directly from the SysPilot 'SRE Skill Blueprint' tab)
+# (You can customize these rules directly in the SysPilot 'SRE Skill & Persona' tab in the text box below and click Save)
 # - Prefer using official repos over AUR when available.
 # - Always explain package dependencies before running installation commands.
 <!-- USER_CUSTOM_DIRECTIVES_END -->

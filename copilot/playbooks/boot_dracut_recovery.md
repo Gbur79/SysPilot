@@ -1,80 +1,75 @@
-# Playbook: Boot, Dracut & EFI Recovery
+# Playbook: Bootloader, Dracut & EFI Recovery Guide
 
-Procedura diagnostyki i bezpiecznej naprawy procesu rozruchu, obrazów initramfs oraz konfiguracji EFI/GRUB.
+Surgical guide for diagnosing and repairing kernel, initramfs, and bootloader discrepancies on Arch Linux & EndeavourOS without blind reinstallations.
 
 ---
 
-## Faza 1: Weryfikacja Punktów Montowania i Miejsca na Dysku
-Przed jakąkolwiek ingerencją w rozruch sprawdź układ partycji:
+## 1. Safety Guardrails & Reversibility
+- **Never reboot before verification:** If an initramfs or kernel update failed, do not reboot until you confirm valid kernel images and initramfs files exist on the active boot/ESP partition.
+- **Dynamic Mount Discovery:** Check `/boot` and `/efi` mountpoints using `findmnt`. Never assume fixed paths.
+- **Fallback Kernel Integrity:** Always verify that at least one functional LTS or alternate kernel exists before modifying the primary kernel.
+
+---
+
+## 2. Dynamic Boot & Initramfs Diagnostic Phase
+Inspect currently installed kernels:
+```bash
+pacman -Q | grep -E '^linux(-lts|-zen|-hardened|-cachyos)? '
+```
+Verify matching modules in `/usr/lib/modules`:
+```bash
+ls -la /usr/lib/modules/
+```
+Check active ESP and boot mountpoints:
 ```bash
 findmnt /boot
-findmnt /boot/efi
-df -h /boot /boot/efi
+findmnt /boot/efi || findmnt /efi
 ```
-*Zasada:*
-- `/boot` musi znajdować się na głównym systemie plików (ext4).
-- `/boot/efi` musi być zamontowane jako partycja ESP (`vfat`).
-- Wolne miejsce na `/boot/efi` nie może być mniejsze niż 30 MB.
 
 ---
 
-## Faza 2: Inspekcja Konfiguracji Dracuta
-Upewnij się, że pliki konfiguracyjne w `/etc/dracut.conf.d/` nie zostały uszkodzone ani usunięte:
+## 3. Initramfs Regeneration Protocol
+
+### Dracut Engine:
+To rebuild initramfs for all installed kernels using Dracut:
 ```bash
-cat /etc/dracut.conf.d/*.conf
+sudo dracut-rebuild
 ```
-*Kluczowe wpisy dla stacji roboczej:*
-- `disable-nouveau.conf`: `omit_drivers+=" nouveau "`
-- `enable-nvidia.conf`: `force_drivers+=" nvidia nvidia_modeset nvidia_uvm nvidia_drm "`
-- `eos-defaults.conf`: kompresja `zstd`, wykluczenie zbędnych modułów sieciowych
-
----
-
-## Faza 3: Bezpieczna, Celowana Regeneracja Initramfs
-Nigdy nie stosuj ślepego `dracut --regenerate-all --force`, jeśli nie masz pewności co do stanu wszystkich zainstalowanych jąder.
-
-### 1. Ustal wersję jądra do naprawy:
+Or target a specific kernel:
 ```bash
-# Dla aktualnie działającego jądra:
-KVER=$(uname -r)
-
-# Lub sprawdź zainstalowane kernele w systemie:
-ls -1 /usr/lib/modules/
+sudo dracut --force --kver <KERNEL_VERSION>
 ```
 
-### 2. Wygeneruj initramfs bezpośrednio do pliku w `/boot`:
+### Mkinitcpio Engine:
+If the system uses mkinitcpio:
 ```bash
-# Dla jądra LTS:
-sudo dracut --kver "$KVER" --force /boot/initramfs-linux-lts.img "$KVER"
-
-# Lub standardowe celowane wywołanie:
-sudo dracut --kver "$KVER" --force
+sudo mkinitcpio -P
 ```
 
 ---
 
-## Faza 4: Weryfikacja Poprawności Obrazu Rozruchowego
-Przed wykonaniem restartu **bezwzględnie zweryfikuj** wygenerowany plik:
-1. **Sprawdź rozmiar i czas modyfikacji (mtime):**
-   ```bash
-   ls -lh /boot/initramfs*
-   ```
-   *(Obraz o rozmiarze kilkuset bajtów lub 0 B oznacza awarię dracuta! Prawidłowy obraz ma zazwyczaj 30–80 MB)*.
-2. **Upewnij się, że moduły NVIDIA znalazły się wewnątrz initramfs:**
-   ```bash
-   lsinitrd /boot/initramfs-linux-lts.img | grep -E 'nvidia\.ko|nvidia_modeset\.ko'
-   ```
+## 4. Bootloader Sync Phase
+
+### GRUB:
+```bash
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+```
+
+### systemd-boot:
+```bash
+bootctl status
+sudo bootctl update
+```
+Verify Type #1 entries or Type #2 UKIs:
+```bash
+ls -la /boot/loader/entries/ || ls -la /efi/loader/entries/
+```
 
 ---
 
-## Faza 5: Weryfikacja Wpisów Bootloadera (GRUB & UEFI NVRAM)
-1. **Sprawdź stan wpisów rozruchowych płyty głównej:**
-   ```bash
-   sudo efibootmgr -v
-   ```
-2. **Odświeżenie konfiguracji menu GRUB (jeśli dodano nowe jądro):**
-   ```bash
-   sudo grub-mkconfig -o /boot/grub/grub.cfg
-   ```
-> [!CAUTION]
-> **Nigdy nie wykonuj `grub-install`** jako pierwszego kroku naprawy błędu jądra! Używaj `grub-mkconfig` do regeneracji pliku menu, chyba że wpis NVRAM płyty głównej został faktycznie skasowany.
+## 5. Verification Gate
+Inspect the generated initramfs image sizes:
+```bash
+ls -lh /boot/*.img /boot/efi/EFI/*/ /efi/EFI/*/ 2>/dev/null
+```
+If file size is greater than 10MB and permissions are intact, the system is primed for safe reboot.

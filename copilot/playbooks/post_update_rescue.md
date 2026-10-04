@@ -1,92 +1,86 @@
 # Playbook: Post-Update Rescue & Recovery
 
-Procedura ratunkowa krok-po-kroku w przypadku awarii po aktualizacji systemu (`pacman -Syu` / `yay`): błędy transakcji, czarny ekran, desynchronizacja jądra, uszkodzone pakiety lub pętla logowania.
+Step-by-step emergency triage and recovery procedure following an interrupted or broken system update (`pacman -Syu` / `yay`): transaction locks, black screen on boot, kernel/initramfs desynchronization, corrupted packages, or display manager failure.
 
 ---
 
-## Faza 1: Szybki Triage & Diagnoza Telemetryczna
-Przed wykonaniem inwazyjnych poleceń odczytaj stan telemetrii:
+## Phase 1: Rapid Telemetry & State Inspection
+Before running any modifying commands, inspect local runtime telemetry:
 ```bash
-# 1. Odczyt skrótu JSON z sys-health
-cat ~/.local/state/system-health/summary.json 2>/dev/null || sys-health --json
+# 1. Read compact triage state
+cat ~/.local/state/syspilot/status.json 2>/dev/null || syspilot -s
 
-# 2. Sprawdzenie ostatnich wpisów z pacmana
-tail -n 40 /var/log/pacman.log
+# 2. Check recent pacman log transactions
+tail -n 45 /var/log/pacman.log
 ```
-*Zwróć uwagę na flagi:* `kernel`, `initramfs`, `dkms`, `gpu_runtime`, `pacman_lock`, `package_integrity`.
+*Key indicators to check:* `kernel`, `initramfs`, `dkms`, `gpu_runtime`, `db.lck`, `failed_services`.
 
 ---
 
-## Faza 2: Przerwana Transakcja i Osierocona Blokada Pacmana
-Jeśli aktualizacja została przerwana (brak prądu, zawieszenie Xorg/Wayland):
-1. **Weryfikacja procesów:**
+## Phase 2: Interrupted Transaction & Stale Pacman Lock
+If an update was abruptly interrupted (power loss, system freeze, or display crash):
+1. **Verify if another pacman process is still running:**
    ```bash
-   pgrep -l "pacman|yay"
+   pgrep -l "pacman|yay|paru"
    ```
-2. **Usunięcie blokady (wyłącznie gdy brak aktywnych procesów):**
+   If no package manager is running, remove the stale database lock:
    ```bash
    sudo rm -f /var/lib/pacman/db.lck
    ```
-3. **Wznowienie i dokończenie transakcji:**
+
+2. **Re-synchronize databases and finish incomplete transactions:**
    ```bash
    sudo pacman -Syu
    ```
 
 ---
 
-## Faza 3: Błędy Kluczy PGP / Keyring (`invalid or corrupted package`)
-Gdy aktualizacja zatrzymuje się na błędzie walidacji podpisów:
-1. **Zaktualizuj wyłącznie pakiety z bazą kluczy:**
+## Phase 3: Kernel, Initramfs & DKMS Re-alignment
+If the system boots to a black screen, blinking cursor, or initramfs rescue prompt:
+1. **Verify matching kernel modules exist for the running/installed kernel:**
    ```bash
-   sudo pacman -Sy archlinux-keyring endeavouros-keyring
+   ls -la /usr/lib/modules/
    ```
-2. **Następnie wykonaj pełną aktualizację:**
+
+2. **Rebuild DKMS modules (e.g. proprietary NVIDIA or virtualbox):**
    ```bash
-   sudo pacman -Su
+   sudo dkms status
+   sudo dkms autoinstall
    ```
-*(Nigdy nie wyłączaj weryfikacji kluczy `SigLevel = Never` w `/etc/pacman.conf`).*
+
+3. **Rebuild initramfs images:**
+   - If using Dracut:
+     ```bash
+     sudo dracut-rebuild
+     ```
+   - If using Mkinitcpio:
+     ```bash
+     sudo mkinitcpio -P
+     ```
+
+4. **Re-generate bootloader configuration:**
+   - If using GRUB:
+     ```bash
+     sudo grub-mkconfig -o /boot/grub/grub.cfg
+     ```
+   - If using systemd-boot:
+     ```bash
+     sudo bootctl update
+     ```
 
 ---
 
-## Faza 4: Desynchronizacja Kernela, Modułów i DKMS (Czarny Ekran)
-Najczęstsza przyczyna czarnego ekranu na GTX 970 to rozbieżność między uruchomionym jądrem a modułami NVIDIA.
-1. **Sprawdź wersje jądra i modułów:**
+## Phase 4: Display Manager & Desktop Session Triage
+If the system boots to a TTY or display server crashes on startup:
+1. Check display manager status (e.g., SDDM, GDM, LightDM):
    ```bash
-   uname -r
-   ls -ld /usr/lib/modules/*
-   dkms status
+   systemctl status display-manager.service --no-pager
    ```
-2. **Weryfikacja obecności nagłówków jądra:**
-   Upewnij się, że zainstalowane są nagłówki odpowiadające zainstalowanym jądrom:
-   - dla `linux` → `linux-headers`
-   - dla `linux-lts` → `linux-lts-headers`
-3. **Ręczne przebudowanie modułu NVIDIA w DKMS (jeśli status nie jest 'installed'):**
+2. Inspect recent graphical errors:
    ```bash
-   sudo dkms install nvidia-580xx/<wersja> -k <wersja-kernela>
+   journalctl -u display-manager.service -b 0 -p 3 --no-pager
    ```
-4. **Regeneracja initramfs dla danego jądra:**
+3. Verify GPU driver module loading:
    ```bash
-   sudo dracut --kver <wersja-kernela> --force
+   lspci -k | grep -EA3 'VGA|3D'
    ```
-
----
-
-## Faza 5: Rollback Pakietu z Lokalnego Cache (`pacman -U`)
-Jeśli konkretna nowa wersja pakietu (np. sterownik, biblioteka glibc, kwin) powoduje regresję:
-1. **Znajdź poprzednią wersję w cache:**
-   ```bash
-   ls -lt /var/cache/pacman/pkg/<nazwa-pakietu>*
-   ```
-2. **Zainstaluj wersję poprzednią:**
-   ```bash
-   sudo pacman -U /var/cache/pacman/pkg/<nazwa-pakietu>-<stara-wersja>.pkg.tar.zst
-   ```
-
----
-
-## Faza 6: Weryfikacja Końcowa
-Potwierdź usunięcie usterki za pomocą audytu:
-```bash
-sys-health --audit
-```
-Oczekiwany kod wyjścia: `0` (ALL_CLEAR) lub `2` (REVIEW_WARNINGS bez błędów krytycznych).

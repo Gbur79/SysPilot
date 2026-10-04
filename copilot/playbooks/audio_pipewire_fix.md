@@ -1,60 +1,60 @@
 # Playbook: Audio, PipeWire & WirePlumber Fix
 
-Procedura diagnostyki i naprawy dźwięku w środowisku KDE Plasma (brak dźwięku, zacięcia, niewykrywanie wyjść audio lub zawieszenie serwera dźwięku).
+Diagnostic and recovery procedure for desktop audio issues (no sound, stuttering, missing audio sinks, or sound server hang) under PipeWire.
 
 ---
 
-## 1. Złota Zasada Audio: Sesja Użytkownika vs Root
+## 1. Golden Rule: User Session vs Root
 > [!IMPORTANT]
-> Na współczesnym EndeavourOS / Arch Linux stack audio (**PipeWire**, **WirePlumber**, **pipewire-pulse**) działa jako usługa **sesji użytkownika (`systemd --user`)**, a NIE jako daemon systemowy roota!  
-> **Nigdy nie wykonuj:** `sudo systemctl restart pipewire` (to nie zadziała i może zablokować uprawnienia socketów).
+> On modern Arch Linux and derivatives, the entire audio stack (**PipeWire**, **WirePlumber**, **pipewire-pulse**) runs strictly as a **user session service (`systemd --user`)**, NOT as a root daemon!  
+> **Never run:** `sudo systemctl restart pipewire` (this fails and corrupts user socket permissions).
 
 ---
 
-## 2. Faza 1: Inspekcja Stanu Usług Audio
-Sprawdź status jednostek w sesji bieżącego użytkownika:
+## 2. Phase 1: Inspect Audio Service State
+Check the status of user audio units in the current session:
 ```bash
 systemctl --user status pipewire wireplumber pipewire-pulse --no-pager
 ```
-Sprawdź, czy któraś z usług nie weszła w stan awarii (`failed`):
+Check if any audio unit entered a failed state:
 ```bash
 systemctl --user --failed
 ```
 
 ---
 
-## 3. Faza 2: Weryfikacja Wyjść Audio i WirePlumber (`wpctl`)
-Narzędzie `wpctl` służy do bezpośredniego podglądu urządzeń i routingu w WirePlumber:
-1. **Wylistuj dostępne urządzenia i profile (Sinks / Sources):**
-   ```bash
-   wpctl status
-   ```
-2. **Sprawdź domyślne urządzenie wyjściowe (oznaczone gwiazdką `*` w sekcji Sinks):**
-   - Upewnij się, że dźwięk nie został skierowany na niewłaściwe wyjście (np. wyjście monitora HDMI karty NVIDIA zamiast karty dźwiękowej płyty głównej lub słuchawek USB).
-3. **Sprawdź głośność i wyciszenie (mute):**
-   ```bash
-   wpctl get-volume @DEFAULT_AUDIO_SINK@
-   # Jeśli widnieje [MUTED], odcisz:
-   wpctl set-mute @DEFAULT_AUDIO_SINK@ 0
-   ```
-
----
-
-## 4. Faza 3: Deterministyczny Restart Stacku PipeWire
-W przypadku zawieszenia buforów dźwięku lub braku wykrywania nowo podłączonego urządzenia:
-1. **Restart jednostek użytkownika:**
-   ```bash
-   systemctl --user restart pipewire pipewire-pulse wireplumber
-   ```
-2. **Weryfikacja logów pod kątem błędów ALSA / zablokowanych urządzeń:**
-   ```bash
-   journalctl --user -u pipewire -u wireplumber -n 30 --no-pager
-   ```
-
----
-
-## 5. Faza 4: Weryfikacja Działania Dźwięku
-Odtwórz testowy sygnał dźwiękowy w terminalu:
+## 3. Phase 2: Inspect Active Audio Sinks
+Verify available audio output endpoints:
 ```bash
-pw-play /usr/share/sounds/freedesktop/stereo/complete.oga 2>/dev/null || aplay /usr/share/sounds/alsa/Front_Center.wav 2>/dev/null
+wpctl status
+```
+Inspect current default sink volume and mute status:
+```bash
+wpctl get-volume @DEFAULT_AUDIO_SINK@
+```
+If muted:
+```bash
+wpctl set-mute @DEFAULT_AUDIO_SINK@ 0
+```
+
+---
+
+## 4. Phase 3: Surgical Session Service Restart
+If the audio daemon is frozen or disconnected:
+```bash
+systemctl --user restart pipewire pipewire-pulse wireplumber
+```
+Verify PipeWire socket response:
+```bash
+pactl info
+```
+
+---
+
+## 5. Phase 4: Reset Corrupted WirePlumber State Cache
+If audio sinks disappear after a system upgrade or sleep/resume cycle:
+```bash
+systemctl --user stop wireplumber pipewire pipewire-pulse
+rm -rf ~/.local/state/wireplumber/*
+systemctl --user start pipewire pipewire-pulse wireplumber
 ```

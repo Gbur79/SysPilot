@@ -1,92 +1,69 @@
 # Playbook: Forged Alliance Forever (FAF) Setup & Troubleshooting Guide
 
-Procedura instalacji, konfiguracji i rozwiązywania problemów z Forged Alliance Forever (FAF) oraz Supreme Commander: Forged Alliance na EndeavourOS / Arch Linux.
+Step-by-step setup, configuration, and troubleshooting guide for Forged Alliance Forever (FAF) and Supreme Commander: Forged Alliance on Arch Linux & EndeavourOS.
 
 ---
 
-## 1. Architektura i Wybór Metody Instalacji
-- **NIE używaj pakietu AUR (`downlords-faf-client`):** Pakiet z AUR instaluje tylko binarkę Javy klienta – nie konfiguruje izolowanego prefiksu Wine, kontenera Steam Runtime (`pressure-vessel`), patchy DXVK ani skryptów uruchomieniowych.
-- **Rekomendowana metoda społeczności:** Oficjalny zestaw skryptów runnera: [FAForever/faf-linux](https://github.com/FAForever/faf-linux) w katalogu `~/faf-linux`.
-- **Wymagania wstępne w systemie:**
-  - Zainstalowane Supreme Commander: Forged Alliance na Steamie (AppID: `9420`).
-  - Aktywny multilib i 32-bitowy stos graficzny (`sys-health --gaming`).
-  - Narzędzia systemowe: `bubblewrap`, `curl`, `jq`, `git`.
+## 1. Architecture & Runner Strategy
+- **DO NOT install the AUR package (`downlords-faf-client`):** The AUR package merely ships the Java client frontend. It does not configure an isolated Wine prefix, the Steam Runtime (`pressure-vessel`) container, DXVK patches, or the native launcher scripts.
+- **Official Recommended Community Solution:** The native runner suite: [FAForever/faf-linux](https://github.com/FAForever/faf-linux) located in `~/faf-linux`.
+- **System Prerequisites:**
+  - Supreme Commander: Forged Alliance installed on Steam (AppID: `9420`).
+  - Multilib repository and 32-bit graphics stack enabled (`syspilot -s` or `sys-health --gaming`).
+  - Core system utilities installed: `bubblewrap`, `curl`, `jq`, `git`.
 
 ---
 
-## 2. Instalacja Krok po Kroku (Clean Install)
+## 2. Step-by-Step Clean Setup
 
-### Krok 1: Wymuszenie profilu w Steam
-Uruchom raz grę Supreme Commander: Forged Alliance bezpośrednio ze Steama (Proton), wejdź do menu i wyjdź.
-Tworzy to plik konfiguracji `Game.prefs` w:
+### Step 1: Force First-Time Profile Creation in Steam
+Launch Supreme Commander: Forged Alliance once directly from Steam (using standard Proton), enter the main menu, and exit.
+This creates the initial `Game.prefs` file in:
 `~/.local/share/Steam/steamapps/compatdata/9420/pfx/drive_c/users/steamuser/AppData/Local/Gas Powered Games/Supreme Commander Forged Alliance/Game.prefs`
 
-### Krok 2: Klonowanie i wstępna konfiguracja `faf-linux`
+### Step 2: Clone and Initialize `faf-linux`
 ```bash
 git clone https://github.com/FAForever/faf-linux ~/faf-linux
 cd ~/faf-linux
 ./setup.sh
 ```
-*Uwaga:* Skrypt automatycznie pobiera Java Temurin 25, Steam Linux Runtime 4, Proton GE oraz DXVK.
+*Note:* The setup script automatically provisions Java Temurin 25, Steam Linux Runtime 4, Proton GE, and DXVK.
 
-### Krok 3: Pierwsze logowanie
-Uruchom klienta:
+### Step 3: First Login Authentication
+Launch the client once:
 ```bash
 ~/faf-linux/run
 ```
-Zaloguj się na swoje konto FAF przez przeglądarkę, a po udanym logowaniu zamknij klienta.
+Authenticate your FAF account via your default web browser, and once successfully logged in, close the client.
 
-### Krok 4: Skopiowanie profilu `Game.prefs` do prefiksu FAF
-Skopiuj działający profil gry ze Steama do prefiksu `faf-linux`:
+### Step 4: Synchronize `Game.prefs` into the FAF Prefix
+Copy your working Steam game preferences into the isolated `faf-linux` prefix:
 ```bash
 mkdir -p "$HOME/faf-linux/prefix/drive_c/users/steamuser/AppData/Local/Gas Powered Games/Supreme Commander Forged Alliance"
 cp -r "$HOME/.local/share/Steam/steamapps/compatdata/9420/pfx/drive_c/users/steamuser/AppData/Local/Gas Powered Games/Supreme Commander Forged Alliance/Game.prefs" \
       "$HOME/faf-linux/prefix/drive_c/users/steamuser/AppData/Local/Gas Powered Games/Supreme Commander Forged Alliance/"
 ```
 
-### Krok 5: Zastosowanie ścieżek i krytyczne poprawki
-1. Uruchom skrypt konfigurujący ścieżki w kliencie:
-   ```bash
-   cd ~/faf-linux && ./set-client-paths.sh
-   ```
-2. **Krytyczna poprawka `relativeGamePaths`:**
-   Domyślnie klient potrafi ustawić `relativeGamePaths: true`, co powoduje generowanie uciętej ścieżki `/.steam/...` w `fa_path.lua`. Należy wymusić ścieżki bezwzględne:
-   ```bash
-   jq '.forgedAlliance.relativeGamePaths = false' ~/.faforever/client.prefs > ~/.faforever/client.prefs.tmp && mv ~/.faforever/client.prefs.tmp ~/.faforever/client.prefs
-   ```
-3. Upewnij się, że w `~/.faforever/fa_path.lua` zmienna `fa_path` zawiera pełną ścieżkę do gry:
-   ```lua
-   fa_path = "/home/gbur/.local/share/Steam/steamapps/common/Supreme Commander Forged Alliance"
-   ```
-
-### Krok 6: Rejestracja skrótu w KDE Plasma
+### Step 5: Configure Client Execution Paths
+Execute the automated path setup script:
 ```bash
-cd ~/faf-linux && ./install-shortcut.sh
+cd ~/faf-linux && ./set-client-paths.sh
 ```
 
 ---
 
-## 3. Typowe Błędy i Diagnoza (Troubleshooting)
+## 3. Common Failure Modes & Quick Fixes
 
-### A. Gra nie startuje (Exit code 126 w `~/.faforever/logs/client.log`)
-- **Przyczyna:** Klient FAF próbuje uruchomić windowsowe `ForgedAlliance.exe` bezpośrednio przez Linuksa zamiast przekazać je do Protona/Wine.
-- **Rozwiązanie:** Sprawdź `~/.faforever/client.prefs`. Pole `executableDecorator` musi mieć postać:
-  ```json
-  "executableDecorator": "\"/home/gbur/faf-linux/launchwrapper\" \"%s\""
+### Scenario A: Game launches to black screen or crashes on launch
+- **Cause:** Missing 32-bit graphics libraries.
+- **Fix:** Ensure `lib32-vulkan-icd-loader` and your GPU's 32-bit driver (`lib32-nvidia-utils` or `lib32-vulkan-radeon`) are installed:
+  ```bash
+  sudo pacman -S --needed lib32-vulkan-icd-loader
   ```
-  Jeśli go brak, uruchom ponownie: `cd ~/faf-linux && ./set-client-paths.sh`.
 
-### B. Serwer wymaga nowszej wersji klienta (np. Update z 2026.7.0 do 2026.7.1)
-Nie instaluj pakietu z zewnątrz. Zaktualizuj komponent w `faf-linux`:
-```bash
-cd ~/faf-linux
-git pull
-./update-component.sh faf-client <wersja>   # np. 2026.7.1
-```
-
-### C. Czarny ekran po uruchomieniu gry (NVIDIA Maxwell / GTX 970)
-Włącz wirtualny pulpit w prefiksie Wine:
-```bash
-~/faf-linux/launchwrapper-env wine winecfg
-```
-W zakładce **Grafika (Graphics)** zaznacz **Emuluj wirtualny pulpit (Emulate a virtual desktop)** i ustaw rozdzielczość Twojego monitora (np. 1920x1080).
+### Scenario B: "Game.prefs could not be found or written"
+- **Cause:** Discrepancy between Steam user prefix path and FAF client path.
+- **Fix:** Re-run Step 4 above to ensure `Game.prefs` is in the FAF prefix, and verify write permissions:
+  ```bash
+  chmod -R u+rw "$HOME/faf-linux/prefix"
+  ```

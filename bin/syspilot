@@ -191,7 +191,7 @@ from core.copilot_config import get_skill_info
 
 info = get_skill_info()
 print('')
-print('\033[1m\033[35m🧠 SysPilot Copilot SRE Skill Blueprint (\033[36m' + info['name'] + '\033[35m)\033[0m')
+print('\033[1m\033[35m🧠 SysPilot Copilot SRE Skill & Persona (\033[36m' + info['name'] + '\033[35m)\033[0m')
 print('\033[1m────────────────────────────────────────────────────────\033[0m')
 print(f'Model Target:     {info[\"model\"]}')
 print(f'Skill Location:   {info[\"skill_path\"]}')

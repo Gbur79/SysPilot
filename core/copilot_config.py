@@ -21,6 +21,9 @@ SYS_PILOT_SKILL_SRC = os.path.join(PROJECT_ROOT, "copilot", "skills", "sys-pilot
 SYS_PILOT_SKILL_FILE = os.path.join(SYS_PILOT_SKILL_SRC, "SKILL.md")
 PLAYBOOKS_DIR = os.path.join(PROJECT_ROOT, "copilot", "playbooks")
 
+USER_CONFIG_DIR = os.path.expanduser("~/.config/syspilot")
+USER_DIRECTIVES_FILE = os.path.join(USER_CONFIG_DIR, "user_directives.md")
+
 DIRECTIVES_REGEX = re.compile(
     r'<!-- USER_CUSTOM_DIRECTIVES_START -->(.*?)<!-- USER_CUSTOM_DIRECTIVES_END -->',
     re.DOTALL
@@ -225,37 +228,33 @@ def get_skill_info() -> Dict[str, Any]:
     if os.path.isfile(SYS_PILOT_SKILL_FILE):
         try:
             with open(SYS_PILOT_SKILL_FILE, "r", encoding="utf-8") as f:
-                content = f.read()
-                info["raw_content"] = content
-                match = DIRECTIVES_REGEX.search(content)
-                if match:
-                    info["custom_directives"] = match.group(1).strip()
+                info["raw_content"] = f.read()
         except Exception:
             pass
+
+    # Read custom directives from ~/.config/syspilot/user_directives.md (isolated from git)
+    if os.path.isfile(USER_DIRECTIVES_FILE):
+        try:
+            with open(USER_DIRECTIVES_FILE, "r", encoding="utf-8") as f:
+                info["custom_directives"] = f.read().strip()
+        except Exception:
+            info["custom_directives"] = ""
+    elif info["raw_content"]:
+        # Fallback to reading legacy block inside skill file if present
+        match = DIRECTIVES_REGEX.search(info["raw_content"])
+        if match:
+            info["custom_directives"] = match.group(1).strip()
 
     return info
 
 
 def save_custom_directives(directives_text: str) -> Tuple[bool, str]:
-    """Save user-custom directives into the sys-pilot-admin SKILL.md cleanly."""
-    if not os.path.isfile(SYS_PILOT_SKILL_FILE):
-        return False, f"Skill file not found at {SYS_PILOT_SKILL_FILE}"
-
+    """Save user-custom directives into ~/.config/syspilot/user_directives.md safely."""
     try:
-        with open(SYS_PILOT_SKILL_FILE, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        new_block = f"<!-- USER_CUSTOM_DIRECTIVES_START -->\n{directives_text.strip()}\n<!-- USER_CUSTOM_DIRECTIVES_END -->"
-
-        if DIRECTIVES_REGEX.search(content):
-            updated_content = DIRECTIVES_REGEX.sub(new_block, content)
-        else:
-            updated_content = content + f"\n\n## 5. Custom User Directives & Workstation Profile\n{new_block}\n"
-
-        with open(SYS_PILOT_SKILL_FILE, "w", encoding="utf-8") as f:
-            f.write(updated_content)
-
-        return True, "User custom directives saved to sys-pilot-admin skill!"
+        os.makedirs(USER_CONFIG_DIR, exist_ok=True)
+        with open(USER_DIRECTIVES_FILE, "w", encoding="utf-8") as f:
+            f.write(directives_text.strip() + "\n")
+        return True, "User custom directives saved to ~/.config/syspilot/user_directives.md!"
     except Exception as e:
         return False, f"Failed to save directives: {str(e)}"
 

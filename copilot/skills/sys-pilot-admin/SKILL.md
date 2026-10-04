@@ -41,6 +41,9 @@ When addressing common troubleshooting domains, reference the surgical playbooks
 - **Audio / PipeWire:** `copilot/playbooks/audio_pipewire_fix.md` (WirePlumber, missing sinks, sample rate crackling).
 - **Configuration Conflicts (.pacnew):** `copilot/playbooks/pacnew_merger_triage.md` (surgical diffing and safe reconciliation).
 - **Bootloader & Kernel Recovery:** `copilot/playbooks/boot_dracut_recovery.md` & `post_update_rescue.md`.
+- **Systemd Failed Units Triage:** `copilot/playbooks/systemd_failed_units.md` (diagnosing failed systemd units, inspecting journals, dry-run testing, and resetting failed states).
+- **Intel iGPU & Video Acceleration:** `copilot/playbooks/intel_gpu_power_triage.md` (triaging 100% iGPU load spikes, power scaling states, intel_gpu_top, VA-API video drivers).
+- **Wayland AppImage & Flatpak Rendering:** `copilot/playbooks/wayland_appimage_flatpak_triage.md` (fixing DMA-BUF protocol errors, Wayland crashes, XWayland overrides, and native repo alternatives).
 
 ---
 
@@ -53,9 +56,5 @@ When addressing common troubleshooting domains, reference the surgical playbooks
 ---
 
 ## 5. Custom User Directives & Workstation Profile
-<!-- USER_CUSTOM_DIRECTIVES_START -->
-# User Custom System Directives & Rig Notes:
-# (You can customize these rules directly in the SysPilot 'SRE Skill & Persona' tab in the text box below and click Save)
-# - Prefer using official repos over AUR when available.
-# - Always explain package dependencies before running installation commands.
-<!-- USER_CUSTOM_DIRECTIVES_END -->
+Before executing commands or making system modifications, check if `~/.config/syspilot/user_directives.md` exists.
+If present, read and strictly adhere to the user's custom workstation directives, hardware rules, and repository preferences defined within it.

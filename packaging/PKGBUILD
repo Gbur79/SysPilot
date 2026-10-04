@@ -4,7 +4,7 @@ pkgver=1.0.0
 pkgrel=1
 pkgdesc="Token-Lean Autonomous SRE Desktop Copilot & Health Sentinel for Arch Linux"
 arch=('any')
-url="https://github.com/KarolGbur/SysPilot"
+url="https://github.com/Gbur79/SysPilot"
 license=('Apache-2.0')
 depends=(
     'bash'

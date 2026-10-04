@@ -5,10 +5,11 @@ Handles seamless, zero-friction setup of Goose AI, API keys, and SRE skills for 
 
 import os
 import sys
+import re
 import yaml
 import shutil
 import subprocess
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 
 GOOSE_CONFIG_DIR = os.path.expanduser("~/.config/goose")
 GOOSE_CONFIG_FILE = os.path.join(GOOSE_CONFIG_DIR, "config.yaml")
@@ -17,6 +18,13 @@ GOOSE_SKILLS_DIR = os.path.join(GOOSE_CONFIG_DIR, "skills")
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SYS_PILOT_SKILL_SRC = os.path.join(PROJECT_ROOT, "copilot", "skills", "sys-pilot-admin")
+SYS_PILOT_SKILL_FILE = os.path.join(SYS_PILOT_SKILL_SRC, "SKILL.md")
+PLAYBOOKS_DIR = os.path.join(PROJECT_ROOT, "copilot", "playbooks")
+
+DIRECTIVES_REGEX = re.compile(
+    r'<!-- USER_CUSTOM_DIRECTIVES_START -->(.*?)<!-- USER_CUSTOM_DIRECTIVES_END -->',
+    re.DOTALL
+)
 
 
 def find_goose_binary() -> Optional[str]:
@@ -117,11 +125,11 @@ def configure_provider(provider_type: str, api_key: str, model: Optional[str] = 
 
     # Determine key name and default model
     key_env_var = "GOOGLE_API_KEY"
-    default_model = "gemini-2.5-flash"
+    default_model = "gemini-3.8-flash"
 
     if provider_type == "google":
         key_env_var = "GOOGLE_API_KEY"
-        default_model = model or "gemini-2.5-flash"
+        default_model = model or "gemini-3.8-flash"
     elif provider_type == "openai":
         key_env_var = "OPENAI_API_KEY"
         default_model = model or "gpt-4o-mini"
@@ -193,3 +201,95 @@ def configure_provider(provider_type: str, api_key: str, model: Optional[str] = 
     ensure_syspilot_skill_linked()
 
     return True, f"Successfully configured {provider_type} ({default_model})!"
+
+
+# ------------------------------------------------------------------------------
+# SRE Skill Inspection & User Directives
+# ------------------------------------------------------------------------------
+
+def get_skill_info() -> Dict[str, Any]:
+    """Retrieve full details of the sys-pilot-admin skill."""
+    ensure_syspilot_skill_linked()
+    
+    info = {
+        "name": "sys-pilot-admin",
+        "description": "Token-Lean Autonomous SRE Systems Copilot for Arch Linux & derivatives",
+        "model": "gemini-3.8-flash",
+        "skill_path": SYS_PILOT_SKILL_FILE,
+        "is_linked": os.path.exists(os.path.join(GOOSE_SKILLS_DIR, "sys-pilot-admin")),
+        "raw_content": "",
+        "custom_directives": "",
+        "playbooks": list_available_playbooks()
+    }
+
+    if os.path.isfile(SYS_PILOT_SKILL_FILE):
+        try:
+            with open(SYS_PILOT_SKILL_FILE, "r", encoding="utf-8") as f:
+                content = f.read()
+                info["raw_content"] = content
+                match = DIRECTIVES_REGEX.search(content)
+                if match:
+                    info["custom_directives"] = match.group(1).strip()
+        except Exception:
+            pass
+
+    return info
+
+
+def save_custom_directives(directives_text: str) -> Tuple[bool, str]:
+    """Save user-custom directives into the sys-pilot-admin SKILL.md cleanly."""
+    if not os.path.isfile(SYS_PILOT_SKILL_FILE):
+        return False, f"Skill file not found at {SYS_PILOT_SKILL_FILE}"
+
+    try:
+        with open(SYS_PILOT_SKILL_FILE, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        new_block = f"<!-- USER_CUSTOM_DIRECTIVES_START -->\n{directives_text.strip()}\n<!-- USER_CUSTOM_DIRECTIVES_END -->"
+
+        if DIRECTIVES_REGEX.search(content):
+            updated_content = DIRECTIVES_REGEX.sub(new_block, content)
+        else:
+            updated_content = content + f"\n\n## 5. Custom User Directives & Workstation Profile\n{new_block}\n"
+
+        with open(SYS_PILOT_SKILL_FILE, "w", encoding="utf-8") as f:
+            f.write(updated_content)
+
+        return True, "User custom directives saved to sys-pilot-admin skill!"
+    except Exception as e:
+        return False, f"Failed to save directives: {str(e)}"
+
+
+def list_available_playbooks() -> List[Dict[str, str]]:
+    """List all available surgical playbooks in copilot/playbooks/."""
+    playbooks = []
+    if os.path.isdir(PLAYBOOKS_DIR):
+        for fname in sorted(os.listdir(PLAYBOOKS_DIR)):
+            if fname.endswith(".md"):
+                fpath = os.path.join(PLAYBOOKS_DIR, fname)
+                title = fname.replace("_", " ").replace(".md", "").capitalize()
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        first_line = f.readline().strip()
+                        if first_line.startswith("#"):
+                            title = first_line.lstrip("#").strip()
+                except Exception:
+                    pass
+                playbooks.append({
+                    "filename": fname,
+                    "title": title,
+                    "path": fpath
+                })
+    return playbooks
+
+
+def get_playbook_content(filename: str) -> str:
+    """Read the markdown content of a playbook."""
+    fpath = os.path.join(PLAYBOOKS_DIR, filename)
+    if os.path.isfile(fpath):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            return f"Error reading playbook: {e}"
+    return f"Playbook not found: {filename}"

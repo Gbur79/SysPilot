@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QTabWidget, QProgressBar, QTextEdit,
     QLineEdit, QFrame, QScrollArea, QSystemTrayIcon, QMenu,
     QCheckBox, QComboBox, QMessageBox, QRadioButton, QButtonGroup,
-    QStackedWidget
+    QStackedWidget, QDialog
 )
 
 # Ensure project root is in sys.path
@@ -30,7 +30,8 @@ sys.path.insert(0, PROJECT_ROOT)
 from core.triage import run_triage, is_gamemode_active, STATUS_FILE
 from core.copilot_config import (
     is_goose_installed, is_copilot_ready, get_configured_providers,
-    configure_provider, find_goose_binary
+    configure_provider, find_goose_binary, get_skill_info,
+    save_custom_directives, list_available_playbooks, get_playbook_content
 )
 
 AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
@@ -45,7 +46,7 @@ def get_terminal_cmd(command_to_run: str, title: str = "SysPilot") -> List[str]:
         ("kitty", ["kitty", "bash", "-c", f"{command_to_run}; echo ''; read -p 'Press Enter to close...'"]),
         ("xfce4-terminal", ["xfce4-terminal", "-e", f"bash -c \"{command_to_run}; echo ''; read -p 'Press Enter to close...'\""]),
         ("gnome-terminal", ["gnome-terminal", "--", "bash", "-c", f"{command_to_run}; echo ''; read -p 'Press Enter to close...'"]),
-        ("xterm", ["xterm", "-T", title, "-e", "bash", "-c", f"{command_to_run}; echo ''; read -p 'Press Enter to close...'"])
+        ("xterm", ["xterm", "-T", title, "-e", "bash", "-c", f"{command_to_run}; read -p 'Press Enter to close...'"])
     ]
     for term, cmd in terminals:
         if shutil.which(term):
@@ -249,7 +250,7 @@ class SysPilotWindow(QMainWindow):
         super().__init__()
         self.tray_app = tray_app
         self.setWindowTitle("SysPilot — Autonomous SRE Desktop Copilot")
-        self.resize(880, 720)
+        self.resize(900, 740)
         self.setStyleSheet(DARK_STYLESHEET)
 
         self.central_widget = QWidget()
@@ -301,7 +302,12 @@ class SysPilotWindow(QMainWindow):
         self.setup_copilot_tab()
         self.tabs.addTab(self.copilot_tab, "🤖 AI Copilot (Goose SRE)")
 
-        # Tab 4: Settings & Autostart
+        # Tab 4: SRE Skill & Persona Blueprint
+        self.skill_tab = QWidget()
+        self.setup_skill_blueprint_tab()
+        self.tabs.addTab(self.skill_tab, "🧠 SRE Skill & Persona")
+
+        # Tab 5: Settings & Autostart
         self.settings_tab = QWidget()
         self.setup_settings_tab()
         self.tabs.addTab(self.settings_tab, "⚙ Settings & Autostart")
@@ -540,6 +546,11 @@ class SysPilotWindow(QMainWindow):
         conn_bar.addWidget(self.badge_lbl)
         conn_bar.addStretch()
 
+        btn_view_persona = QPushButton("🧠 View Agent Persona & Directives")
+        btn_view_persona.setProperty("class", "purple")
+        btn_view_persona.clicked.connect(lambda: self.tabs.setCurrentWidget(self.skill_tab))
+        conn_bar.addWidget(btn_view_persona)
+
         btn_reconfig = QPushButton("⚙ Change Provider / API Key")
         btn_reconfig.setProperty("class", "secondary")
         btn_reconfig.clicked.connect(lambda: self.copilot_stack.setCurrentIndex(1))
@@ -770,11 +781,195 @@ class SysPilotWindow(QMainWindow):
         self.setup_feedback_lbl.setStyleSheet("color: #10b981; font-weight: bold;")
         self.btn_save_copilot.setEnabled(True)
 
-        # Switch to active Copilot page after 1.5 seconds
         QTimer.singleShot(1500, self.refresh_copilot_page)
 
     # --------------------------------------------------------------------------
-    # TAB 4: SETTINGS & AUTOSTART
+    # TAB 4: SRE SKILL & PERSONA BLUEPRINT (NEW!)
+    # --------------------------------------------------------------------------
+    def setup_skill_blueprint_tab(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+
+        # 1. Architecture & Duality Banner
+        arch_card = QFrame()
+        arch_card.setProperty("class", "card")
+        arch_card.setStyleSheet("background-color: #1e293b; border-left: 5px solid #8b5cf6; padding: 14px; border-radius: 8px;")
+        ac_layout = QVBoxLayout(arch_card)
+
+        t = QLabel("🧠 Agent Architecture: Goose Engine + sys-pilot-admin SRE Skill")
+        t.setStyleSheet("font-size: 16px; font-weight: bold; color: #a78bfa;")
+        ac_layout.addWidget(t)
+
+        desc = QLabel(
+            "<b>How SysPilot Operates:</b><br>"
+            "SysPilot does <b>NOT</b> run an unconstrained generic chatbot. Instead, it pairs:<br>"
+            "• <b>Goose CLI (The Hands / Runner):</b> Manages LLM tool execution, command sandboxing, and terminal I/O.<br>"
+            "• <b><code>sys-pilot-admin</code> (The Brain / SRE Architect):</b> Specialized skill built on the battle-tested "
+            "<code>eos-admin</code> SRE architecture. It enforces strict safety guardrails, reads local telemetry first (0 tokens), "
+            "and follows battle-tested repair playbooks."
+        )
+        desc.setStyleSheet("color: #cbd5e1; font-size: 13px; line-height: 1.4;")
+        ac_layout.addWidget(desc)
+
+        # Badges row
+        badges_layout = QHBoxLayout()
+        for badge_text, color in [
+            ("🛡️ Reversibility First", "#10b981"),
+            ("📊 0-Token Local Telemetry", "#38bdf8"),
+            ("🚫 No Blind Deletions", "#f59e0b"),
+            ("📖 7 SRE Playbooks Loaded", "#a78bfa")
+        ]:
+            lbl = QLabel(badge_text)
+            lbl.setStyleSheet(f"background-color: #0f172a; border: 1px solid {color}; color: {color}; font-size: 11px; font-weight: bold; padding: 4px 10px; border-radius: 12px;")
+            badges_layout.addWidget(lbl)
+        badges_layout.addStretch()
+        ac_layout.addLayout(badges_layout)
+        layout.addWidget(arch_card)
+
+        # 2. Local Telemetry & Zero-Token Data Access
+        telemetry_card = QFrame()
+        telemetry_card.setProperty("class", "card")
+        tc_layout = QVBoxLayout(telemetry_card)
+        tc_title = QLabel("📊 Telemetry Contract: Zero-Token Pre-Gathered State")
+        tc_title.setProperty("class", "sectionTitle")
+        tc_layout.addWidget(tc_title)
+
+        tc_desc = QLabel(
+            "Before the AI Copilot ever spends a single token, SysPilot automatically interrogates runtime state and feeds it into the skill:<br>"
+            "• <code>~/.local/state/syspilot/status.json</code>: Pending updates, core packages, failed systemd units, root/home storage, .pacnew count, GameMode state.<br>"
+            "• <code>~/.local/state/system-health/summary.json</code>: OS, kernel version, bootloader sync, initramfs engine, GPU driver, Vulkan multilib readiness."
+        )
+        tc_desc.setStyleSheet("color: #94a3b8; font-size: 12px; line-height: 1.4;")
+        tc_layout.addWidget(tc_desc)
+
+        btn_view_telemetry = QPushButton("📄 Inspect Active Telemetry JSON (0-Token State)")
+        btn_view_telemetry.setProperty("class", "secondary")
+        btn_view_telemetry.clicked.connect(self.show_telemetry_dialog)
+        tc_layout.addWidget(btn_view_telemetry)
+        layout.addWidget(telemetry_card)
+
+        # 3. User Custom Directives & Rig Profile (Editable!)
+        custom_card = QFrame()
+        custom_card.setProperty("class", "card")
+        cc_layout = QVBoxLayout(custom_card)
+        cc_title = QLabel("⚙️ User Custom Directives & Rig Profile (Your Rig, Your Rules)")
+        cc_title.setProperty("class", "sectionTitle")
+        cc_layout.addWidget(cc_title)
+
+        cc_desc = QLabel(
+            "Inject your own persistent rules, hardware quirks, or software preferences directly into the <code>sys-pilot-admin</code> skill prompt.<br>"
+            "<i>(These directives are permanently saved to the skill and strictly honored by the AI Copilot in every session).</i>"
+        )
+        cc_desc.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        cc_layout.addWidget(cc_desc)
+
+        skill_info = get_skill_info()
+        self.txt_custom_directives = QTextEdit()
+        self.txt_custom_directives.setPlaceholderText("# Add your custom instructions here (e.g. 'Prefer paru over yay', 'My DAC is Focusrite Scarlett', 'Desktop is Hyprland on Wayland')...")
+        self.txt_custom_directives.setPlainText(skill_info.get("custom_directives", ""))
+        self.txt_custom_directives.setMinimumHeight(110)
+        cc_layout.addWidget(self.txt_custom_directives)
+
+        c_act_box = QHBoxLayout()
+        self.btn_save_directives = QPushButton("💾 Save Directives to Agent Skill")
+        self.btn_save_directives.setProperty("class", "success")
+        self.btn_save_directives.clicked.connect(self.save_user_directives)
+        c_act_box.addWidget(self.btn_save_directives)
+
+        self.directives_feedback_lbl = QLabel("")
+        self.directives_feedback_lbl.setStyleSheet("font-size: 12px; margin-left: 10px;")
+        c_act_box.addWidget(self.directives_feedback_lbl)
+        c_act_box.addStretch()
+        cc_layout.addLayout(c_act_box)
+
+        layout.addWidget(custom_card)
+
+        # 4. Battle-Tested Playbook Arsenal Viewer
+        pb_card = QFrame()
+        pb_card.setProperty("class", "card")
+        pb_layout = QVBoxLayout(pb_card)
+        pb_title = QLabel("📖 Battle-Tested SRE Playbook Arsenal (Deterministic Recipes)")
+        pb_title.setProperty("class", "sectionTitle")
+        pb_layout.addWidget(pb_title)
+
+        pb_desc = QLabel(
+            "The <code>sys-pilot-admin</code> skill is pre-equipped with deterministic step-by-step procedures. "
+            "Select any playbook below to inspect the exact engineering logic the Copilot follows:"
+        )
+        pb_desc.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        pb_layout.addWidget(pb_desc)
+
+        # Dropdown
+        self.pb_combo = QComboBox()
+        self.playbooks_data = list_available_playbooks()
+        for pb in self.playbooks_data:
+            self.pb_combo.addItem(f"📜 {pb['title']} ({pb['filename']})", pb['filename'])
+        self.pb_combo.currentIndexChanged.connect(self.on_playbook_selected)
+        pb_layout.addWidget(self.pb_combo)
+
+        # Playbook Content Viewer
+        self.txt_playbook_viewer = QTextEdit()
+        self.txt_playbook_viewer.setReadOnly(True)
+        self.txt_playbook_viewer.setMinimumHeight(180)
+        if self.playbooks_data:
+            initial_content = get_playbook_content(self.playbooks_data[0]['filename'])
+            self.txt_playbook_viewer.setPlainText(initial_content)
+        pb_layout.addWidget(self.txt_playbook_viewer)
+
+        layout.addWidget(pb_card)
+
+        layout.addStretch()
+        scroll.setWidget(content)
+        slayout = QVBoxLayout(self.skill_tab)
+        slayout.addWidget(scroll)
+
+    def on_playbook_selected(self, index):
+        if 0 <= index < len(self.playbooks_data):
+            fname = self.playbooks_data[index]['filename']
+            content = get_playbook_content(fname)
+            self.txt_playbook_viewer.setPlainText(content)
+
+    def save_user_directives(self):
+        text = self.txt_custom_directives.toPlainText()
+        ok, msg = save_custom_directives(text)
+        if ok:
+            self.directives_feedback_lbl.setText("✔ Directives saved to sys-pilot-admin!")
+            self.directives_feedback_lbl.setStyleSheet("color: #10b981; font-weight: bold;")
+            QTimer.singleShot(3000, lambda: self.directives_feedback_lbl.setText(""))
+        else:
+            self.directives_feedback_lbl.setText(f"❌ Error: {msg}")
+            self.directives_feedback_lbl.setStyleSheet("color: #ef4444; font-weight: bold;")
+
+    def show_telemetry_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("SysPilot — Active Pre-Gathered Telemetry (0 Tokens)")
+        dlg.resize(700, 500)
+        dlg.setStyleSheet(DARK_STYLESHEET)
+        d_layout = QVBoxLayout(dlg)
+        
+        d_info = QLabel("<b>Raw State JSON:</b> Pre-gathered locally in <1s without root. Fed directly into the Copilot's skill context.")
+        d_info.setStyleSheet("color: #38bdf8; font-size: 12px;")
+        d_layout.addWidget(d_info)
+
+        txt = QTextEdit()
+        txt.setReadOnly(True)
+        try:
+            with open(STATUS_FILE, "r", encoding="utf-8") as f:
+                txt.setPlainText(f.read())
+        except Exception as e:
+            txt.setPlainText(f"Error loading {STATUS_FILE}: {e}")
+        d_layout.addWidget(txt)
+
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dlg.accept)
+        d_layout.addWidget(btn_close)
+        dlg.exec()
+
+    # --------------------------------------------------------------------------
+    # TAB 5: SETTINGS & AUTOSTART
     # --------------------------------------------------------------------------
     def setup_settings_tab(self):
         layout = QVBoxLayout(self.settings_tab)
@@ -1078,6 +1273,9 @@ class SysPilotApp:
         self.action_copilot = self.menu.addAction("🤖 Ask AI Copilot")
         self.action_copilot.triggered.connect(self.open_copilot)
 
+        self.action_skill = self.menu.addAction("🧠 SRE Skill & Persona")
+        self.action_skill.triggered.connect(self.open_skill_blueprint)
+
         self.menu.addSeparator()
         self.action_quit = self.menu.addAction("❌ Quit SysPilot")
         self.action_quit.triggered.connect(self.quit_app)
@@ -1127,6 +1325,10 @@ class SysPilotApp:
     def open_copilot(self):
         self.show_window()
         self.window.tabs.setCurrentWidget(self.window.copilot_tab)
+
+    def open_skill_blueprint(self):
+        self.show_window()
+        self.window.tabs.setCurrentWidget(self.window.skill_tab)
 
     def periodic_check(self):
         if not is_gamemode_active():

@@ -107,6 +107,9 @@ By having the local bash/Python engine perform 100% of the heavy lifting for fre
 
 # Launch an interactive SRE Copilot terminal session
 ./bin/syspilot --copilot-shell
+
+# Inspect active SRE skill directives, guardrails, and loaded playbooks
+./bin/syspilot --skill
 ```
 
 ### 3. Enabling Autostart on Login

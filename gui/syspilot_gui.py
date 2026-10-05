@@ -81,115 +81,150 @@ def make_status_icon(color_hex: str, symbol: str = "") -> QIcon:
 
 DARK_STYLESHEET = """
 QMainWindow {
-    background-color: #0b1120;
-    color: #f8fafc;
+    background-color: #0b0f17;
+    color: #ffffff;
+    font-family: 'Hack', 'DejaVu Sans Mono', 'Noto Sans Mono', monospace;
 }
 QWidget {
-    background-color: #0b1120;
-    color: #f8fafc;
-    font-family: 'Segoe UI', 'Ubuntu', 'Cantarell', sans-serif;
+    background-color: #0b0f17;
+    color: #ffffff;
+    font-family: 'Hack', 'DejaVu Sans Mono', 'Noto Sans Mono', monospace;
     font-size: 13px;
 }
 QTabWidget::pane {
-    border: 1px solid #1e293b;
-    background-color: #0f172a;
-    border-radius: 8px;
-    padding: 6px;
+    border: 1px solid #334155;
+    background-color: #0b0f17;
+    border-radius: 4px;
+    padding: 8px;
 }
 QTabBar::tab {
-    background-color: #1e293b;
+    background-color: #161e2e;
     color: #94a3b8;
-    padding: 9px 18px;
+    padding: 8px 18px;
     margin-right: 4px;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    font-family: 'Hack', monospace;
     font-weight: bold;
+    font-size: 12px;
+    border: 1px solid #283548;
+    border-bottom: none;
 }
 QTabBar::tab:selected {
-    background-color: #2563eb;
-    color: #ffffff;
+    background-color: #0b0f17;
+    color: #ffaf00;
+    border: 1px solid #ffaf00;
+    border-bottom: 1px solid #0b0f17;
 }
 QTabBar::tab:hover:!selected {
-    background-color: #334155;
-    color: #e2e8f0;
+    background-color: #1e293b;
+    color: #ffffff;
 }
 QFrame.card {
-    background-color: #1e293b;
+    background-color: #0d131f;
     border: 1px solid #334155;
-    border-radius: 8px;
-    padding: 12px;
+    border-radius: 4px;
+    padding: 10px;
+}
+QFrame.gridTable {
+    background-color: #070a10;
+    border: 1px solid #4a5568;
+    border-radius: 4px;
+}
+QFrame.gumHeader {
+    background-color: #0f172a;
+    border: 2px solid #ffaf00;
+    border-radius: 6px;
+    padding: 10px;
 }
 QLabel.sectionTitle {
-    font-size: 15px;
+    font-size: 14px;
     font-weight: bold;
-    color: #38bdf8;
-    margin-bottom: 4px;
+    color: #ffaf00;
+    font-family: 'Hack', monospace;
+    letter-spacing: 0.5px;
 }
 QPushButton {
-    background-color: #2563eb;
+    background-color: #1e293b;
     color: #ffffff;
-    border: none;
-    border-radius: 6px;
-    padding: 8px 16px;
+    border: 1px solid #475569;
+    border-radius: 4px;
+    padding: 7px 16px;
     font-weight: bold;
+    font-family: 'Hack', monospace;
+    font-size: 12px;
 }
 QPushButton:hover {
-    background-color: #1d4ed8;
+    background-color: #334155;
 }
 QPushButton:pressed {
-    background-color: #1e40af;
+    background-color: #0f172a;
 }
 QPushButton.secondary {
-    background-color: #334155;
-    color: #e2e8f0;
+    background-color: #0c4a6e;
+    color: #38bdf8;
+    border: 1px solid #0284c7;
 }
 QPushButton.secondary:hover {
-    background-color: #475569;
+    background-color: #38bdf8;
+    color: #000000;
 }
 QPushButton.success {
-    background-color: #059669;
+    background-color: #064e3b;
+    color: #4ade80;
+    border: 1px solid #22c55e;
 }
 QPushButton.success:hover {
-    background-color: #047857;
+    background-color: #10b981;
+    color: #000000;
 }
 QPushButton.warning {
-    background-color: #d97706;
+    background-color: #451a03;
+    color: #ffaf00;
+    border: 1px solid #d97706;
 }
 QPushButton.warning:hover {
-    background-color: #b45309;
+    background-color: #ffaf00;
+    color: #000000;
 }
 QPushButton.purple {
-    background-color: #7c3aed;
+    background-color: #0c4a6e;
+    color: #38bdf8;
+    border: 1px solid #0284c7;
 }
 QPushButton.purple:hover {
-    background-color: #6d28d9;
+    background-color: #38bdf8;
+    color: #000000;
 }
 QProgressBar {
     border: 1px solid #334155;
-    border-radius: 5px;
+    border-radius: 4px;
     text-align: center;
-    background-color: #020617;
+    background-color: #070a10;
     color: #ffffff;
+    font-family: 'Hack', monospace;
+    font-size: 11px;
     font-weight: bold;
 }
 QProgressBar::chunk {
-    background-color: #3b82f6;
-    border-radius: 4px;
+    background-color: #2563eb;
+    border-radius: 3px;
 }
 QTextEdit, QLineEdit {
-    background-color: #020617;
+    background-color: #070a10;
     border: 1px solid #334155;
-    border-radius: 6px;
+    border-radius: 4px;
     color: #f8fafc;
     padding: 8px;
-    font-family: 'Hack', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+    font-family: 'Hack', 'DejaVu Sans Mono', monospace;
+    font-size: 12px;
 }
 QTextEdit:focus, QLineEdit:focus {
-    border: 1px solid #38bdf8;
+    border: 1px solid #ffaf00;
 }
 QScrollBar:vertical {
     border: none;
-    background: #0b1120;
+    background: #0b0f17;
     width: 8px;
     border-radius: 4px;
 }
@@ -301,6 +336,72 @@ class CopilotWorker(QObject):
         self.finished_signal.emit()
 
 
+def get_system_uptime() -> str:
+    """Read human-readable system uptime."""
+    try:
+        with open("/proc/uptime", "r") as f:
+            secs = float(f.readline().split()[0])
+        hours = int(secs // 3600)
+        mins = int((secs % 3600) // 60)
+        if hours > 0:
+            return f"{hours}h {mins}m"
+        return f"{mins}m"
+    except Exception:
+        return "N/A"
+
+
+def create_grid_header() -> QFrame:
+    """Create contiguous table column header matching sys-health render_audit_section."""
+    hdr_box = QFrame()
+    hdr_box.setStyleSheet("background-color: #141b29; border-bottom: 1px solid #4a5568;")
+    h_l = QHBoxLayout(hdr_box)
+    h_l.setContentsMargins(12, 6, 12, 6)
+
+    col1 = QLabel("Component")
+    col1.setFixedWidth(270)
+    col1.setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+    h_l.addWidget(col1)
+
+    div_hdr = QLabel("│")
+    div_hdr.setStyleSheet("color: #4a5568; font-weight: bold; font-family: 'Hack', monospace;")
+    h_l.addWidget(div_hdr)
+
+    col2 = QLabel("Status / Diagnostic Telemetry")
+    col2.setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace; margin-left: 8px;")
+    h_l.addWidget(col2)
+    h_l.addStretch()
+    return hdr_box
+
+
+def create_grid_row(comp_name: str, val_label: QLabel, is_alt: bool, has_bottom_border: bool = True, extra_widget: Optional[QWidget] = None) -> QFrame:
+    """Create contiguous table row with ANSI delimiter line and zebra striping."""
+    row_box = QFrame()
+    bg = "#0f172a" if is_alt else "#090d15"
+    border_b = "border-bottom: 1px solid #2d3748;" if has_bottom_border else ""
+    row_box.setStyleSheet(f"background-color: {bg}; {border_b}")
+    r_l = QHBoxLayout(row_box)
+    r_l.setContentsMargins(12, 6, 12, 6)
+
+    c_lbl = QLabel(comp_name)
+    c_lbl.setFixedWidth(270)
+    c_lbl.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px; font-family: 'Hack', monospace;")
+    r_l.addWidget(c_lbl)
+
+    div_r = QLabel("│")
+    div_r.setStyleSheet("color: #334155; font-weight: bold; font-family: 'Hack', monospace;")
+    r_l.addWidget(div_r)
+
+    val_label.setStyleSheet("font-family: 'Hack', monospace; font-size: 13px; margin-left: 8px;")
+    r_l.addWidget(val_label)
+
+    if extra_widget:
+        r_l.addSpacing(10)
+        r_l.addWidget(extra_widget)
+
+    r_l.addStretch()
+    return row_box
+
+
 class SysPilotWindow(QMainWindow):
     """Main Dashboard Window."""
 
@@ -308,45 +409,60 @@ class SysPilotWindow(QMainWindow):
         super().__init__()
         self.tray_app = tray_app
         self.setWindowTitle("SysPilot — Autonomous SRE Desktop Copilot")
-        self.resize(900, 740)
+        self.resize(980, 880)
         self.setStyleSheet(DARK_STYLESHEET)
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
+        self.main_layout.setContentsMargins(14, 12, 14, 12)
+        self.main_layout.setSpacing(12)
 
-        # Header Status Banner
+        # Header Status Banner (GUM Double Border HUD)
         self.header_frame = QFrame()
-        self.header_frame.setProperty("class", "card")
-        self.header_frame.setStyleSheet("background-color: #1e293b; border-radius: 8px; padding: 12px;")
-        header_layout = QHBoxLayout(self.header_frame)
+        self.header_frame.setProperty("class", "gumHeader")
+        header_layout = QVBoxLayout(self.header_frame)
+        header_layout.setContentsMargins(12, 10, 12, 10)
+        header_layout.setSpacing(6)
 
-        self.status_icon_label = QLabel("🟢")
-        self.status_icon_label.setStyleSheet("font-size: 28px;")
-        header_layout.addWidget(self.status_icon_label)
+        header_top = QHBoxLayout()
+        self.status_icon_label = QLabel("🟡")
+        self.status_icon_label.setStyleSheet("font-size: 20px;")
+        header_top.addWidget(self.status_icon_label)
 
-        status_text_layout = QVBoxLayout()
-        self.status_title = QLabel("System Status: Flight Ready")
-        self.status_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #10b981;")
-        self.status_sub = QLabel("All core diagnostics pass. System is primed and stable.")
-        self.status_sub.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        status_text_layout.addWidget(self.status_title)
-        status_text_layout.addWidget(self.status_sub)
-        header_layout.addLayout(status_text_layout, stretch=1)
-
-        self.refresh_btn = QPushButton("↻ Refresh Triage")
-        self.refresh_btn.setProperty("class", "secondary")
-        self.refresh_btn.clicked.connect(self.trigger_refresh)
-        header_layout.addWidget(self.refresh_btn)
+        self.status_title = QLabel("SYS HEALTH  ›  Control Panel & Triage Sentinel")
+        self.status_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffaf00; letter-spacing: 0.5px; font-family: 'Hack', monospace;")
+        header_top.addWidget(self.status_title)
+        header_top.addStretch(1)
 
         model_info = get_active_model_details()
         self.header_model_badge = QLabel(f"🤖 {model_info['model']}")
         self.header_model_badge.setStyleSheet(
-            "background-color: #0f172a; border: 1px solid #38bdf8; color: #38bdf8; "
-            "font-size: 11px; font-weight: bold; padding: 6px 12px; border-radius: 12px;"
+            "background-color: #082f49; border: 1px solid #0284c7; color: #38bdf8; "
+            "font-size: 11px; font-weight: bold; padding: 4px 10px; border-radius: 4px; font-family: 'Hack', monospace;"
         )
         self.header_model_badge.setToolTip(f"Active AI Engine: {model_info['full_label']}\nConfigured in ~/.config/goose/config.yaml")
-        header_layout.addWidget(self.header_model_badge)
+        header_top.addWidget(self.header_model_badge)
+
+        self.refresh_btn = QPushButton("↻ REFRESH TRIAGE")
+        self.refresh_btn.setStyleSheet(
+            "background-color: #1e293b; border: 1px solid #64748b; color: #ffffff; "
+            "font-size: 11px; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-family: 'Hack', monospace;"
+        )
+        self.refresh_btn.clicked.connect(self.trigger_refresh)
+        header_top.addWidget(self.refresh_btn)
+        header_layout.addLayout(header_top)
+
+        header_sub = QHBoxLayout()
+        self.env_chip_lbl = QLabel("kernel: ... • uptime: ... • root: ...")
+        self.env_chip_lbl.setStyleSheet("color: #5fd7ff; font-size: 12px; font-family: 'Hack', monospace;")
+        header_sub.addWidget(self.env_chip_lbl)
+        header_sub.addStretch(1)
+
+        self.status_sub = QLabel("PRE-FLIGHT ATTENTION ⚠")
+        self.status_sub.setStyleSheet("color: #ffaf00; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+        header_sub.addWidget(self.status_sub)
+        header_layout.addLayout(header_sub)
 
         self.main_layout.addWidget(self.header_frame)
 
@@ -391,124 +507,179 @@ class SysPilotWindow(QMainWindow):
             self.trigger_refresh()
 
     # --------------------------------------------------------------------------
-    # TAB 1: LEAN DASHBOARD
+    # TAB 1: LEAN DASHBOARD (GUM & SYS-HEALTH CONTIGUOUS GRID ARCHITECTURE)
     # --------------------------------------------------------------------------
     def setup_lean_dashboard_tab(self):
         layout = QVBoxLayout(self.dashboard_tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(12)
 
-        # Card 1: Official System Updates
-        self.card_updates = QFrame()
-        self.card_updates.setProperty("class", "card")
-        u_layout = QVBoxLayout(self.card_updates)
+        # ----------------------------------------------------------------------
+        # SECTION 1: OFFICIAL REPOSITORY & CORE SYSTEM UPDATES
+        # ----------------------------------------------------------------------
+        self.sec1_frame = QFrame()
+        self.sec1_frame.setProperty("class", "card")
+        l1 = QVBoxLayout(self.sec1_frame)
+        l1.setContentsMargins(10, 10, 10, 10)
+        l1.setSpacing(8)
 
-        u_title = QLabel("📦 Official Repository & Core System Updates")
-        u_title.setProperty("class", "sectionTitle")
-        u_layout.addWidget(u_title)
+        t1_row = QHBoxLayout()
+        t1_lbl = QLabel("=== OFFICIAL REPOSITORY & CORE SYSTEM UPDATES ===")
+        t1_lbl.setStyleSheet("color: #ffaf00; font-weight: bold; font-size: 13px; letter-spacing: 0.5px; font-family: 'Hack', monospace;")
+        t1_row.addWidget(t1_lbl)
+        t1_row.addStretch()
 
-        self.updates_lbl = QLabel("0 pending updates (0 core system packages)")
-        self.updates_lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
-        u_layout.addWidget(self.updates_lbl)
+        self.sec1_badge = QLabel("UPDATE ⚠")
+        self.sec1_badge.setStyleSheet("color: #ffaf00; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+        t1_row.addWidget(self.sec1_badge)
+        l1.addLayout(t1_row)
 
-        self.core_pkgs_lbl = QLabel("All core packages (kernel, systemd, drivers, bootloader) are up to date.")
-        self.core_pkgs_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        u_layout.addWidget(self.core_pkgs_lbl)
+        # Contiguous Grid Table
+        grid1 = QFrame()
+        grid1.setProperty("class", "gridTable")
+        grid1_l = QVBoxLayout(grid1)
+        grid1_l.setContentsMargins(0, 0, 0, 0)
+        grid1_l.setSpacing(0)
 
-        u_btn_box = QHBoxLayout()
-        self.btn_guarded_upgrade = QPushButton("⚡ Guarded System Upgrade")
+        grid1_l.addWidget(create_grid_header())
+
+        self.core_pkgs_val_lbl = QLabel("Checking...")
+        grid1_l.addWidget(create_grid_row("Core System Packages", self.core_pkgs_val_lbl, is_alt=False, has_bottom_border=True))
+
+        self.repo_pkgs_val_lbl = QLabel("Checking...")
+        grid1_l.addWidget(create_grid_row("Official Repositories", self.repo_pkgs_val_lbl, is_alt=True, has_bottom_border=False))
+
+        l1.addWidget(grid1)
+
+        # Action Buttons
+        btn_box1 = QHBoxLayout()
+        btn_box1.setContentsMargins(2, 6, 2, 2)
+        self.btn_guarded_upgrade = QPushButton("⚡ RUN GUARDED SYSTEM UPGRADE")
         self.btn_guarded_upgrade.setProperty("class", "success")
         self.btn_guarded_upgrade.clicked.connect(self.run_guarded_upgrade_terminal)
-        u_btn_box.addWidget(self.btn_guarded_upgrade)
+        btn_box1.addWidget(self.btn_guarded_upgrade)
 
-        self.btn_quick_audit = QPushButton("🔍 Full Diagnostic Audit")
+        self.btn_quick_audit = QPushButton("🔍 FULL DIAGNOSTIC AUDIT")
         self.btn_quick_audit.setProperty("class", "secondary")
         self.btn_quick_audit.clicked.connect(self.run_audit_terminal)
-        u_btn_box.addWidget(self.btn_quick_audit)
+        btn_box1.addWidget(self.btn_quick_audit)
+        btn_box1.addStretch()
 
-        u_layout.addLayout(u_btn_box)
-        layout.addWidget(self.card_updates)
+        l1.addLayout(btn_box1)
+        layout.addWidget(self.sec1_frame)
 
-        # Card 2: Standalone & Third-Party Apps Update Check
-        self.card_software = QFrame()
-        self.card_software.setProperty("class", "card")
-        s_layout = QVBoxLayout(self.card_software)
+        # ----------------------------------------------------------------------
+        # SECTION 2: STANDALONE APPLICATIONS & 3RD-PARTY RUNTIMES
+        # ----------------------------------------------------------------------
+        self.sec2_frame = QFrame()
+        self.sec2_frame.setProperty("class", "card")
+        l2 = QVBoxLayout(self.sec2_frame)
+        l2.setContentsMargins(10, 10, 10, 10)
+        l2.setSpacing(8)
 
-        s_title = QLabel("🚀 Standalone & Third-Party Apps Update Check")
-        s_title.setProperty("class", "sectionTitle")
-        s_layout.addWidget(s_title)
+        t2_row = QHBoxLayout()
+        t2_lbl = QLabel("=== STANDALONE APPLICATIONS & 3RD-PARTY RUNTIMES ===")
+        t2_lbl.setStyleSheet("color: #ffaf00; font-weight: bold; font-size: 13px; letter-spacing: 0.5px; font-family: 'Hack', monospace;")
+        t2_row.addWidget(t2_lbl)
+        t2_row.addStretch()
 
-        self.software_lbl = QLabel("AUR: 0 pending | Flatpak: Not installed | Goose: 1.53.0 (up to date) | UV: 0.12.23 (up to date)")
-        self.software_lbl.setStyleSheet("color: #cbd5e1; font-size: 13px;")
-        s_layout.addWidget(self.software_lbl)
+        self.sec2_badge = QLabel("UPDATE ⚠")
+        self.sec2_badge.setStyleSheet("color: #ffaf00; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+        t2_row.addWidget(self.sec2_badge)
+        l2.addLayout(t2_row)
 
-        s_btn_box = QHBoxLayout()
-        self.btn_check_apps = QPushButton("📦 Standalone & 3rd-Party Update Triage")
-        self.btn_check_apps.setProperty("class", "purple")
+        grid2 = QFrame()
+        grid2.setProperty("class", "gridTable")
+        grid2_l = QVBoxLayout(grid2)
+        grid2_l.setContentsMargins(0, 0, 0, 0)
+        grid2_l.setSpacing(0)
+
+        grid2_l.addWidget(create_grid_header())
+
+        self.aur_val_lbl = QLabel("Checking...")
+        grid2_l.addWidget(create_grid_row("AUR Packages (yay/paru)", self.aur_val_lbl, is_alt=False, has_bottom_border=True))
+
+        self.flatpak_val_lbl = QLabel("Checking...")
+        grid2_l.addWidget(create_grid_row("Flatpak Applications", self.flatpak_val_lbl, is_alt=True, has_bottom_border=True))
+
+        self.devtools_val_lbl = QLabel("Checking...")
+        grid2_l.addWidget(create_grid_row("Developer Tools (Goose/UV)", self.devtools_val_lbl, is_alt=False, has_bottom_border=False))
+
+        l2.addWidget(grid2)
+
+        btn_box2 = QHBoxLayout()
+        btn_box2.setContentsMargins(2, 6, 2, 2)
+        self.btn_check_apps = QPushButton("📦 STANDALONE 3RD-PARTY TRIAGE")
+        self.btn_check_apps.setProperty("class", "secondary")
         self.btn_check_apps.clicked.connect(self.run_software_terminal)
-        s_btn_box.addWidget(self.btn_check_apps)
+        btn_box2.addWidget(self.btn_check_apps)
 
-        self.btn_update_goose = QPushButton("⚡ Update Goose AI Agent")
+        self.btn_update_goose = QPushButton("⚡ UPDATE GOOSE AI AGENT")
         self.btn_update_goose.setProperty("class", "success")
         self.btn_update_goose.setVisible(False)
         self.btn_update_goose.clicked.connect(self.run_update_goose_terminal)
-        s_btn_box.addWidget(self.btn_update_goose)
-        s_layout.addLayout(s_btn_box)
+        btn_box2.addWidget(self.btn_update_goose)
+        btn_box2.addStretch()
 
-        layout.addWidget(self.card_software)
+        l2.addLayout(btn_box2)
+        layout.addWidget(self.sec2_frame)
 
-        # Card 3: Core Health & Storage Overview
-        self.card_health = QFrame()
-        self.card_health.setProperty("class", "card")
-        h_layout = QVBoxLayout(self.card_health)
+        # ----------------------------------------------------------------------
+        # SECTION 3: SYSTEM HEALTH, STORAGE & HYGIENE AUDIT
+        # ----------------------------------------------------------------------
+        self.sec3_frame = QFrame()
+        self.sec3_frame.setProperty("class", "card")
+        l3 = QVBoxLayout(self.sec3_frame)
+        l3.setContentsMargins(10, 10, 10, 10)
+        l3.setSpacing(8)
 
-        h_title = QLabel("🛡 System Health & Disk State")
-        h_title.setProperty("class", "sectionTitle")
-        h_layout.addWidget(h_title)
+        t3_row = QHBoxLayout()
+        t3_lbl = QLabel("=== SYSTEM HEALTH, STORAGE & HYGIENE AUDIT ===")
+        t3_lbl.setStyleSheet("color: #ffaf00; font-weight: bold; font-size: 13px; letter-spacing: 0.5px; font-family: 'Hack', monospace;")
+        t3_row.addWidget(t3_lbl)
+        t3_row.addStretch()
 
-        # Reboot Alert Banner (hidden unless reboot is pending)
-        self.reboot_lbl = QLabel("🔄 System reboot pending: running kernel was replaced on disk.")
-        self.reboot_lbl.setStyleSheet("color: #fbbf24; font-weight: bold; font-size: 12px; padding: 6px; background-color: #451a03; border: 1px solid #b45309; border-radius: 6px;")
-        self.reboot_lbl.setVisible(False)
-        h_layout.addWidget(self.reboot_lbl)
+        self.sec3_badge = QLabel("CLEAN ✔")
+        self.sec3_badge.setStyleSheet("color: #4ade80; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+        t3_row.addWidget(self.sec3_badge)
+        l3.addLayout(t3_row)
 
-        self.services_lbl = QLabel("✔ Systemd Units: All system and user units operational.")
-        self.services_lbl.setStyleSheet("color: #10b981; font-weight: bold;")
-        h_layout.addWidget(self.services_lbl)
+        grid3 = QFrame()
+        grid3.setProperty("class", "gridTable")
+        grid3_l = QVBoxLayout(grid3)
+        grid3_l.setContentsMargins(0, 0, 0, 0)
+        grid3_l.setSpacing(0)
 
-        # Root Disk Bar
-        h_layout.addWidget(QLabel("Root Partition Usage (/):"))
-        self.disk_bar = QProgressBar()
-        self.disk_bar.setValue(23)
-        self.disk_bar.setFormat("%v% used")
-        h_layout.addWidget(self.disk_bar)
+        grid3_l.addWidget(create_grid_header())
 
-        self.disk_sub_lbl = QLabel("334.6 GB available")
-        self.disk_sub_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
-        h_layout.addWidget(self.disk_sub_lbl)
+        # Dynamic Reboot Row (hidden unless reboot pending)
+        self.reboot_val_lbl = QLabel("WARN ⚠ (Running kernel replaced on disk - reboot recommended)")
+        self.reboot_row_frame = create_grid_row("System Reboot Status", self.reboot_val_lbl, is_alt=False, has_bottom_border=True)
+        self.reboot_row_frame.setVisible(False)
+        grid3_l.addWidget(self.reboot_row_frame)
 
-        # Orphan Packages Row
-        self.orphans_box = QHBoxLayout()
-        self.orphans_lbl = QLabel("✔ Package Hygiene: 0 orphan packages.")
-        self.orphans_lbl.setStyleSheet("color: #10b981; font-size: 13px;")
-        self.orphans_box.addWidget(self.orphans_lbl, 1)
+        self.services_val_lbl = QLabel("Checking...")
+        grid3_l.addWidget(create_grid_row("Systemd Units", self.services_val_lbl, is_alt=False, has_bottom_border=True))
 
-        self.btn_prune_orphans = QPushButton("🗑 Prune Orphans")
+        self.orphans_val_lbl = QLabel("Checking...")
+        self.btn_prune_orphans = QPushButton("🗑 PRUNE ORPHANS")
         self.btn_prune_orphans.setProperty("class", "warning")
-        self.btn_prune_orphans.setFixedHeight(28)
+        self.btn_prune_orphans.setFixedHeight(26)
         self.btn_prune_orphans.setVisible(False)
         self.btn_prune_orphans.clicked.connect(lambda: self.run_custom_terminal(f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --orphans", "SysPilot Orphan Triage"))
-        self.orphans_box.addWidget(self.btn_prune_orphans)
-        h_layout.addLayout(self.orphans_box)
+        grid3_l.addWidget(create_grid_row("Orphan Dependencies", self.orphans_val_lbl, is_alt=True, has_bottom_border=True, extra_widget=self.btn_prune_orphans))
 
-        # Pacnew Conflicts Row
-        self.pacnew_dash_lbl = QLabel("✔ Configuration: No .pacnew conflicts.")
-        self.pacnew_dash_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        h_layout.addWidget(self.pacnew_dash_lbl)
+        self.pacnew_dash_lbl = QLabel("Checking...")
+        grid3_l.addWidget(create_grid_row("Configuration (.pacnew)", self.pacnew_dash_lbl, is_alt=False, has_bottom_border=True))
 
-        self.gaming_lbl = QLabel("🎮 Gaming Mode: Inactive (Normal desktop state)")
-        self.gaming_lbl.setStyleSheet("color: #94a3b8; font-size: 12px; margin-top: 4px;")
-        h_layout.addWidget(self.gaming_lbl)
+        self.disk_val_lbl = QLabel("Checking...")
+        grid3_l.addWidget(create_grid_row("Root Storage (/)", self.disk_val_lbl, is_alt=True, has_bottom_border=True))
 
-        layout.addWidget(self.card_health)
+        self.gaming_val_lbl = QLabel("Checking...")
+        grid3_l.addWidget(create_grid_row("Gaming & Proton Stack", self.gaming_val_lbl, is_alt=False, has_bottom_border=False))
+
+        l3.addWidget(grid3)
+        layout.addWidget(self.sec3_frame)
         layout.addStretch()
 
     # --------------------------------------------------------------------------
@@ -1148,7 +1319,7 @@ X-GNOME-Autostart-enabled=true
                     QMessageBox.critical(self, "Error", f"Could not remove autostart entry: {e}")
 
     # --------------------------------------------------------------------------
-    # DATA BINDING & REFRESH
+    # DATA BINDING & REFRESH (GUM & SYS-HEALTH CONTIGUOUS GRID ARCHITECTURE)
     # --------------------------------------------------------------------------
     def update_ui_from_state(self):
         """Read status file and refresh all widgets."""
@@ -1172,22 +1343,60 @@ X-GNOME-Autostart-enabled=true
         reboot_pending = data.get("reboot_pending", False)
         gaming_mode = data.get("gaming_mode", False)
 
-        # Header
-        if status == "ACTION_REQUIRED":
+        # ----------------------------------------------------------------------
+        # Header Dynamic Severity Styling (Double Border & Glow matching GUM)
+        # ----------------------------------------------------------------------
+        if gaming_mode:
+            border_col = "#38bdf8"
+            bg_col = "#071724"
+            title_col = "#38bdf8"
+            self.status_icon_label.setText("🎮")
+            self.status_title.setText("SYS HEALTH  ›  Gaming Session Active (Diagnostics Inhibited)")
+            self.status_title.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {title_col}; letter-spacing: 0.5px; font-family: 'Hack', monospace;")
+            self.status_sub.setText("GAMEMODE ACTIVE 🎮")
+            self.status_sub.setStyleSheet(f"color: {title_col}; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+        elif status == "ACTION_REQUIRED":
+            border_col = "#ef4444"
+            bg_col = "#1c0f12"
+            title_col = "#ef4444"
             self.status_icon_label.setText("🔴")
-            self.status_title.setText("System Status: Action Required")
-            self.status_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #ef4444;")
-            self.status_sub.setText("; ".join(reasons) if reasons else "Critical issue detected.")
+            self.status_title.setText("SYS HEALTH  ›  Action Required ✖")
+            self.status_title.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {title_col}; letter-spacing: 0.5px; font-family: 'Hack', monospace;")
+            sub_msg = "; ".join(reasons) if reasons else "ACTION REQUIRED ✖"
+            self.status_sub.setText(f"ACTION REQUIRED ✖ ({sub_msg})")
+            self.status_sub.setStyleSheet(f"color: {title_col}; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
         elif status == "PRE_FLIGHT_ATTENTION":
+            border_col = "#ffaf00"
+            bg_col = "#141007"
+            title_col = "#ffaf00"
             self.status_icon_label.setText("🟡")
-            self.status_title.setText("System Status: Pre-Flight Attention")
-            self.status_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #f59e0b;")
-            self.status_sub.setText("; ".join(reasons) if reasons else "Updates or maintenance pending.")
-        else:
+            self.status_title.setText("SYS HEALTH  ›  Control Panel & Triage Sentinel")
+            self.status_title.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {title_col}; letter-spacing: 0.5px; font-family: 'Hack', monospace;")
+            sub_msg = ", ".join(reasons) if reasons else "Advisories pending review"
+            self.status_sub.setText(f"PRE-FLIGHT ATTENTION ⚠ ({sub_msg})")
+            self.status_sub.setStyleSheet(f"color: {title_col}; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+        else: # FLIGHT_READY
+            border_col = "#4ade80"
+            bg_col = "#071710"
+            title_col = "#4ade80"
             self.status_icon_label.setText("🟢")
-            self.status_title.setText("System Status: Flight Ready")
-            self.status_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #10b981;")
-            self.status_sub.setText("All core diagnostics pass. System is primed and stable.")
+            self.status_title.setText("SYS HEALTH  ›  Flight Ready ✔")
+            self.status_title.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {title_col}; letter-spacing: 0.5px; font-family: 'Hack', monospace;")
+            self.status_sub.setText("ALL CLEAR ✔ (System primed and stable)")
+            self.status_sub.setStyleSheet(f"color: {title_col}; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+
+        self.header_frame.setStyleSheet(
+            f"background-color: {bg_col}; border: 2px solid {border_col}; border-radius: 6px; padding: 10px;"
+        )
+
+        # Header Environment Telemetry Chip
+        running_kern = os.uname().release
+        used_pct = disk.get("used_pct", 0)
+        avail_gb = disk.get("avail_gb", 0)
+        uptime_str = get_system_uptime()
+        gpu_str = data.get("sys_health", {}).get("gpu", {}).get("drivers_in_use", "")
+        gpu_chip = f"   •   GPU: {gpu_str} (Active)" if gpu_str else ""
+        self.env_chip_lbl.setText(f"kernel: {running_kern}   •   uptime: {uptime_str}   •   root: {used_pct}% used ({avail_gb}G free){gpu_chip}")
 
         # Header AI Model Badge
         if hasattr(self, "header_model_badge"):
@@ -1195,28 +1404,47 @@ X-GNOME-Autostart-enabled=true
             self.header_model_badge.setText(f"🤖 {model_info['model']}")
             self.header_model_badge.setToolTip(f"Active AI Engine: {model_info['full_label']}\nProvider: {model_info['provider_display']}\nConfigured in ~/.config/goose/config.yaml")
 
-        # Updates card
+        # ----------------------------------------------------------------------
+        # SECTION 1: OFFICIAL REPOSITORY UPDATES
+        # ----------------------------------------------------------------------
         tot_up = updates.get("total", 0)
         c_up = updates.get("core_count", 0)
         r_up = updates.get("regular_count", 0)
-        self.updates_lbl.setText(f"{tot_up} pending system updates ({c_up} core packages, {r_up} regular packages)")
-        if tot_up > 0:
-            self.updates_lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #38bdf8;")
-        else:
-            self.updates_lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #f8fafc;")
-        
         core_pkgs = updates.get("core_packages", [])
-        if core_pkgs:
-            self.core_pkgs_lbl.setText(f"Core packages pending: {', '.join([p.split()[0] for p in core_pkgs])}")
-            self.core_pkgs_lbl.setStyleSheet("color: #fbbf24; font-size: 12px; font-weight: bold;")
-        elif tot_up > 0:
-            self.core_pkgs_lbl.setText("Core packages are up to date. Regular application updates available.")
-            self.core_pkgs_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        else:
-            self.core_pkgs_lbl.setText("All core packages (kernel, systemd, drivers, bootloader) are up to date.")
-            self.core_pkgs_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        reg_pkgs = updates.get("regular_packages", [])
 
-        # Standalone apps
+        if tot_up > 0:
+            self.sec1_badge.setText(f"UPDATE ⚠ ({tot_up} pending)")
+            self.sec1_badge.setStyleSheet("color: #ffaf00; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+        else:
+            self.sec1_badge.setText("ALL CLEAR ✔")
+            self.sec1_badge.setStyleSheet("color: #4ade80; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+
+        if c_up > 0:
+            cpkg_names = [p.split()[0] for p in core_pkgs]
+            preview = ", ".join(cpkg_names[:4])
+            if len(cpkg_names) > 4: preview += f" (+{len(cpkg_names)-4} more)"
+            self.core_pkgs_val_lbl.setText(f"WARN ⚠ ({c_up} core packages: {preview})")
+            self.core_pkgs_val_lbl.setStyleSheet("color: #ffaf00; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+        else:
+            self.core_pkgs_val_lbl.setText("PASS ✔ (Kernel, systemd, bootloader, NVIDIA drivers up to date)")
+            self.core_pkgs_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+
+        if r_up > 0:
+            rpkg_names = [p.split()[0] for p in reg_pkgs]
+            preview = ", ".join(rpkg_names[:5])
+            if len(rpkg_names) > 5: preview += f" (+{len(rpkg_names)-5} more)"
+            self.repo_pkgs_val_lbl.setText(f"UPDATE ⚠ ({r_up} packages pending: {preview})")
+            self.repo_pkgs_val_lbl.setStyleSheet("color: #ffaf00; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+        else:
+            self.repo_pkgs_val_lbl.setText("PASS ✔ (All repository packages up to date)")
+            self.repo_pkgs_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+
+        self.btn_guarded_upgrade.setText(f"⚡ RUN GUARDED SYSTEM UPGRADE ({tot_up})")
+
+        # ----------------------------------------------------------------------
+        # SECTION 2: STANDALONE & 3RD-PARTY SOFTWARE
+        # ----------------------------------------------------------------------
         if standalone.get("checked", False):
             aur_p = standalone.get("aur_pending", 0)
             fp_p = standalone.get("flatpak_pending", 0)
@@ -1224,77 +1452,135 @@ X-GNOME-Autostart-enabled=true
             g_ver = g_det.get("version", "N/A")
             g_latest = g_det.get("latest", g_ver)
             g_up_avail = g_det.get("update_available", False)
-            g_up = f"Update available: v{g_latest}" if g_up_avail else "up to date"
             
             uv_det = standalone.get("details", {}).get("uv", {})
             uv_ver = uv_det.get("version", "N/A")
-            uv_up = "Update available" if uv_det.get("update_available") else "up to date"
+            uv_up_avail = uv_det.get("update_available", False)
 
-            self.software_lbl.setText(
-                f"AUR: {aur_p} pending | Flatpak: {fp_p} pending | Goose: {g_ver} ({g_up}) | UV: {uv_ver} ({uv_up})"
-            )
+            aur_pkgs = standalone.get("details", {}).get("aur", {}).get("packages", [])
+            tot_standalone = aur_p + fp_p
+
+            if tot_standalone > 0:
+                self.sec2_badge.setText(f"UPDATE ⚠ ({aur_p} AUR, {fp_p} Flatpak)")
+                self.sec2_badge.setStyleSheet("color: #ffaf00; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+            else:
+                self.sec2_badge.setText("UP TO DATE ✔")
+                self.sec2_badge.setStyleSheet("color: #4ade80; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+
+            if aur_p > 0:
+                preview = ", ".join(aur_pkgs[:4]) if aur_pkgs else f"{aur_p} packages"
+                self.aur_val_lbl.setText(f"UPDATE ⚠ ({aur_p} packages pending: {preview})")
+                self.aur_val_lbl.setStyleSheet("color: #ffaf00; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            else:
+                self.aur_val_lbl.setText("PASS ✔ (All AUR packages up to date)")
+                self.aur_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+
+            fp_inst = standalone.get("details", {}).get("flatpak", {}).get("installed", False)
+            if not fp_inst:
+                self.flatpak_val_lbl.setText("PASS ✔ (Not installed / Clean)")
+                self.flatpak_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            elif fp_p > 0:
+                self.flatpak_val_lbl.setText(f"UPDATE ⚠ ({fp_p} Flatpak updates available)")
+                self.flatpak_val_lbl.setStyleSheet("color: #ffaf00; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            else:
+                self.flatpak_val_lbl.setText("PASS ✔ (All Flatpak applications up to date)")
+                self.flatpak_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+
+            dev_parts = []
             if g_up_avail:
-                self.btn_update_goose.setText(f"⚡ Update Goose AI Agent ({g_ver} → {g_latest})")
+                dev_parts.append(f"Goose: UPDATE ⚠ (v{g_ver} → v{g_latest})")
+            else:
+                dev_parts.append(f"Goose: v{g_ver} ✔")
+            if uv_up_avail:
+                dev_parts.append(f"UV: UPDATE ⚠ (v{uv_ver})")
+            else:
+                dev_parts.append(f"UV: v{uv_ver} ✔")
+
+            if g_up_avail or uv_up_avail:
+                self.devtools_val_lbl.setText(f"UPDATE ⚠ ({' • '.join(dev_parts)})")
+                self.devtools_val_lbl.setStyleSheet("color: #ffaf00; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            else:
+                self.devtools_val_lbl.setText(f"PASS ✔ ({' • '.join(dev_parts)})")
+                self.devtools_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+
+            if g_up_avail:
+                self.btn_update_goose.setText(f"⚡ UPDATE GOOSE ({g_ver} → {g_latest})")
                 self.btn_update_goose.setVisible(True)
             else:
                 self.btn_update_goose.setVisible(False)
         else:
-            self.software_lbl.setText("Standalone apps triage pending. Click below to inspect.")
+            self.sec2_badge.setText("TRIAGE PENDING ℹ")
+            self.sec2_badge.setStyleSheet("color: #5fd7ff; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+            self.aur_val_lbl.setText("INFO ℹ (Pending inspection - click below)")
+            self.aur_val_lbl.setStyleSheet("color: #5fd7ff; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            self.flatpak_val_lbl.setText("INFO ℹ (Pending inspection - click below)")
+            self.flatpak_val_lbl.setStyleSheet("color: #5fd7ff; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            self.devtools_val_lbl.setText("INFO ℹ (Pending inspection - click below)")
+            self.devtools_val_lbl.setStyleSheet("color: #5fd7ff; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            self.btn_update_goose.setVisible(False)
 
-        # Reboot Alert
-        if hasattr(self, "reboot_lbl"):
-            if reboot_pending:
-                self.reboot_lbl.setText("⚠️ Reboot Pending: Running kernel updated on disk. System reboot recommended.")
-                self.reboot_lbl.setVisible(True)
-            else:
-                self.reboot_lbl.setVisible(False)
-
-        # Services
+        # ----------------------------------------------------------------------
+        # SECTION 3: SYSTEM HEALTH & STORAGE HYGIENE
+        # ----------------------------------------------------------------------
+        o_count = orphans.get("count", 0)
+        p_count = pacnew.get("count", 0)
         sys_f = failed_services.get("system", [])
         usr_f = failed_services.get("user", [])
+        total_gb = disk.get("total_gb", 0)
+        used_pct = disk.get("used_pct", 0)
+        avail_gb = disk.get("avail_gb", 0)
+
+        has_advisories = (o_count > 0 or p_count > 0 or sys_f or usr_f or reboot_pending or used_pct >= 80)
+        if sys_f or used_pct >= 92:
+            self.sec3_badge.setText("ACTION REQUIRED ✖")
+            self.sec3_badge.setStyleSheet("color: #ef4444; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+        elif has_advisories:
+            self.sec3_badge.setText("REVIEW ADVISORIES ⚠")
+            self.sec3_badge.setStyleSheet("color: #ffaf00; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+        else:
+            self.sec3_badge.setText("ALL CLEAR ✔ (0 Errors)")
+            self.sec3_badge.setStyleSheet("color: #4ade80; font-weight: bold; font-size: 12px; font-family: 'Hack', monospace;")
+
+        # Reboot row
+        if reboot_pending:
+            self.reboot_row_frame.setVisible(True)
+            self.reboot_val_lbl.setText("WARN ⚠ (Running kernel replaced on disk - reboot recommended)")
+            self.reboot_val_lbl.setStyleSheet("color: #ffaf00; font-weight: bold; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+        else:
+            self.reboot_row_frame.setVisible(False)
+
+        # Services
         if sys_f or usr_f:
             f_str = []
             if sys_f: f_str.append(f"System: {', '.join(sys_f)}")
             if usr_f: f_str.append(f"User: {', '.join(usr_f)}")
-            self.services_lbl.setText(f"⚠️ Failed Units Detected: {' | '.join(f_str)}")
-            self.services_lbl.setStyleSheet("color: #ef4444; font-weight: bold;")
+            self.services_val_lbl.setText(f"FAIL ✖ ({' • '.join(f_str)})")
+            self.services_val_lbl.setStyleSheet("color: #ef4444; font-weight: bold; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
         else:
-            self.services_lbl.setText("✔ Systemd Units: All system and user units operational.")
-            self.services_lbl.setStyleSheet("color: #10b981; font-weight: bold;")
-
-        # Disk
-        used_pct = disk.get("used_pct", 0)
-        avail_gb = disk.get("avail_gb", 0)
-        self.disk_bar.setValue(used_pct)
-        self.disk_bar.setFormat(f"%v% used")
-        self.disk_sub_lbl.setText(f"{avail_gb} GB free on root mount (/)")
+            self.services_val_lbl.setText("PASS ✔ (All system and user units operational: 0 failed)")
+            self.services_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
 
         # Orphans
-        if hasattr(self, "orphans_lbl"):
-            o_count = orphans.get("count", 0)
+        if o_count > 0:
             o_pkgs = orphans.get("packages", [])
-            if o_count > 0:
-                pkg_preview = ", ".join(o_pkgs[:3])
-                if len(o_pkgs) > 3:
-                    pkg_preview += f" (+{len(o_pkgs) - 3} more)"
-                self.orphans_lbl.setText(f"⚠️ {o_count} unrequired orphan package(s): {pkg_preview}")
-                self.orphans_lbl.setStyleSheet("color: #f59e0b; font-weight: bold; font-size: 13px;")
-                self.btn_prune_orphans.setText(f"🗑 Prune Orphans ({o_count})")
-                self.btn_prune_orphans.setVisible(True)
-            else:
-                self.orphans_lbl.setText("✔ Package Hygiene: 0 orphan packages.")
-                self.orphans_lbl.setStyleSheet("color: #10b981; font-size: 13px;")
-                self.btn_prune_orphans.setVisible(False)
+            preview = ", ".join(o_pkgs[:3])
+            if len(o_pkgs) > 3: preview += f" (+{len(o_pkgs)-3} more)"
+            self.orphans_val_lbl.setText(f"WARN ⚠ ({o_count} unrequired packages: {preview})")
+            self.orphans_val_lbl.setStyleSheet("color: #ffaf00; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            self.btn_prune_orphans.setText(f"🗑 PRUNE ORPHANS ({o_count})")
+            self.btn_prune_orphans.setVisible(True)
+        else:
+            self.orphans_val_lbl.setText("PASS ✔ (Dependency tree clean: 0 orphans)")
+            self.orphans_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            self.btn_prune_orphans.setVisible(False)
 
         # Pacnew
-        p_count = pacnew.get("count", 0)
-        if hasattr(self, "pacnew_dash_lbl"):
-            if p_count > 0:
-                self.pacnew_dash_lbl.setText(f"⚠️ {p_count} .pacnew configuration file(s) require review.")
-                self.pacnew_dash_lbl.setStyleSheet("color: #f59e0b; font-weight: bold; font-size: 12px;")
-            else:
-                self.pacnew_dash_lbl.setText("✔ Configuration: No .pacnew conflicts detected.")
-                self.pacnew_dash_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        if p_count > 0:
+            self.pacnew_dash_lbl.setText(f"WARN ⚠ ({p_count} .pacnew configuration file(s) require review)")
+            self.pacnew_dash_lbl.setStyleSheet("color: #ffaf00; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+        else:
+            self.pacnew_dash_lbl.setText("PASS ✔ (0 .pacnew file conflicts pending review)")
+            self.pacnew_dash_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
 
         if hasattr(self, "pacnew_desc_lbl"):
             if p_count > 0:
@@ -1304,13 +1590,24 @@ X-GNOME-Autostart-enabled=true
                 self.pacnew_desc_lbl.setText("✔ No .pacnew configuration conflicts detected.")
                 self.pacnew_desc_lbl.setStyleSheet("color: #10b981;")
 
+        # Disk
+        disk_color = "#4ade80"
+        disk_tag = "PASS ✔"
+        if used_pct >= 92:
+            disk_color = "#ef4444"
+            disk_tag = "FAIL ✖ (Critically Full)"
+        elif used_pct >= 80:
+            disk_color = "#ffaf00"
+            disk_tag = "WARN ⚠ (Elevated Usage)"
+        self.disk_val_lbl.setText(f"{disk_tag} ({used_pct}% used • {avail_gb} GiB free of {total_gb} GiB total ext4)")
+        self.disk_val_lbl.setStyleSheet(f"color: {disk_color}; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+
         # Gaming
-        if gaming_mode:
-            self.gaming_lbl.setText("🎮 GameMode: ACTIVE (Background diagnostics inhibited)")
-            self.gaming_lbl.setStyleSheet("color: #38bdf8; font-weight: bold;")
-        else:
-            self.gaming_lbl.setText("🎮 GameMode: Inactive (Normal desktop operation)")
-            self.gaming_lbl.setStyleSheet("color: #94a3b8;")
+        gaming_info = data.get("sys_health", {}).get("gaming", {})
+        c_proton = gaming_info.get("custom_proton", "System Default")
+        gm_txt = "ACTIVE" if gaming_mode else "Inactive"
+        self.gaming_val_lbl.setText(f"INFO ℹ (GameMode: {gm_txt} • Multilib 32-bit: OK • {c_proton})")
+        self.gaming_val_lbl.setStyleSheet("color: #5fd7ff; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
 
         # Update tray icon
         self.tray_app.update_tray_icon(status, gaming_mode)

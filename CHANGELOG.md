@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.3] - 2026-10-05
+
+### Added
+- **GUM & Sys-Health Aesthetic UI Redesign (PATCH-003)**:
+  - Replaced amorphous cards with high-contrast, contiguous 2-column grid tables mirroring Charm GUM and `sys-health.sh` (`render_audit_section`).
+  - Standardized on fixed-width 270px component column with ANSI delimiter line (`│`) and zebra-striped row backgrounds (`#090d15` / `#0f172a`).
+  - **Dynamic Severity HUD Header**: GUM double-border top box that dynamically changes color and glow based on system issue severity:
+    - 🔴 Red (`#ef4444` / ANSI 196) for `ACTION_REQUIRED`.
+    - 🟡 Amber / Gold (`#ffaf00` / ANSI 214) for `PRE_FLIGHT_ATTENTION`.
+    - 🔵 Cyan (`#38bdf8` / ANSI 81) when `GameMode` is active.
+    - 🟢 Green (`#4ade80` / ANSI 82) for `FLIGHT_READY`.
+  - Added real-time environment telemetry chip directly inside HUD: `kernel`, `uptime`, `root storage`, and active `GPU`.
+  - Implemented crisp monospace typography (`Hack`, `DejaVu Sans Mono`, `Noto Sans Mono`) for 100% legibility on high-resolution displays.
+  - Redesigned action buttons with GUM terminal palette (`gumBtnGreen`, `gumBtnCyan`, `gumBtnAmber`).
+
+---
+
 ## [1.0.2] - 2026-10-05
 
 ### Added

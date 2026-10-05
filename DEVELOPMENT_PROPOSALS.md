@@ -117,3 +117,38 @@ Refactor `CopilotWorker` to execute Goose in structured event stream mode (`--ou
 - [x] Syntax validated via `python3 -m py_compile`.
 - [x] Verified non-destructive caching with `core/triage.py --no-pkg`.
 - [x] Verified CLI status output with `syspilot -s`.
+
+---
+
+### PATCH-003: GUM & Sys-Health Aesthetic UI Redesign (ANSI Contiguous Tables & Dynamic Severity HUD)
+* **Status:** `[IMPLEMENTED]` *(Shipped in v1.0.3)*
+* **Date Proposed:** 2026-10-05
+* **Priority:** HIGH (Sol SRE UI certification, 100% visual parity with `sys-health.sh`, enhanced legibility for desktop users)
+* **Target Components:**
+  - `gui/syspilot_gui.py` (`DARK_STYLESHEET`, `create_grid_header()`, `create_grid_row()`, `setup_lean_dashboard_tab()`, `update_ui_from_state()`, dynamic double-border HUD)
+  - `packaging/PKGBUILD` (bump to v1.0.3)
+  - `CHANGELOG.md` (release v1.0.3)
+
+#### Context & Root Cause:
+The original SysPilot GUI suffered from low-contrast card styling with floating vertical text labels, lack of tabular alignment, and visual divergence from `sys-health.sh`. For users who value the rapid, unambiguous terminal diagnostics of `sys-health.sh`, the dashboard lacked the structured, 2-column key-value matrix and GUM ANSI palette that makes status triage effortless.
+
+#### Architectural Solution:
+1. **Dynamic Severity HUD Header**:
+   - Double-border box matching Charm GUM (`border: 2px solid <color>; border-radius: 6px`).
+   - Dynamic border & background color based on triage severity:
+     - 🔴 Red (`#ef4444`) for `ACTION_REQUIRED`.
+     - 🟡 Gold/Amber (`#ffaf00`) for `PRE_FLIGHT_ATTENTION`.
+     - 🔵 Cyan (`#38bdf8`) for active `GameMode`.
+     - 🟢 Green (`#4ade80`) for `FLIGHT_READY`.
+   - Embedded sub-chip displaying real-time hardware telemetry: `kernel`, `uptime`, `root storage`, and active `GPU`.
+2. **Contiguous Grid Tables (`render_audit_section` Alignment)**:
+   - Fixed 270px component name column, ASCII vertical delimiter `│`, and monospace value column.
+   - Alternating row zebra striping (`#090d15` and `#0f172a`) with subtle row dividers (`#2d3748`).
+   - Standardized GUM badge colors: ANSI 82 green (`PASS ✔`), ANSI 214 gold (`UPDATE ⚠` / `WARN ⚠`), ANSI 196 red (`FAIL ✖`), ANSI 81 cyan (`INFO ℹ`).
+3. **Integrated Action Toolbars**:
+   - Buttons styled after Charm GUM terminal buttons: `gumBtnGreen` (`Run Guarded Upgrade`), `gumBtnCyan` (`Diagnostic Audit`, `Standalone Triage`), `gumBtnAmber` (`Prune Orphans`).
+
+#### Verification:
+- [x] Rendered and verified via live screen grab (`/home/gbur/Desktop/SysPilot_Actual_Redesign_Live.png`).
+- [x] Syntax checked via `python3 -m py_compile`.
+- [x] Applied to both `Projects/sysPilot` and `Projects/sysPilot_Karol`.

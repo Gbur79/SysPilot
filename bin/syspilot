@@ -57,7 +57,7 @@ print_terminal_status() {
     local json_out
     json_out="$("$PROJECT_ROOT/core/triage.py")"
 
-    local status reasons up_tot up_core up_reg up_aur disk_pct disk_avail p_count gm
+    local status reasons up_tot up_core up_reg up_aur disk_pct disk_avail p_count gm o_count reboot_pend
     status="$(echo "$json_out" | jq -r '.status // "UNKNOWN"')"
     gm="$(echo "$json_out" | jq -r '.gaming_mode // false')"
     up_tot="$(echo "$json_out" | jq -r '.updates.total // 0')"
@@ -67,6 +67,8 @@ print_terminal_status() {
     disk_pct="$(echo "$json_out" | jq -r '.disk.root.used_pct // 0')"
     disk_avail="$(echo "$json_out" | jq -r '.disk.root.avail_gb // 0')"
     p_count="$(echo "$json_out" | jq -r '.pacnew.count // 0')"
+    o_count="$(echo "$json_out" | jq -r '.orphans.count // 0')"
+    reboot_pend="$(echo "$json_out" | jq -r '.reboot_pending // false')"
 
     local sa_tot sa_aur sa_fp
     sa_tot="$(echo "$json_out" | jq -r '.standalone_software.total_updates // 0')"
@@ -95,6 +97,14 @@ print_terminal_status() {
 
     echo -e "Repo Updates:     ${up_tot} total (${BOLD}${YELLOW}${up_core} core packages${RESET}, ${up_reg} regular)"
     echo -e "Standalone Apps:  ${sa_tot} pending (${sa_aur} AUR, ${sa_fp} Flatpak, runtimes up to date)"
+    if (( o_count > 0 )); then
+        echo -e "Orphan Packages:  ${BOLD}${YELLOW}⚠️ ${o_count} unrequired dependencies${RESET} (Prune via: syspilot -o)"
+    else
+        echo -e "Orphan Packages:  ${GREEN}✔ Clean (0 unrequired)${RESET}"
+    fi
+    if [[ "$reboot_pend" == "true" ]]; then
+        echo -e "Reboot Status:    ${BOLD}${YELLOW}⚠️ REBOOT PENDING (Running kernel replaced on disk)${RESET}"
+    fi
     echo -e "Root Storage (/): ${disk_pct}% used (${disk_avail} GB free)"
     echo -e "Config Conflicts: ${p_count} .pacnew files pending review"
     

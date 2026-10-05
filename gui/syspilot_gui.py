@@ -7,6 +7,7 @@ Autonomous Token-Lean SRE Copilot for Arch Linux & derivatives.
 import os
 import sys
 import json
+import time
 import shutil
 import subprocess
 import threading
@@ -381,6 +382,14 @@ class SysPilotWindow(QMainWindow):
         # Load initial data
         self.update_ui_from_state()
 
+        # Non-blocking startup triage refresh (1s delay to keep GUI initialization instant)
+        QTimer.singleShot(1000, self._check_initial_refresh)
+
+    def _check_initial_refresh(self):
+        """Perform initial background triage scan so dashboard is immediately up to date."""
+        if not is_gamemode_active():
+            self.trigger_refresh()
+
     # --------------------------------------------------------------------------
     # TAB 1: LEAN DASHBOARD
     # --------------------------------------------------------------------------
@@ -455,6 +464,12 @@ class SysPilotWindow(QMainWindow):
         h_title.setProperty("class", "sectionTitle")
         h_layout.addWidget(h_title)
 
+        # Reboot Alert Banner (hidden unless reboot is pending)
+        self.reboot_lbl = QLabel("🔄 System reboot pending: running kernel was replaced on disk.")
+        self.reboot_lbl.setStyleSheet("color: #fbbf24; font-weight: bold; font-size: 12px; padding: 6px; background-color: #451a03; border: 1px solid #b45309; border-radius: 6px;")
+        self.reboot_lbl.setVisible(False)
+        h_layout.addWidget(self.reboot_lbl)
+
         self.services_lbl = QLabel("✔ Systemd Units: All system and user units operational.")
         self.services_lbl.setStyleSheet("color: #10b981; font-weight: bold;")
         h_layout.addWidget(self.services_lbl)
@@ -469,6 +484,25 @@ class SysPilotWindow(QMainWindow):
         self.disk_sub_lbl = QLabel("334.6 GB available")
         self.disk_sub_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
         h_layout.addWidget(self.disk_sub_lbl)
+
+        # Orphan Packages Row
+        self.orphans_box = QHBoxLayout()
+        self.orphans_lbl = QLabel("✔ Package Hygiene: 0 orphan packages.")
+        self.orphans_lbl.setStyleSheet("color: #10b981; font-size: 13px;")
+        self.orphans_box.addWidget(self.orphans_lbl, 1)
+
+        self.btn_prune_orphans = QPushButton("🗑 Prune Orphans")
+        self.btn_prune_orphans.setProperty("class", "warning")
+        self.btn_prune_orphans.setFixedHeight(28)
+        self.btn_prune_orphans.setVisible(False)
+        self.btn_prune_orphans.clicked.connect(lambda: self.run_custom_terminal(f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --orphans", "SysPilot Orphan Triage"))
+        self.orphans_box.addWidget(self.btn_prune_orphans)
+        h_layout.addLayout(self.orphans_box)
+
+        # Pacnew Conflicts Row
+        self.pacnew_dash_lbl = QLabel("✔ Configuration: No .pacnew conflicts.")
+        self.pacnew_dash_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        h_layout.addWidget(self.pacnew_dash_lbl)
 
         self.gaming_lbl = QLabel("🎮 Gaming Mode: Inactive (Normal desktop state)")
         self.gaming_lbl.setStyleSheet("color: #94a3b8; font-size: 12px; margin-top: 4px;")
@@ -1134,6 +1168,8 @@ X-GNOME-Autostart-enabled=true
         disk = data.get("disk", {}).get("root", {})
         failed_services = data.get("failed_services", {})
         pacnew = data.get("pacnew", {})
+        orphans = data.get("orphans", {})
+        reboot_pending = data.get("reboot_pending", False)
         gaming_mode = data.get("gaming_mode", False)
 
         # Header
@@ -1164,11 +1200,18 @@ X-GNOME-Autostart-enabled=true
         c_up = updates.get("core_count", 0)
         r_up = updates.get("regular_count", 0)
         self.updates_lbl.setText(f"{tot_up} pending system updates ({c_up} core packages, {r_up} regular packages)")
+        if tot_up > 0:
+            self.updates_lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #38bdf8;")
+        else:
+            self.updates_lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #f8fafc;")
         
         core_pkgs = updates.get("core_packages", [])
         if core_pkgs:
             self.core_pkgs_lbl.setText(f"Core packages pending: {', '.join([p.split()[0] for p in core_pkgs])}")
             self.core_pkgs_lbl.setStyleSheet("color: #fbbf24; font-size: 12px; font-weight: bold;")
+        elif tot_up > 0:
+            self.core_pkgs_lbl.setText("Core packages are up to date. Regular application updates available.")
+            self.core_pkgs_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
         else:
             self.core_pkgs_lbl.setText("All core packages (kernel, systemd, drivers, bootloader) are up to date.")
             self.core_pkgs_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
@@ -1198,6 +1241,14 @@ X-GNOME-Autostart-enabled=true
         else:
             self.software_lbl.setText("Standalone apps triage pending. Click below to inspect.")
 
+        # Reboot Alert
+        if hasattr(self, "reboot_lbl"):
+            if reboot_pending:
+                self.reboot_lbl.setText("⚠️ Reboot Pending: Running kernel updated on disk. System reboot recommended.")
+                self.reboot_lbl.setVisible(True)
+            else:
+                self.reboot_lbl.setVisible(False)
+
         # Services
         sys_f = failed_services.get("system", [])
         usr_f = failed_services.get("user", [])
@@ -1218,14 +1269,40 @@ X-GNOME-Autostart-enabled=true
         self.disk_bar.setFormat(f"%v% used")
         self.disk_sub_lbl.setText(f"{avail_gb} GB free on root mount (/)")
 
+        # Orphans
+        if hasattr(self, "orphans_lbl"):
+            o_count = orphans.get("count", 0)
+            o_pkgs = orphans.get("packages", [])
+            if o_count > 0:
+                pkg_preview = ", ".join(o_pkgs[:3])
+                if len(o_pkgs) > 3:
+                    pkg_preview += f" (+{len(o_pkgs) - 3} more)"
+                self.orphans_lbl.setText(f"⚠️ {o_count} unrequired orphan package(s): {pkg_preview}")
+                self.orphans_lbl.setStyleSheet("color: #f59e0b; font-weight: bold; font-size: 13px;")
+                self.btn_prune_orphans.setText(f"🗑 Prune Orphans ({o_count})")
+                self.btn_prune_orphans.setVisible(True)
+            else:
+                self.orphans_lbl.setText("✔ Package Hygiene: 0 orphan packages.")
+                self.orphans_lbl.setStyleSheet("color: #10b981; font-size: 13px;")
+                self.btn_prune_orphans.setVisible(False)
+
         # Pacnew
         p_count = pacnew.get("count", 0)
-        if p_count > 0:
-            self.pacnew_desc_lbl.setText(f"⚠️ {p_count} .pacnew configuration file(s) require review to prevent service deprecations.")
-            self.pacnew_desc_lbl.setStyleSheet("color: #f59e0b; font-weight: bold;")
-        else:
-            self.pacnew_desc_lbl.setText("✔ No .pacnew configuration conflicts detected.")
-            self.pacnew_desc_lbl.setStyleSheet("color: #10b981;")
+        if hasattr(self, "pacnew_dash_lbl"):
+            if p_count > 0:
+                self.pacnew_dash_lbl.setText(f"⚠️ {p_count} .pacnew configuration file(s) require review.")
+                self.pacnew_dash_lbl.setStyleSheet("color: #f59e0b; font-weight: bold; font-size: 12px;")
+            else:
+                self.pacnew_dash_lbl.setText("✔ Configuration: No .pacnew conflicts detected.")
+                self.pacnew_dash_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
+
+        if hasattr(self, "pacnew_desc_lbl"):
+            if p_count > 0:
+                self.pacnew_desc_lbl.setText(f"⚠️ {p_count} .pacnew configuration file(s) require review to prevent service deprecations.")
+                self.pacnew_desc_lbl.setStyleSheet("color: #f59e0b; font-weight: bold;")
+            else:
+                self.pacnew_desc_lbl.setText("✔ No .pacnew configuration conflicts detected.")
+                self.pacnew_desc_lbl.setStyleSheet("color: #10b981;")
 
         # Gaming
         if gaming_mode:
@@ -1244,6 +1321,8 @@ X-GNOME-Autostart-enabled=true
         threading.Thread(target=self._run_bg_refresh, daemon=True).start()
 
     def _run_bg_refresh(self):
+        if hasattr(self.tray_app, "last_pkg_check"):
+            self.tray_app.last_pkg_check = time.time()
         run_triage(check_pkgs=True)
         QTimer.singleShot(0, self._on_refresh_finished)
 
@@ -1395,6 +1474,7 @@ class SysPilotApp:
         self.window = SysPilotWindow(self)
 
         # Periodic Timer (checks state every 5 minutes in memory)
+        self.last_pkg_check = time.time()
         self.timer = QTimer()
         self.timer.timeout.connect(self.periodic_check)
         self.timer.start(300000)
@@ -1439,8 +1519,13 @@ class SysPilotApp:
 
     def periodic_check(self):
         if not is_gamemode_active():
-            run_triage(check_pkgs=False)
-            self.window.update_ui_from_state()
+            now = time.time()
+            if now - getattr(self, "last_pkg_check", 0) >= 3600:
+                self.last_pkg_check = now
+                self.window.trigger_refresh()
+            else:
+                run_triage(check_pkgs=False)
+                self.window.update_ui_from_state()
 
     def quit_app(self):
         self.tray_icon.hide()

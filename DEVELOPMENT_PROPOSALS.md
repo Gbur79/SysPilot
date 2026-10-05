@@ -67,9 +67,53 @@ Refactor `CopilotWorker` to execute Goose in structured event stream mode (`--ou
 
 #### Implementation & Verification Checklist:
 - [x] Staged and validated on local hardware node (`sysPilot_Karol`).
-- [ ] Apply changes to `core/copilot_config.py`.
-- [ ] Apply changes to `gui/syspilot_gui.py`.
-- [ ] Apply changes to `copilot/recipe.yaml`.
-- [ ] Verify syntax compilation with `python3 -m py_compile`.
-- [ ] Validate CLI output with `syspilot --skill`.
-- [ ] Push to public GitHub repository (`origin/main`).
+- [x] Apply changes to `core/copilot_config.py`.
+- [x] Apply changes to `gui/syspilot_gui.py`.
+- [x] Apply changes to `copilot/recipe.yaml`.
+- [x] Verify syntax compilation with `python3 -m py_compile`.
+- [x] Validate CLI output with `syspilot --skill`.
+- [x] Push to public GitHub repository (`origin/main`).
+
+---
+
+### PATCH-002: Dashboard Hygiene Visibility, Stale Cache Erasure Fix & Cold-Startup Autotriage
+* **Status:** `[IMPLEMENTED]`
+* **Date Proposed:** 2026-10-05
+* **Priority:** HIGH (Eliminates dashboard vs terminal upgrade discrepancies, surfaces orphan packages & reboot alerts)
+* **Target Components:**
+  - `core/triage.py` (`check_orphan_packages()`, non-destructive cache preservation in `run_triage()`, `checkupdates` lock auto-heal)
+  - `gui/syspilot_gui.py` (`setup_lean_dashboard_tab()`, `update_ui_from_state()`, non-blocking startup triage `_check_initial_refresh()`, 1-hour periodic package refresh)
+  - `bin/syspilot` (CLI `-s` terminal flight readiness scorecard with orphan package and reboot status)
+  - `bin/syspilot-sentinel` (reboot alert notifications and persistent non-destructive caching)
+
+#### Context & Root Cause (Engineering Justification):
+1. **Destructive Cache Clobbering on Periodic Light Triage:**
+   The GUI periodic timer (running every 5 minutes) invoked `run_triage(check_pkgs=False)`. That light triage run previously generated an empty `updates: {"total": 0, ...}` payload and unconditionally overwrote `~/.local/state/syspilot/status.json` on disk. As a consequence, valid package update telemetry detected during a manual scan was erased within 5 minutes, resulting in the dashboard reporting "0 pending updates" while terminal upgrade tools found multiple updates.
+2. **Cold-Startup Blindness:**
+   When launched via autostart or tray (`syspilot --tray`), the dashboard simply read stale disk cache without queuing an initial asynchronous background package check.
+3. **Total Blindness to Orphan Packages on the Dashboard:**
+   While `bin/sys-health.sh` in the terminal alerted users to unrequired orphan packages during pre-flight checks, `core/triage.py` and the GUI dashboard completely lacked orphan package detection, leaving users unaware of dependency bloat.
+4. **Missing Pending Reboot and Pacnew Indicators on Dashboard:**
+   Reboot flags (running kernel replaced on disk) and configuration file conflicts (`.pacnew`) were buried or absent from the main Flight Readiness card.
+
+#### Proposed Solution & Architecture:
+1. **Orphan Package & Stale Lock Detection in `core/triage.py`:**
+   - Implemented `check_orphan_packages()` using `pacman -Qtdq` (~100ms execution, zero root).
+   - In `run_triage()`, preserved cached `updates` and `standalone_software` when `check_pkgs=False`.
+   - Added automatic removal of stale `/tmp/checkup-db-$UID/db.lck` locks before querying `checkupdates`.
+   - Updated flight readiness classification so that pending regular updates and orphans elevate the status to `PRE_FLIGHT_ATTENTION` (🟡).
+2. **Dashboard UI Enrichment in `gui/syspilot_gui.py`:**
+   - Added `self.reboot_lbl` (amber banner shown whenever `reboot_pending` is true).
+   - Added `self.orphans_lbl` and an interactive `🗑 Prune Orphans` button directly inside the **🛡 System Health & Disk State** card.
+   - Added `self.pacnew_dash_lbl` showing `.pacnew` conflicts.
+   - Dynamic update badge highlighting (`#38bdf8`) when updates are pending.
+   - Added non-blocking async startup refresh (`QTimer.singleShot(1000, ...)`).
+   - Scheduled hourly background package refreshes during standard desktop operation.
+3. **Scorecard Enrichment (`bin/syspilot -s` & `syspilot-sentinel`):**
+   - Added real-time orphan count and reboot pending alerts to the terminal scorecard and desktop notifications.
+
+#### Implementation & Verification Checklist:
+- [x] Staged and verified in `Projects/sysPilot/` and `Projects/sysPilot_Karol/`.
+- [x] Syntax validated via `python3 -m py_compile`.
+- [x] Verified non-destructive caching with `core/triage.py --no-pkg`.
+- [x] Verified CLI status output with `syspilot -s`.

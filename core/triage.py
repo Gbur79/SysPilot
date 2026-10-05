@@ -144,6 +144,25 @@ def check_reboot_pending() -> bool:
     return False
 
 
+def check_orphan_packages() -> Dict[str, Any]:
+    """Query pacman for unrequired orphan dependency packages."""
+    orphans = []
+    if shutil.which("pacman"):
+        try:
+            res = subprocess.run(
+                ["pacman", "-Qtdq"],
+                capture_output=True, text=True, timeout=3.0
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                orphans = [p.strip() for p in res.stdout.strip().splitlines() if p.strip()]
+        except Exception:
+            pass
+    return {
+        "count": len(orphans),
+        "packages": orphans
+    }
+
+
 def check_updates(skip_network: bool = False) -> Dict[str, Any]:
     """Check repository and AUR updates without root."""
     updates = {
@@ -163,6 +182,18 @@ def check_updates(skip_network: bool = False) -> Dict[str, Any]:
     if shutil.which("checkupdates"):
         try:
             res = subprocess.run(["checkupdates"], capture_output=True, text=True, timeout=12.0)
+            # Auto-heal stale checkup-db lock if checkupdates failed due to lock
+            if res.returncode == 1 and "database is locked" in (res.stderr or "").lower():
+                uid = os.getuid()
+                db_lck = f"/tmp/checkup-db-{uid}/db.lck"
+                pgrep = subprocess.run(["pgrep", "-x", "checkupdates"], capture_output=True)
+                if pgrep.returncode != 0 and os.path.exists(db_lck):
+                    try:
+                        os.remove(db_lck)
+                        res = subprocess.run(["checkupdates"], capture_output=True, text=True, timeout=12.0)
+                    except Exception:
+                        pass
+
             if res.returncode == 0 and res.stdout.strip():
                 for line in res.stdout.strip().splitlines():
                     parts = line.split()
@@ -266,6 +297,15 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
     """Execute complete triage and compute overall flight readiness."""
     os.makedirs(STATE_DIR, exist_ok=True)
     
+    # Read existing status file to preserve package & standalone state during light checks
+    cached_payload = {}
+    if os.path.isfile(STATUS_FILE):
+        try:
+            with open(STATUS_FILE, "r", encoding="utf-8") as f:
+                cached_payload = json.load(f)
+        except Exception:
+            cached_payload = {}
+
     gamemode_on = is_gamemode_active()
     
     # If in active game, inhibit heavy package checks
@@ -275,9 +315,17 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
     failed_units = check_failed_services()
     disks = check_disk_space()
     pacnew = check_pacnew_files()
+    orphans = check_orphan_packages()
     reboot_pending = check_reboot_pending()
-    updates = check_updates(skip_network=not check_pkgs)
-    standalone = check_standalone_software(skip=not check_pkgs)
+
+    # If skipping packages, preserve existing cached package telemetry instead of wiping to 0
+    if not check_pkgs and cached_payload.get("updates"):
+        updates = cached_payload.get("updates", {})
+        standalone = cached_payload.get("standalone_software", {})
+    else:
+        updates = check_updates(skip_network=not check_pkgs)
+        standalone = check_standalone_software(skip=not check_pkgs)
+
     sys_health = get_sys_health_status()
 
     # Determine Overall Flight Status
@@ -306,9 +354,16 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
         if updates.get("core_count", 0) > 0:
             status = "PRE_FLIGHT_ATTENTION"
             status_reasons.append(f"{updates['core_count']} core system update(s) available")
+        elif updates.get("regular_count", 0) > 0 or updates.get("aur_count", 0) > 0:
+            status = "PRE_FLIGHT_ATTENTION"
+            reg_tot = updates.get("regular_count", 0) + updates.get("aur_count", 0)
+            status_reasons.append(f"{reg_tot} package update(s) available")
         if reboot_pending:
             status = "PRE_FLIGHT_ATTENTION"
             status_reasons.append("Running kernel updated - system reboot pending")
+        if orphans.get("count", 0) > 0:
+            status = "PRE_FLIGHT_ATTENTION"
+            status_reasons.append(f"{orphans['count']} unrequired orphan package(s) detected")
         if len(pacnew) > 0:
             status = "PRE_FLIGHT_ATTENTION"
             status_reasons.append(f"{len(pacnew)} .pacnew configuration file(s) require review")
@@ -329,6 +384,7 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
             "count": len(pacnew),
             "files": pacnew
         },
+        "orphans": orphans,
         "updates": updates,
         "standalone_software": standalone,
         "sys_health": sys_health

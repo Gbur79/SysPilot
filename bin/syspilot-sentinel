@@ -49,9 +49,11 @@ def run_cycle(check_pkgs: bool = True):
         notify("SysPilot: Action Required ⚠️", f"Attention needed:\n{reasons}", urgency="critical", icon="dialog-warning")
     elif status == "PRE_FLIGHT_ATTENTION":
         reasons = "\n".join(data.get("status_reasons", []))
-        # Only notify once on core updates
         core_count = data.get("updates", {}).get("core_count", 0)
-        if core_count > 0:
+        reboot_pending = data.get("reboot_pending", False)
+        if reboot_pending:
+            notify("SysPilot: Reboot Pending ⚠️", "Running kernel updated on disk. System reboot recommended.", urgency="normal")
+        elif core_count > 0:
             notify("SysPilot: Core Updates Available ℹ️", f"{core_count} core package(s) pending update.", urgency="normal")
 
 

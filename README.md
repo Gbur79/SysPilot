@@ -5,6 +5,9 @@
 
 ---
 
+<img width="1160" height="962" alt="image" src="https://github.com/user-attachments/assets/a0e65fa0-afdf-4382-9878-9ef52fd3e310" />
+
+
 ## 🌟 Overview
 
 **SysPilot** bridges the gap between passive Linux command-line diagnostics and everyday users. Instead of waiting for the system to break or manually running scripts in the terminal, **SysPilot** runs quietly in the system tray, monitors overall flight readiness, automatically inhibits itself during gaming sessions, and embeds an autonomous **AI Copilot** powered by [Goose](https://github.com/block/goose) and **Google Gemini Flash**.

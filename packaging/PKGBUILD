@@ -1,6 +1,6 @@
 # Maintainer: Karol Gbur
 pkgname=syspilot
-pkgver=1.0.0
+pkgver=1.0.2
 pkgrel=1
 pkgdesc="Token-Lean Autonomous SRE Desktop Copilot & Health Sentinel for Arch Linux"
 arch=('any')

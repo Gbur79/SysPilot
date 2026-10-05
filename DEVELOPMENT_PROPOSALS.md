@@ -152,3 +152,47 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 - [x] Rendered and verified via live screen grab (`/home/gbur/Desktop/SysPilot_Actual_Redesign_Live.png`).
 - [x] Syntax checked via `python3 -m py_compile`.
 - [x] Applied to both `Projects/sysPilot` and `Projects/sysPilot_Karol`.
+
+---
+
+### PATCH-004: Terminal Process Lifecycle Monitor, Auto-Refresh & Gum Interactive Selection Fallback
+* **Status:** `[IMPLEMENTED]` *(Shipped in v1.0.4)*
+* **Date Proposed:** 2026-10-05
+* **Priority:** HIGH (Fixes silent interactive selection abort in Gum, enables auto-refresh when terminal closes, distinguishes strict orphans from optional candidates)
+* **Target Components:**
+  - `Projects/sysPilot/bin/sys-health.sh` & `Projects/eos-cleaner/sys-health.sh` (`triage_orphan_packages()`: Gum checkbox prefixes, single-item auto-confirm on Enter, warning on empty toggle)
+  - `Projects/sysPilot/core/triage.py` (`check_orphan_packages()`: dual-tier detection `pacman -Qtdq` vs `pacman -Qdttq`)
+  - `Projects/sysPilot/gui/syspilot_gui.py` (`_spawn_terminal()` background waiter with `terminal_finished` Qt signal, window focus auto-refresh via `changeEvent`, `konsole --nofork`, strict vs optional label differentiation)
+  - `Projects/sysPilot/bin/syspilot` (CLI `-s` output reporting strict vs optional candidates)
+  - `Projects/sysPilot/CHANGELOG.md` & `PKGBUILD` (bump to v1.0.4)
+
+#### Context & Root Cause:
+1. **Dashboard Not Auto-Refreshing After Terminal Work:**
+   When a user launched a terminal operation from SysPilot (e.g. `Prune Orphans`, `Guarded Upgrade`), SysPilot fired `subprocess.Popen` without waiting. When the terminal finished and closed, SysPilot was not notified, leaving stale counts on the dashboard until manually refreshed.
+2. **Konsole Detached Subprocess Forking:**
+   On KDE Plasma, launching `konsole -e` by default attaches to a single-process server and returns instantly, breaking standard `.wait()` calls unless `--nofork` is passed.
+3. **Gum Multi-Selection Trapping (`gum choose --no-limit`):**
+   In interactive selection mode (Option 2), `gum choose --no-limit` requires users to press **[SPACE]** to mark `[✔]` before pressing **[ENTER]**. If a user simply navigated to `luit` and pressed Enter, Gum returned an empty string, causing the script to abort with "No packages selected. Aborted."
+4. **Distinction Between Strict Orphans and Optional Dependencies:**
+   `luit` is not a strict orphan (it is optionally used by `xterm`). `pacman -Qtdq` finds 0 strict orphans, while `pacman -Qdttq` finds `luit`. Flagging `luit` as a scary orphan warning (`WARN ⚠`) confused users when strict prune found nothing to delete.
+
+#### Architectural Solution:
+1. **Interactive Checkbox Prefixes & Fallback Confirmation (`sys-health.sh`):**
+   - Added `--cursor-prefix="[ ] "`, `--unselected-prefix="[ ] "`, `--selected-prefix="[✔] "`, and `--selected.foreground="82"`.
+   - If user presses Enter without marking Space:
+     - If only 1 package is in the list, `gum confirm --default=true "Did you want to remove '<pkg>'?"` prompts the user directly, making deletion seamless.
+     - If multiple packages are present, a clear instructional warning is shown.
+2. **Terminal Process Lifecycle Waiter (`gui/syspilot_gui.py`):**
+   - Replaced fire-and-forget `subprocess.Popen` with `_spawn_terminal(term_cmd)`, which monitors the terminal process in a background thread and emits `self.terminal_finished` upon exit.
+   - `terminal_finished` automatically triggers `self.trigger_refresh()`, updating all UI tables instantly.
+   - Added `changeEvent(event)`: when the window regains focus (`ActivationChange`), it syncs from disk.
+   - Passed `konsole --nofork` in `get_terminal_cmd`.
+3. **Dual-Tier Orphan Telemetry (`triage.py`):**
+   - Evaluates both `-Qtdq` (strict) and `-Qdttq` (optional candidate).
+   - Strict orphans show as `WARN ⚠` with amber `🗑 PRUNE ORPHANS`.
+   - Optional-only candidates show as `INFO ℹ (0 strict orphans • 1 optional candidate: luit)` with cyan `🗑 REVIEW CANDIDATES`, keeping the section `ALL CLEAR ✔`.
+
+#### Verification:
+- [x] Verified interactive Gum choose with single-item fallback.
+- [x] Verified automatic dashboard refresh after terminal exit.
+- [x] Captured live screen: `/home/gbur/Desktop/SysPilot_Orphan_AutoRefresh_Fixed.png`.

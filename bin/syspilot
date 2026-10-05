@@ -57,7 +57,7 @@ print_terminal_status() {
     local json_out
     json_out="$("$PROJECT_ROOT/core/triage.py")"
 
-    local status reasons up_tot up_core up_reg up_aur disk_pct disk_avail p_count gm o_count reboot_pend
+    local status reasons up_tot up_core up_reg up_aur disk_pct disk_avail p_count gm o_count opt_count reboot_pend
     status="$(echo "$json_out" | jq -r '.status // "UNKNOWN"')"
     gm="$(echo "$json_out" | jq -r '.gaming_mode // false')"
     up_tot="$(echo "$json_out" | jq -r '.updates.total // 0')"
@@ -68,6 +68,7 @@ print_terminal_status() {
     disk_avail="$(echo "$json_out" | jq -r '.disk.root.avail_gb // 0')"
     p_count="$(echo "$json_out" | jq -r '.pacnew.count // 0')"
     o_count="$(echo "$json_out" | jq -r '.orphans.count // 0')"
+    opt_count="$(echo "$json_out" | jq -r '.orphans.optional_count // 0')"
     reboot_pend="$(echo "$json_out" | jq -r '.reboot_pending // false')"
 
     local sa_tot sa_aur sa_fp
@@ -99,6 +100,8 @@ print_terminal_status() {
     echo -e "Standalone Apps:  ${sa_tot} pending (${sa_aur} AUR, ${sa_fp} Flatpak, runtimes up to date)"
     if (( o_count > 0 )); then
         echo -e "Orphan Packages:  ${BOLD}${YELLOW}⚠️ ${o_count} unrequired dependencies${RESET} (Prune via: syspilot -o)"
+    elif (( opt_count > 0 )); then
+        echo -e "Orphan Packages:  ${CYAN}ℹ 0 strict orphans (${opt_count} optional dependency candidate: syspilot -o)${RESET}"
     else
         echo -e "Orphan Packages:  ${GREEN}✔ Clean (0 unrequired)${RESET}"
     fi

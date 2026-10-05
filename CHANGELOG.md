@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.4] - 2026-10-05
+
+### Added
+- **Terminal Lifecycle Waiter & Automatic Dashboard Triage Refresh**: Terminal operations (`run_custom_terminal`, `run_guarded_upgrade_terminal`, etc.) are now monitored by a dedicated background thread. When the terminal window closes, `self.terminal_finished` emits on the Qt thread, triggering an instant, automatic `update_ui_from_state()`.
+- **Window Focus Regain Refresh (`changeEvent`)**: Automatically refreshes telemetry when the SysPilot GUI window regains user focus (`ActivationChange`).
+- **Konsole `--nofork` Process Isolation**: Configured `konsole --nofork` in `get_terminal_cmd` so that Konsole child processes block cleanly until closed, preventing detached zombie execution.
+- **Dual-Tier Dependency Intelligence (Strict Orphans vs Optional Candidates)**:
+  - `core/triage.py` now queries both `pacman -Qtdq` (strict unrequired orphans) and `pacman -Qdttq` (reverse optional dependencies like `luit` for `xterm`).
+  - Strict orphans show as `WARN ⚠` with amber `🗑 PRUNE ORPHANS`, while optional-only packages display as `INFO ℹ (0 strict orphans • X optional candidate)` with a cyan `🗑 REVIEW CANDIDATES` button, keeping the audit section `ALL CLEAR ✔`.
+
+### Fixed
+- **GUM Interactive Selection Abort on Enter (`gum choose --no-limit`)**:
+  - In `bin/sys-health.sh`, `gum choose --no-limit` requires pressing **[SPACE]** to mark `[✔]` before pressing **[ENTER]**. If users pressed Enter directly, Gum previously returned an empty selection and silently aborted.
+  - Added visual checkbox prefixes (`--cursor-prefix="[ ] "`, `--unselected-prefix="[ ] "`, `--selected-prefix="[✔] "`).
+  - Added smart single-candidate confirmation fallback: if only 1 package is in the list and the user presses Enter without Space, `gum confirm` automatically asks `"Did you want to remove '<pkg>'?"` defaulting to Yes.
+  - Added warning advice when multiple packages are present without Space toggles.
+
+---
+
 ## [1.0.3] - 2026-10-05
 
 ### Added

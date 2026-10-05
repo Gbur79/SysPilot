@@ -145,21 +145,35 @@ def check_reboot_pending() -> bool:
 
 
 def check_orphan_packages() -> Dict[str, Any]:
-    """Query pacman for unrequired orphan dependency packages."""
-    orphans = []
+    """Query pacman for unrequired orphan dependency packages (strict -Qtdq and optional -Qdttq)."""
+    strict_orphans = []
+    optional_candidates = []
     if shutil.which("pacman"):
         try:
-            res = subprocess.run(
+            # 1. Strict orphans (neither required nor optionally required)
+            res1 = subprocess.run(
                 ["pacman", "-Qtdq"],
                 capture_output=True, text=True, timeout=3.0
             )
-            if res.returncode == 0 and res.stdout.strip():
-                orphans = [p.strip() for p in res.stdout.strip().splitlines() if p.strip()]
+            if res1.returncode == 0 and res1.stdout.strip():
+                strict_orphans = [p.strip() for p in res1.stdout.strip().splitlines() if p.strip()]
+
+            # 2. Extended candidate dependencies (-Qdttq)
+            res2 = subprocess.run(
+                ["pacman", "-Qdttq"],
+                capture_output=True, text=True, timeout=3.0
+            )
+            if res2.returncode == 0 and res2.stdout.strip():
+                all_candidates = [p.strip() for p in res2.stdout.strip().splitlines() if p.strip()]
+                optional_candidates = [p for p in all_candidates if p not in strict_orphans]
         except Exception:
             pass
+
     return {
-        "count": len(orphans),
-        "packages": orphans
+        "count": len(strict_orphans),
+        "packages": strict_orphans,
+        "optional_count": len(optional_candidates),
+        "optional_packages": optional_candidates
     }
 
 

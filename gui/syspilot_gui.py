@@ -13,7 +13,7 @@ import subprocess
 import threading
 from typing import Dict, Any, List, Optional
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QUrl
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QUrl, QEvent
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QBrush, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -43,11 +43,11 @@ AUTOSTART_FILE = os.path.join(AUTOSTART_DIR, "syspilot.desktop")
 def get_terminal_cmd(command_to_run: str, title: str = "SysPilot") -> List[str]:
     """Find available terminal and return command list to execute in terminal."""
     terminals = [
-        ("konsole", ["konsole", "-e", "bash", "-c", f"{command_to_run}; echo ''; read -p 'Press Enter to close...'"]),
+        ("konsole", ["konsole", "--nofork", "-e", "bash", "-c", f"{command_to_run}; echo ''; read -p 'Press Enter to close...'"]),
         ("alacritty", ["alacritty", "-e", "bash", "-c", f"{command_to_run}; echo ''; read -p 'Press Enter to close...'"]),
         ("kitty", ["kitty", "bash", "-c", f"{command_to_run}; echo ''; read -p 'Press Enter to close...'"]),
-        ("xfce4-terminal", ["xfce4-terminal", "-e", f"bash -c \"{command_to_run}; echo ''; read -p 'Press Enter to close...'\""]),
-        ("gnome-terminal", ["gnome-terminal", "--", "bash", "-c", f"{command_to_run}; echo ''; read -p 'Press Enter to close...'"]),
+        ("xfce4-terminal", ["xfce4-terminal", "--disable-server", "-e", f"bash -c \"{command_to_run}; echo ''; read -p 'Press Enter to close...'\""]),
+        ("gnome-terminal", ["gnome-terminal", "--wait", "--", "bash", "-c", f"{command_to_run}; echo ''; read -p 'Press Enter to close...'"]),
         ("xterm", ["xterm", "-T", title, "-e", "bash", "-c", f"{command_to_run}; read -p 'Press Enter to close...'"])
     ]
     for term, cmd in terminals:
@@ -405,12 +405,15 @@ def create_grid_row(comp_name: str, val_label: QLabel, is_alt: bool, has_bottom_
 class SysPilotWindow(QMainWindow):
     """Main Dashboard Window."""
 
+    terminal_finished = pyqtSignal()
+
     def __init__(self, tray_app):
         super().__init__()
         self.tray_app = tray_app
         self.setWindowTitle("SysPilot — Autonomous SRE Desktop Copilot")
         self.resize(980, 880)
         self.setStyleSheet(DARK_STYLESHEET)
+        self.terminal_finished.connect(self.trigger_refresh)
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -500,6 +503,12 @@ class SysPilotWindow(QMainWindow):
 
         # Non-blocking startup triage refresh (1s delay to keep GUI initialization instant)
         QTimer.singleShot(1000, self._check_initial_refresh)
+
+    def changeEvent(self, event):
+        """Auto-refresh dashboard view when SysPilot window regains focus."""
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self.update_ui_from_state()
+        super().changeEvent(event)
 
     def _check_initial_refresh(self):
         """Perform initial background triage scan so dashboard is immediately up to date."""
@@ -1561,13 +1570,25 @@ X-GNOME-Autostart-enabled=true
             self.services_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
 
         # Orphans
+        o_count = orphans.get("count", 0)
+        opt_count = orphans.get("optional_count", 0)
         if o_count > 0:
             o_pkgs = orphans.get("packages", [])
             preview = ", ".join(o_pkgs[:3])
             if len(o_pkgs) > 3: preview += f" (+{len(o_pkgs)-3} more)"
-            self.orphans_val_lbl.setText(f"WARN ⚠ ({o_count} unrequired packages: {preview})")
+            self.orphans_val_lbl.setText(f"WARN ⚠ ({o_count} unrequired strict orphan(s): {preview})")
             self.orphans_val_lbl.setStyleSheet("color: #ffaf00; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
             self.btn_prune_orphans.setText(f"🗑 PRUNE ORPHANS ({o_count})")
+            self.btn_prune_orphans.setProperty("class", "warning")
+            self.btn_prune_orphans.setVisible(True)
+        elif opt_count > 0:
+            opt_pkgs = orphans.get("optional_packages", [])
+            preview = ", ".join(opt_pkgs[:3])
+            if len(opt_pkgs) > 3: preview += f" (+{len(opt_pkgs)-3} more)"
+            self.orphans_val_lbl.setText(f"INFO ℹ (0 strict orphans • {opt_count} optional candidate: {preview})")
+            self.orphans_val_lbl.setStyleSheet("color: #5fd7ff; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            self.btn_prune_orphans.setText(f"🗑 REVIEW CANDIDATES ({opt_count})")
+            self.btn_prune_orphans.setProperty("class", "secondary")
             self.btn_prune_orphans.setVisible(True)
         else:
             self.orphans_val_lbl.setText("PASS ✔ (Dependency tree clean: 0 orphans)")
@@ -1629,17 +1650,30 @@ X-GNOME-Autostart-enabled=true
         self.refresh_btn.setText("↻ Refresh Triage")
 
     # --------------------------------------------------------------------------
-    # TERMINAL RUNNERS
+    # TERMINAL RUNNERS (WITH AUTO-REFRESH ON COMPLETION)
     # --------------------------------------------------------------------------
+    def _spawn_terminal(self, term_cmd: List[str]):
+        """Run terminal command in background thread and auto-refresh triage on completion."""
+        def _waiter():
+            try:
+                proc = subprocess.Popen(term_cmd)
+                proc.wait()
+            except Exception:
+                pass
+            # Trigger refresh on main Qt thread
+            self.terminal_finished.emit()
+
+        threading.Thread(target=_waiter, daemon=True).start()
+
     def run_guarded_upgrade_terminal(self):
         cmd = f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --upgrade"
         term_cmd = get_terminal_cmd(cmd, "SysPilot Guarded Upgrade")
-        subprocess.Popen(term_cmd)
+        self._spawn_terminal(term_cmd)
 
     def run_software_terminal(self):
         cmd = f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --software"
         term_cmd = get_terminal_cmd(cmd, "SysPilot Standalone Software Triage")
-        subprocess.Popen(term_cmd)
+        self._spawn_terminal(term_cmd)
 
     def run_update_goose_terminal(self):
         cmd = (
@@ -1655,21 +1689,21 @@ X-GNOME-Autostart-enabled=true
             "fi"
         )
         term_cmd = get_terminal_cmd(cmd, "SysPilot Goose AI Agent Update")
-        subprocess.Popen(term_cmd)
+        self._spawn_terminal(term_cmd)
 
     def run_maintenance_terminal(self):
         cmd = f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --maintenance"
         term_cmd = get_terminal_cmd(cmd, "SysPilot Safe Maintenance")
-        subprocess.Popen(term_cmd)
+        self._spawn_terminal(term_cmd)
 
     def run_audit_terminal(self):
         cmd = f"{os.path.join(PROJECT_ROOT, 'bin', 'sys-health.sh')} --audit"
         term_cmd = get_terminal_cmd(cmd, "SysPilot Full Audit")
-        subprocess.Popen(term_cmd)
+        self._spawn_terminal(term_cmd)
 
     def run_custom_terminal(self, command: str, title: str):
         term_cmd = get_terminal_cmd(command, title)
-        subprocess.Popen(term_cmd)
+        self._spawn_terminal(term_cmd)
 
     def open_copilot_terminal(self):
         recipe_path = os.path.join(PROJECT_ROOT, "copilot", "recipe.yaml")

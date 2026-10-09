@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# SysPilot — Forged Alliance Forever (FAF) Autonomous Setup & Repair Tool
+# Deterministic, zero-token diagnostic and self-healing runner for Arch Linux
+# ==============================================================================
+
+set -euo pipefail
+
+# Style definitions
+BOLD="\033[1m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+RED="\033[31m"
+CYAN="\033[36m"
+RESET="\033[0m"
+
+log_info()  { echo -e "${CYAN}ℹ${RESET} $1"; }
+log_ok()    { echo -e "${GREEN}✔${RESET} $1"; }
+log_warn()  { echo -e "${YELLOW}⚠${RESET} $1"; }
+log_err()   { echo -e "${RED}✖${RESET} $1"; }
+
+FAF_DIR="${HOME}/faf-linux"
+CHECK_ONLY=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --check|-c)
+            CHECK_ONLY=1
+            ;;
+        -h|--help)
+            cat << EOF
+${BOLD}SysPilot FAF Repair & Setup Tool${RESET}
+Usage: syspilot-faf-repair [--check]
+
+Options:
+  --check, -c    Audit FAF setup and shortcuts without making changes
+  -h, --help     Show this help message
+EOF
+            exit 0
+            ;;
+    esac
+done
+
+echo ""
+echo -e "${BOLD}${CYAN}🎮 SysPilot — Forged Alliance Forever (FAF) Setup & Repair${RESET}"
+echo -e "${BOLD}──────────────────────────────────────────────────────────────────${RESET}"
+
+# 1. Dependency checks
+log_info "Verifying core dependencies..."
+MISSING_DEPS=()
+for dep in bwrap curl jq git; do
+    if ! command -v "$dep" &>/dev/null; then
+        MISSING_DEPS+=("$dep")
+    fi
+done
+
+if (( ${#MISSING_DEPS[@]} > 0 )); then
+    log_err "Missing essential utilities: ${MISSING_DEPS[*]}"
+    echo "  › Install via: sudo pacman -S --needed ${MISSING_DEPS[*]}"
+    (( CHECK_ONLY )) && exit 1
+fi
+
+# 2. 32-bit Vulkan ICD Loader Check
+if ! pacman -Q lib32-vulkan-icd-loader &>/dev/null; then
+    log_warn "Missing 'lib32-vulkan-icd-loader' — 32-bit Direct3D/DXVK games may fail to start."
+    echo "  › Recommended: sudo pacman -S --needed lib32-vulkan-icd-loader"
+else
+    log_ok "32-bit Vulkan ICD loader present."
+fi
+
+# 3. Check faf-linux installation
+if [[ ! -d "$FAF_DIR" ]]; then
+    if (( CHECK_ONLY )); then
+        log_err "FAF runner directory not found at $FAF_DIR"
+        exit 1
+    fi
+    log_warn "FAF runner directory not found at $FAF_DIR. Cloning official faf-linux repository..."
+    git clone https://github.com/FAForever/faf-linux "$FAF_DIR"
+    log_info "Running initial faf-linux setup.sh..."
+    ( cd "$FAF_DIR" && ./setup.sh )
+    log_ok "Initial installation completed."
+else
+    log_ok "FAF runner found at $FAF_DIR"
+fi
+
+# 4. Check for active running FAF process before updating
+if pgrep -f "faf-client" &>/dev/null; then
+    log_warn "FAF Client is currently running! Please close FAF before updating components."
+else
+    if [[ -x "$FAF_DIR/update.sh" ]]; then
+        if (( CHECK_ONLY )); then
+            log_info "Checking component versions..."
+            ( cd "$FAF_DIR" && ./update.sh )
+        else
+            log_info "Synchronizing components & client versions via update.sh..."
+            ( cd "$FAF_DIR" && ./update.sh perform )
+            log_ok "Component versions verified."
+        fi
+    fi
+fi
+
+# 5. Steam & Game.prefs Synchronization
+log_info "Searching for Supreme Commander: Forged Alliance Steam installation..."
+STEAM_CANDIDATES=(
+    "${HOME}/.local/share/Steam"
+    "${HOME}/.steam/steam"
+    "${HOME}/.steam/root"
+    "${HOME}/.var/app/com.valvesoftware.Steam/.local/share/Steam"
+)
+
+PREFS_SRC=""
+for sdir in "${STEAM_CANDIDATES[@]}"; do
+    cand_prefs="$sdir/steamapps/compatdata/9420/pfx/drive_c/users/steamuser/AppData/Local/Gas Powered Games/Supreme Commander Forged Alliance/Game.prefs"
+    if [[ -f "$cand_prefs" ]]; then
+        PREFS_SRC="$cand_prefs"
+        break
+    fi
+done
+
+# If not in standard path, search Steam libraryfolders.vdf
+if [[ -z "$PREFS_SRC" ]]; then
+    for sdir in "${STEAM_CANDIDATES[@]}"; do
+        vdf="$sdir/steamapps/libraryfolders.vdf"
+        if [[ -f "$vdf" ]]; then
+            while IFS= read -r libpath; do
+                cand_prefs="$libpath/steamapps/compatdata/9420/pfx/drive_c/users/steamuser/AppData/Local/Gas Powered Games/Supreme Commander Forged Alliance/Game.prefs"
+                if [[ -f "$cand_prefs" ]]; then
+                    PREFS_SRC="$cand_prefs"
+                    break 2
+                fi
+            done < <(grep -E '^\s*"path"' "$vdf" | sed -E 's/.*"path"[[:space:]]*"([^"]+)".*/\1/' || true)
+        fi
+    done
+fi
+
+TARGET_PREFS_DIR="$FAF_DIR/prefix/drive_c/users/steamuser/AppData/Local/Gas Powered Games/Supreme Commander Forged Alliance"
+TARGET_PREFS_FILE="$TARGET_PREFS_DIR/Game.prefs"
+
+if [[ -n "$PREFS_SRC" ]]; then
+    log_ok "Found valid Steam Game.prefs at: $PREFS_SRC"
+    if (( ! CHECK_ONLY )); then
+        mkdir -p "$TARGET_PREFS_DIR"
+        if [[ ! -f "$TARGET_PREFS_FILE" ]]; then
+            cp "$PREFS_SRC" "$TARGET_PREFS_FILE"
+            log_ok "Synchronized Game.prefs into FAF prefix."
+        else
+            # Backup before overwrite if different
+            if ! cmp -s "$PREFS_SRC" "$TARGET_PREFS_FILE"; then
+                cp "$TARGET_PREFS_FILE" "${TARGET_PREFS_FILE}.bak"
+                cp "$PREFS_SRC" "$TARGET_PREFS_FILE"
+                log_ok "Updated Game.prefs in FAF prefix (backup preserved at .bak)."
+            else
+                log_ok "Game.prefs in FAF prefix is already up-to-date."
+            fi
+        fi
+        chmod -R u+rw "$FAF_DIR/prefix" 2>/dev/null || true
+    fi
+else
+    if [[ -f "$TARGET_PREFS_FILE" ]]; then
+        log_ok "Existing Game.prefs is present in FAF prefix (Steam source not found; keeping current)."
+    else
+        log_warn "Game.prefs not found in Steam compatdata. Please launch Supreme Commander once from Steam to initialize profile."
+    fi
+fi
+
+# 6. Execute set-client-paths.sh
+if [[ -x "$FAF_DIR/set-client-paths.sh" && $CHECK_ONLY -eq 0 ]]; then
+    log_info "Configuring FAF execution paths..."
+    ( cd "$FAF_DIR" && ./set-client-paths.sh ) || log_warn "set-client-paths.sh reported non-critical status."
+fi
+
+# 7. Desktop & Menu Shortcut Resolution
+log_info "Auditing XDG and Desktop shortcuts..."
+
+ICON_PATH="$FAF_DIR/faf-logo.png"
+if [[ ! -f "$ICON_PATH" && -f "$FAF_DIR/faf-client-2026.7.1/faf-client.vmoptions" ]]; then
+    # Fallback logo download if missing
+    curl -fsSL -o "$ICON_PATH" "https://www.faforever.com/images/faf-logo.png" 2>/dev/null || true
+fi
+
+DESKTOP_CONTENT="[Desktop Entry]
+Name=Forged Alliance Forever
+Comment=Lobby client for Supreme Commander: Forged Alliance (faf-linux)
+Exec=${FAF_DIR}/run
+Path=${FAF_DIR}
+Type=Application
+Icon=${ICON_PATH}
+StartupWMClass=com.faforever.client.FafClientApplication
+Categories=Network;Game;
+Keywords=faf
+Terminal=false
+"
+
+# 7a. Menu entry in ~/.local/share/applications/
+APP_ENTRY_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+mkdir -p "$APP_ENTRY_DIR"
+APP_ENTRY_FILE="$APP_ENTRY_DIR/com.faforever.faf-linux.desktop"
+
+if (( CHECK_ONLY )); then
+    if [[ -f "$APP_ENTRY_FILE" ]] && grep -q "Exec=${FAF_DIR}/run" "$APP_ENTRY_FILE"; then
+        log_ok "Application menu entry points correctly to dynamic launcher: $APP_ENTRY_FILE"
+    else
+        log_warn "Application menu entry missing or points to a pinned/obsolete binary!"
+    fi
+else
+    echo "$DESKTOP_CONTENT" > "$APP_ENTRY_FILE"
+    chmod +x "$APP_ENTRY_FILE"
+    log_ok "Application menu entry updated: $APP_ENTRY_FILE"
+fi
+
+# 7b. Desktop entry on user Desktop (if Desktop directory exists)
+DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
+if [[ -d "$DESKTOP_DIR" ]]; then
+    DESK_ENTRY_FILE="$DESKTOP_DIR/FAF.desktop"
+    if (( CHECK_ONLY )); then
+        if [[ -f "$DESK_ENTRY_FILE" ]] && grep -q "Exec=${FAF_DIR}/run" "$DESK_ENTRY_FILE"; then
+            log_ok "Desktop shortcut points correctly to dynamic launcher: $DESK_ENTRY_FILE"
+        else
+            log_warn "Desktop shortcut missing or points to a pinned/obsolete binary!"
+        fi
+    else
+        echo "$DESKTOP_CONTENT" > "$DESK_ENTRY_FILE"
+        chmod +x "$DESK_ENTRY_FILE"
+        log_ok "Desktop shortcut updated: $DESK_ENTRY_FILE"
+    fi
+fi
+
+# 8. Refresh desktop databases
+if (( ! CHECK_ONLY )); then
+    command -v update-desktop-database &>/dev/null && update-desktop-database "$APP_ENTRY_DIR" 2>/dev/null || true
+    command -v kbuildsycoca6 &>/dev/null && kbuildsycoca6 2>/dev/null || true
+    log_ok "Desktop database caches refreshed."
+fi
+
+echo -e "${BOLD}──────────────────────────────────────────────────────────────────${RESET}"
+if (( CHECK_ONLY )); then
+    log_ok "FAF Audit finished."
+else
+    log_ok "FAF runner, Game.prefs sync, and launcher shortcuts successfully resolved!"
+    echo -e "  › Launch client via: ${CYAN}${FAF_DIR}/run${RESET} or your Desktop shortcut."
+fi
+echo ""

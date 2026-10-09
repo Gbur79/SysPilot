@@ -137,6 +137,9 @@ syspilot -d
 
 # Check gaming & Steam/Proton readiness
 syspilot -g
+
+# Setup or repair Forged Alliance Forever (FAF) & fix desktop shortcuts
+syspilot --faf-repair
 ```
 
 ### 3. Asking the AI Copilot from CLI
@@ -165,6 +168,7 @@ syspilot --enable-autostart
 sysPilot/
 ├── bin/
 │   ├── syspilot                 # Unified master CLI & GUI runner
+│   ├── syspilot-faf-repair      # Deterministic FAF runner & shortcut repair tool
 │   ├── syspilot-sentinel        # Background monitoring daemon
 │   └── sys-health.sh            # Hardened SRE health & diagnostic engine
 ├── core/
@@ -197,7 +201,8 @@ With **SysPilot Copilot**, a user simply clicks **„Setup / Repair FAF Client�
 1. Verifies multilib and 32-bit NVIDIA/AMD driver stacks locally via `syspilot` telemetry.
 2. Deploys the isolated `faf-linux` runner inside `~/faf-linux`.
 3. Automatically syncs `Game.prefs` from the Steam Proton compatdata directory into the FAF prefix.
-4. Completes in seconds, saving hours of manual debugging and ensuring game night with family is never cancelled.
+4. Generates dynamic desktop and application menu shortcuts pointing to the runner wrapper (`~/faf-linux/run`), preventing version-freeze and preserving automatic background updates (`syspilot --faf-repair`).
+5. Completes in seconds, saving hours of manual debugging and ensuring game night with family is never cancelled.
 
 ---
 

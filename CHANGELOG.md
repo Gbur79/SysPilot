@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.6] - 2026-10-09
+
+### Added
+- **PATCH-007 — Deterministic 1-Click FAF Setup & Dynamic Launcher Resolver (`syspilot --faf-repair`)**:
+  - Implemented `bin/syspilot-faf-repair`, an autonomous zero-token repair utility that checks prerequisites (`bwrap`, 32-bit Vulkan ICDs), synchronizes components via `update.sh perform`, and dynamically interrogates Steam libraries (including multi-mount `libraryfolders.vdf`) to sync `Game.prefs` with backup safety.
+  - Automatically heals frozen/obsolete versioned shortcuts on `~/Desktop` and `~/.local/share/applications` by repointing them to the dynamic runner wrapper (`$HOME/faf-linux/run`), ensuring upstream background updates (`update.sh autoupdate-notify`) are never bypassed.
+  - Added CLI fast-paths `--faf-repair` and `--faf-setup` to `bin/syspilot`.
+  - Enhanced the `⚡ Setup / Repair FAF Client` playbook button on the Copilot tab in `gui/syspilot_gui.py`.
+  - Updated `copilot/playbooks/faf_setup_guide.md` with 1-click self-healing commands, desktop integration best practices, and Scenario C troubleshooting.
+
 ## [1.0.5] - 2026-10-09
 
 ### Fixed

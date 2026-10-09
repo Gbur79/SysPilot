@@ -8,6 +8,9 @@ set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [[ ! -d "$PROJECT_ROOT/core" && -d "/usr/lib/syspilot" ]]; then
+    PROJECT_ROOT="/usr/lib/syspilot"
+fi
 
 # Color definitions
 BOLD="\033[1m"
@@ -37,6 +40,7 @@ ${BOLD}CLI Fast-Paths (0-Token Local Telemetry):${RESET}
   -u, --upgrade           Run guarded system upgrade
   -m, --maintenance       Run safe system maintenance & cache cleaning
   -g, --gaming            Run gaming readiness & Proton/Vulkan audit
+  --faf-repair, --faf-setup Setup or repair Forged Alliance Forever (FAF) & runner
 
 ${BOLD}AI Copilot & SRE Persona (Goose Integration):${RESET}
   --copilot "QUESTION"    Ask SysPilot Copilot to diagnose/fix an issue
@@ -179,6 +183,11 @@ case "${1:-}" in
     -g|--gaming)
         shift
         "$PROJECT_ROOT/bin/sys-health.sh" --gaming "$@"
+        exit $?
+        ;;
+    --faf-repair|--faf-setup)
+        shift
+        "$PROJECT_ROOT/bin/syspilot-faf-repair" "$@"
         exit $?
         ;;
     --copilot)

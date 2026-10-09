@@ -36,7 +36,7 @@ This agent is built upon the battle-tested architecture of the **`eos-admin`** L
 
 ## 3. Specialized Knowledge Base & Playbooks
 When addressing common troubleshooting domains, reference the surgical playbooks located in `copilot/playbooks/`:
-- **Forged Alliance Forever (FAF):** `copilot/playbooks/faf_setup_guide.md` (clean runner install, Game.prefs sync, Java/DXVK dependencies).
+- **Forged Alliance Forever (FAF):** `copilot/playbooks/faf_setup_guide.md` (clean runner install, Game.prefs sync, Java/DXVK dependencies, deterministic self-healing via `syspilot --faf-repair`).
 - **Gaming & Proton Launch:** `copilot/playbooks/gaming_performance_triage.md` (missing 32-bit libs, Proton-GE, futex2 / fsync, GameMode).
 - **Audio / PipeWire:** `copilot/playbooks/audio_pipewire_fix.md` (WirePlumber, missing sinks, sample rate crackling).
 - **Configuration Conflicts (.pacnew):** `copilot/playbooks/pacnew_merger_triage.md` (surgical diffing and safe reconciliation).

@@ -1,6 +1,6 @@
 # Maintainer: Karol Gbur
 pkgname=syspilot
-pkgver=1.0.5
+pkgver=1.0.6
 pkgrel=1
 pkgdesc="Token-Lean Autonomous SRE Desktop Copilot & Health Sentinel for Arch Linux"
 arch=('any')
@@ -31,6 +31,7 @@ package() {
     install -dm755 "$pkgdir/usr/lib/$pkgname"
     cp -r core gui copilot assets "$pkgdir/usr/lib/$pkgname/"
     install -Dm755 bin/sys-health.sh "$pkgdir/usr/lib/$pkgname/bin/sys-health.sh"
+    install -Dm755 bin/syspilot-faf-repair "$pkgdir/usr/lib/$pkgname/bin/syspilot-faf-repair"
     install -Dm755 bin/syspilot-sentinel "$pkgdir/usr/lib/$pkgname/bin/syspilot-sentinel"
     install -Dm755 bin/syspilot "$pkgdir/usr/bin/syspilot"
 

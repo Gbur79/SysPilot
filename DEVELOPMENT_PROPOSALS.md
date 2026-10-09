@@ -228,3 +228,21 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 - **Proponowane Rozwiązanie:**
   Add explicit per-manager probe status (`available`, `unavailable`, `timeout`, and diagnostic text) so the GUI never presents an unavailable user-manager probe as a clean check. For real non-app failures, provide Inspect commands before a confirmation-gated `systemctl --user reset-failed <selected-unit...>` action. Never use `sudo` for the user-manager action; reject or safely re-exec elevated CLI invocations in the original user’s runtime context. A destructive all-unit reset, if provided, must require explicit `--all --yes`.
 
+---
+
+### PATCH-007: [IMPLEMENTED] Deterministic 1-Click FAF (Forged Alliance Forever) Setup & Dynamic Desktop Shortcut Resolver
+- **Status:** `[IMPLEMENTED]` *(Shipped in v1.0.6)*
+- **Data zgłoszenia:** 2026-10-09
+- **Źródło:** SRE Architectural Audit (Karol / Sol / Gemini Flash) — Forged Alliance Forever runner bypassed background updates due to static versioned desktop shortcuts.
+- **Komponenty:**
+  - `bin/syspilot-faf-repair` (new dedicated deterministic helper with `--check` and `--repair` modes)
+  - `bin/syspilot` (added `--faf-repair` and `--faf-setup` CLI fast-paths)
+  - `gui/syspilot_gui.py` (enhanced 1-click Copilot SRE playbook button prompt)
+  - `copilot/playbooks/faf_setup_guide.md` (added automated self-healing, dynamic desktop integration, and Scenario C troubleshooting)
+  - `copilot/skills/sys-pilot-admin/SKILL.md`
+- **Kontekst i Uzasadnienie:**
+  Manual desktop launchers often link directly to obsolete versioned binaries (e.g. `~/faf-linux/faf-client-2026.7.0/faf-client`) instead of the dynamic wrapper script (`~/faf-linux/run`). This completely bypasses the built-in background update cycle (`update.sh autoupdate-notify`), locking players to outdated versions indefinitely even when upstream releases are downloaded. Furthermore, multi-drive Steam setups and missing `Game.prefs` synchronization regularly cause crashes on Linux.
+- **Proponowane Rozwiązanie:**
+  Deploy a deterministic, zero-token CLI repair and setup helper (`bin/syspilot-faf-repair`) accessible directly via `syspilot --faf-repair`. The utility validates prerequisites (`bwrap`, 32-bit Vulkan ICDs), synchronizes components via `update.sh perform`, dynamically discovers Steam libraries across multi-mount setups via `libraryfolders.vdf`, syncs `Game.prefs` with backup preservation, generates dynamic `.desktop` launchers for both XDG menu and Desktop pointing to `$HOME/faf-linux/run`, and refreshes desktop database caches.
+
+

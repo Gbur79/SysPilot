@@ -854,7 +854,7 @@ class SysPilotWindow(QMainWindow):
 
         btn_faf = QPushButton("⚡ Setup / Repair FAF Client")
         btn_faf.setProperty("class", "secondary")
-        btn_faf.clicked.connect(lambda: self.ask_copilot("Explain how to setup and configure Forged Alliance Forever (FAF) with the faf-linux runner and fix Game.prefs sync"))
+        btn_faf.clicked.connect(lambda: self.ask_copilot("Diagnose and repair Forged Alliance Forever (FAF): check dependencies (bwrap, 32-bit Vulkan), verify ~/faf-linux runner, run update.sh perform, sync Game.prefs from Steam, ensure desktop shortcuts point to the dynamic runner, or execute 'syspilot --faf-repair'."))
         pills_layout.addWidget(btn_faf)
 
         btn_proton = QPushButton("🎮 Steam / Proton Launch Fix")

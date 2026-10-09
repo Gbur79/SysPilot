@@ -4,12 +4,26 @@ Step-by-step setup, configuration, and troubleshooting guide for Forged Alliance
 
 ---
 
+## ⚡ 1-Click Automated Self-Healing (SysPilot Fast-Path)
+
+SysPilot includes a dedicated, zero-token deterministic tool that automates dependency verification, updates components via `update.sh perform`, syncs `Game.prefs` from your Steam library, and generates dynamic desktop/menu launchers:
+
+```bash
+syspilot --faf-repair
+```
+To run in read-only audit mode without applying changes:
+```bash
+syspilot --faf-repair --check
+```
+
+---
+
 ## 1. Architecture & Runner Strategy
 - **DO NOT install the AUR package (`downlords-faf-client`):** The AUR package merely ships the Java client frontend. It does not configure an isolated Wine prefix, the Steam Runtime (`pressure-vessel`) container, DXVK patches, or the native launcher scripts.
 - **Official Recommended Community Solution:** The native runner suite: [FAForever/faf-linux](https://github.com/FAForever/faf-linux) located in `~/faf-linux`.
 - **System Prerequisites:**
   - Supreme Commander: Forged Alliance installed on Steam (AppID: `9420`).
-  - Multilib repository and 32-bit graphics stack enabled (`syspilot -s` or `sys-health --gaming`).
+  - Multilib repository and 32-bit graphics stack enabled (`syspilot -s` or `syspilot -g`).
   - Core system utilities installed: `bubblewrap`, `curl`, `jq`, `git`.
 
 ---
@@ -50,6 +64,28 @@ Execute the automated path setup script:
 cd ~/faf-linux && ./set-client-paths.sh
 ```
 
+### Step 6: Dynamic Desktop & Application Menu Integration
+**CRITICAL:** Never link shortcuts directly to a versioned client binary (e.g., `faf-client-2026.7.0/faf-client`). Always point launchers to the wrapper script `$HOME/faf-linux/run`. The wrapper exports necessary runtime variables and invokes `./update.sh autoupdate-notify` in the background.
+
+To create or refresh the desktop launcher manually:
+```bash
+cat << 'EOF' > ~/.local/share/applications/com.faforever.faf-linux.desktop
+[Desktop Entry]
+Name=Forged Alliance Forever
+Comment=Lobby client for Supreme Commander: Forged Alliance (faf-linux)
+Exec=/home/$USER/faf-linux/run
+Path=/home/$USER/faf-linux
+Type=Application
+Icon=/home/$USER/faf-linux/faf-logo.png
+StartupWMClass=com.faforever.client.FafClientApplication
+Categories=Network;Game;
+Keywords=faf
+Terminal=false
+EOF
+chmod +x ~/.local/share/applications/com.faforever.faf-linux.desktop
+update-desktop-database ~/.local/share/applications 2>/dev/null || true
+```
+
 ---
 
 ## 3. Common Failure Modes & Quick Fixes
@@ -66,4 +102,15 @@ cd ~/faf-linux && ./set-client-paths.sh
 - **Fix:** Re-run Step 4 above to ensure `Game.prefs` is in the FAF prefix, and verify write permissions:
   ```bash
   chmod -R u+rw "$HOME/faf-linux/prefix"
+  ```
+
+### Scenario C: FAF Client Never Updates / Stuck on Obsolete Version
+- **Cause:** The desktop shortcut or application launcher points directly to an obsolete versioned subdirectory (e.g. `faf-client-2026.7.0/faf-client`) instead of `$HOME/faf-linux/run`. This bypasses the background updater routine.
+- **Fix:** Run the automated repair tool:
+  ```bash
+  syspilot --faf-repair
+  ```
+  Or manually update the components and re-point the shortcut:
+  ```bash
+  cd ~/faf-linux && ./update.sh perform
   ```

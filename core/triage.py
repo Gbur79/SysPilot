@@ -12,7 +12,7 @@ import re
 import shutil
 import subprocess
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Set
 
 # Core system packages regex that warrant elevated upgrade precautions
 CORE_PKG_PATTERN = re.compile(
@@ -22,6 +22,9 @@ CORE_PKG_PATTERN = re.compile(
     r'xorg([-_].*)?|pipewire([-_].*)?|wireplumber([-_].*)?|dkms([-_].*)?)$',
     re.IGNORECASE
 )
+
+# Candidate names used by desktop launchers for user application units.
+APP_UNIT_PATTERN = re.compile(r"^app-.*\.(?:service|scope)$")
 
 STATE_DIR = os.path.expanduser("~/.local/state/syspilot")
 STATUS_FILE = os.path.join(STATE_DIR, "status.json")
@@ -61,6 +64,58 @@ def is_gamemode_active() -> bool:
     return False
 
 
+def get_transient_desktop_app_units(unit_names: List[str]) -> Set[str]:
+    """
+    Return failed units confirmed as transient desktop application launches.
+
+    Unit names are only candidates: suppressing by name alone could hide a
+    legitimate persistent user service (for example, app-backup.service).
+    Metadata-query failure intentionally returns no matches so diagnostics
+    fail open and preserve visibility.
+    """
+    candidates = [unit for unit in unit_names if APP_UNIT_PATTERN.match(unit)]
+    if not candidates:
+        return set()
+
+    try:
+        res = subprocess.run(
+            [
+                "systemctl", "--user", "show", "--no-pager",
+                "--property=Id", "--property=Transient", "--property=Slice",
+                *candidates,
+            ],
+            capture_output=True, text=True, timeout=1.0
+        )
+        if res.returncode != 0:
+            return set()
+    except Exception:
+        return set()
+
+    ignored = set()
+    candidate_set = set(candidates)
+    properties = {}
+
+    # systemctl show separates each requested unit's property block by a
+    # blank line. Add a final delimiter so the last block is processed too.
+    for line in [*res.stdout.splitlines(), ""]:
+        if not line:
+            unit_id = properties.get("Id")
+            if (
+                unit_id in candidate_set
+                and properties.get("Transient") == "yes"
+                and properties.get("Slice") == "app.slice"
+            ):
+                ignored.add(unit_id)
+            properties = {}
+            continue
+
+        key, separator, value = line.partition("=")
+        if separator:
+            properties[key] = value
+
+    return ignored
+
+
 def check_failed_services() -> Dict[str, List[str]]:
     """Query system and user systemd managers for failed units."""
     result = {"system": [], "user": []}
@@ -92,6 +147,14 @@ def check_failed_services() -> Dict[str, List[str]]:
                     result["user"].append(parts[0])
     except Exception:
         pass
+
+    # Filter only systemd-confirmed transient desktop application launches.
+    # System units and non-app transient units remain intentionally visible.
+    ignored_user_units = get_transient_desktop_app_units(result["user"])
+    if ignored_user_units:
+        result["user"] = [
+            unit for unit in result["user"] if unit not in ignored_user_units
+        ]
 
     return result
 

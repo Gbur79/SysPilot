@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.5] - 2026-10-09
+
+### Fixed
+- **PATCH-005 — Transient Desktop Application Unit False Positive:** SysPilot now ignores failed user units only when systemd confirms that an `app-*.service` or `app-*.scope` candidate is both transient and assigned to `app.slice`. This prevents KDE/desktop launcher remnants, such as failed one-shot `app-java@….service` units, from incorrectly elevating Flight Readiness status while preserving persistent user daemons, all system failures, and generic transient `run-*.scope` diagnostics.
+
 ## [1.0.4] - 2026-10-05
 
 ### Added

@@ -196,3 +196,35 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 - [x] Verified interactive Gum choose with single-item fallback.
 - [x] Verified automatic dashboard refresh after terminal exit.
 - [x] Captured live screen: `/home/gbur/Desktop/SysPilot_Orphan_AutoRefresh_Fixed.png`.
+
+---
+
+### PATCH-005: [IMPLEMENTED] Metadata-Gated Transient Desktop Application Unit Filtering
+- **Status:** `[IMPLEMENTED]` *(Shipped in v1.0.5)*
+- **Data zgłoszenia:** 2026-10-09
+- **Źródło:** SysPilot / `sys-health.sh` parity incident — KDE Plasma launcher retained failed `app-java@aafa9650aae64437abdb03e7b8454da5.service` after a one-shot Java help invocation.
+- **Komponenty:**
+  - `core/triage.py` (`check_failed_services()`, `get_transient_desktop_app_units()`)
+  - `CHANGELOG.md`
+  - regression coverage for mocked `systemctl --user` output
+- **Kontekst i Uzasadnienie:**
+  `sys-health.sh` omits failed user units matching `^app-.*\.(service|scope)$`, while SysPilot previously surfaced the same KDE-created transient application unit as a persistent health advisory. A direct name-only port would resolve the observed false positive but could hide legitimate persistent user daemons or generated XDG autostart services named `app-*.service`. Desktop-entry and XDG-autostart standards do not reserve this unit-name namespace.
+- **Proponowane Rozwiązanie:**
+  Treat the regex as a candidate selector only. Query the user manager once in batch with `systemctl --user show` and suppress a candidate only when `Transient=yes` and `Slice=app.slice`. Preserve all system-manager failures, all `run-*.scope` units, and all candidates whose metadata query fails, times out, or is incomplete. This restores the intended Plasma/sys-health outcome while failing open for diagnosability and cross-desktop portability.
+
+---
+
+### PATCH-006: [PROPOSED] Failed User-Unit Probe Confidence and Safe Scoped Remediation
+- **Status:** `[PROPOSED]`
+- **Data zgłoszenia:** 2026-10-09
+- **Źródło:** PATCH-005 SRE architectural review.
+- **Komponenty:**
+  - `core/triage.py` (explicit system/user systemd probe availability and diagnostic reason fields)
+  - `gui/syspilot_gui.py` (Inspect and selected-unit Clear Failed State workflow)
+  - `bin/syspilot` (optional scoped failed-unit inspection/reset commands)
+  - regression fixtures for missing `XDG_RUNTIME_DIR`, unavailable user D-Bus, timeout, and sudo/SSH contexts
+- **Kontekst i Uzasadnienie:**
+  Current broad exception handling makes an unavailable user manager or D-Bus session indistinguishable from “zero failed user units.” Furthermore, `systemctl --user reset-failed` only clears retained systemd state and a blanket action may erase failure evidence for unrelated services.
+- **Proponowane Rozwiązanie:**
+  Add explicit per-manager probe status (`available`, `unavailable`, `timeout`, and diagnostic text) so the GUI never presents an unavailable user-manager probe as a clean check. For real non-app failures, provide Inspect commands before a confirmation-gated `systemctl --user reset-failed <selected-unit...>` action. Never use `sudo` for the user-manager action; reject or safely re-exec elevated CLI invocations in the original user’s runtime context. A destructive all-unit reset, if provided, must require explicit `--all --yes`.
+

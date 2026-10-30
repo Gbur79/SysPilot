@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0-alpha.1] - 2026-10-30
 
+### Fixed / Slint Navigation Bar & Vertical Stretch Constraint (`9f96ab1`)
+- **Slint Layout Engine Optimization (`appwindow.slint`, `tab_button.slint`)**:
+  - Enforced `vertical-stretch: 0` and fixed `height: 36px` on `TabButton` and `HorizontalLayout` navigation bar, as well as top HUD header and error banners.
+  - Assigned `vertical-stretch: 1` exclusively to active tab view containers (Dashboard, System Maintenance `ScrollView`, and Copilot diagnostic console).
+  - Eliminated the UI bug where `TabButton` expanded vertically to ~280px upon switching to System Maintenance or Copilot, pushing cards 4–7 out of the visible screen.
+  - SRE verification: `dev-tools/verify-rust.sh -q` ➔ 31/31 unit tests PASS, Clippy clean, fmt clean.
+
 ### Added / Phase 4: Packaging Cutover & Legacy Python Retirement (`0aae6c6` ➔ `346390d`)
 - **Total Python Runtime Emancipation**:
   - Retired 3,802 lines of legacy Python code: `core/triage.py`, `core/copilot_config.py`, `gui/syspilot_gui.py`, `bin/syspilot-sentinel`, `systemd/syspilot-sentinel.service`, `systemd/syspilot-sentinel.timer`.

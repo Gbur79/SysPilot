@@ -266,15 +266,37 @@ fn update_ui_from_error(ui: &AppWindow, err: &str) {
     ui.set_orphans_details("Telemetry unavailable".into());
 }
 
-fn spawn_terminal_cmd(cmd: &str) {
-    let mut term = std::process::Command::new("konsole");
-    term.args(["--nofork", "-e", "bash", "-c", cmd]);
-    if term.spawn().is_err() {
-        // Fallback to xdg-terminal-exec or foot/kitty/alacritty
-        let _ = std::process::Command::new("xdg-terminal-exec")
-            .args(["bash", "-c", cmd])
-            .spawn();
+fn trigger_copilot_query(ui_weak: slint::Weak<AppWindow>, query: String) {
+    if let Some(ui) = ui_weak.upgrade() {
+        ui.set_copilot_running(true);
+        ui.set_copilot_console_text(
+            format!(
+                "🚀 Asking SysPilot Copilot:\n> {query}\n\nThinking and gathering system telemetry...",
+            )
+            .into(),
+        );
     }
+
+    std::thread::spawn(move || {
+        let result = syspilot_core::execute_copilot_query(&query);
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_copilot_running(false);
+                match result {
+                    Ok(answer) => {
+                        ui.set_copilot_console_text(
+                            format!("🤖 SysPilot Copilot Solution:\n\n{answer}\n").into(),
+                        );
+                    }
+                    Err(err) => {
+                        ui.set_copilot_console_text(
+                            format!("✖ Copilot Execution Failed:\n\n{err}\n\nTip: You can also use the interactive terminal button above for real-time interaction.").into(),
+                        );
+                    }
+                }
+            }
+        });
+    });
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -292,7 +314,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(error) => update_ui_from_error(&ui, &error),
     }
 
-    // Connect callbacks
+    // Populate Copilot Metadata
+    let copilot_info = syspilot_core::get_copilot_info();
+    ui.set_copilot_badge_label(copilot_info.badge_label().into());
+    ui.set_copilot_status_text(copilot_info.status_line().into());
+
+    // Connect Callbacks - Dashboard & General
     let ui_weak = ui.as_weak();
     ui.on_refresh_clicked(move || {
         let copy = ui_weak.clone();
@@ -318,15 +345,80 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     ui.on_upgrade_clicked(|| {
-        spawn_terminal_cmd("sys-health.sh --fix || read -p 'Press enter to close...'");
+        let _ = syspilot_core::spawn_syspilot_task(&["--upgrade"], "SysPilot Guarded Upgrade");
     });
 
     ui.on_audit_clicked(|| {
-        spawn_terminal_cmd("sys-health.sh || read -p 'Press enter to close...'");
+        let _ = syspilot_core::spawn_syspilot_task(&["--audit"], "SysPilot Diagnostic Audit");
     });
 
     ui.on_prune_clicked(|| {
-        spawn_terminal_cmd("sys-health.sh --orphans || read -p 'Press enter to close...'");
+        let _ =
+            syspilot_core::spawn_syspilot_task(&["--orphans"], "SysPilot Orphan Package Triage");
+    });
+
+    // Connect Callbacks - Maintenance Suite
+    ui.on_run_orphans_clicked(|| {
+        let _ =
+            syspilot_core::spawn_syspilot_task(&["--orphans"], "SysPilot Orphan Package Triage");
+    });
+
+    ui.on_run_mirrors_clicked(|| {
+        let _ = syspilot_core::spawn_syspilot_task(&["--mirrors"], "SysPilot Mirror Ranking");
+    });
+
+    ui.on_run_maintenance_clicked(|| {
+        let _ = syspilot_core::spawn_syspilot_task(&["--maintenance"], "SysPilot Safe Maintenance");
+    });
+
+    ui.on_run_deep_clean_clicked(|| {
+        let _ = syspilot_core::spawn_syspilot_task(&["--deep-clean"], "SysPilot Deep Clean");
+    });
+
+    ui.on_run_cve_clicked(|| {
+        let _ = syspilot_core::spawn_shell_task(
+            "echo '🔍 Arch Linux Security Advisories (CVE Triage)...'; if type -P arch-audit &>/dev/null; then arch-audit -u; else echo 'arch-audit is not installed. Install via: sudo pacman -S arch-audit'; fi",
+            "SysPilot Security CVE Inspection",
+        );
+    });
+
+    ui.on_run_firmware_clicked(|| {
+        let _ = syspilot_core::spawn_shell_task(
+            "echo '⚡ Hardware Firmware Upgrade (fwupd / LVFS)...'; if type -P fwupdmgr &>/dev/null; then fwupdmgr update; else echo 'fwupd is not installed. Install via: sudo pacman -S fwupd'; fi",
+            "SysPilot Hardware Firmware Upgrade",
+        );
+    });
+
+    ui.on_run_precache_clicked(|| {
+        let _ = syspilot_core::spawn_shell_task(
+            "echo '⚡ Pre-caching pending package updates into pacman cache...'; if type -P checkupdates &>/dev/null; then checkupdates -d || sudo pacman -Sw --noconfirm; else sudo pacman -Sw --noconfirm; fi",
+            "SysPilot Package Pre-Caching",
+        );
+    });
+
+    // Connect Callbacks - AI Copilot
+    ui.on_copilot_terminal_clicked(|| {
+        let _ = syspilot_core::spawn_syspilot_task(
+            &["--copilot-shell"],
+            "SysPilot AI Copilot Interactive",
+        );
+    });
+
+    let ui_weak_copilot = ui.as_weak();
+    ui.on_copilot_ask_clicked(move |query| {
+        trigger_copilot_query(ui_weak_copilot.clone(), query.to_string());
+    });
+
+    let ui_weak_playbook = ui.as_weak();
+    ui.on_copilot_playbook_clicked(move |playbook_id| {
+        let query = match playbook_id.as_str() {
+            "faf" => "Diagnose and repair Forged Alliance Forever (FAF): check dependencies (bwrap, 32-bit Vulkan), verify ~/faf-linux runner, run update.sh perform, sync Game.prefs from Steam, ensure desktop shortcuts point to the dynamic runner, or execute 'syspilot --faf-repair'.",
+            "proton" => "Diagnose why a game is failing to launch in Steam under Proton and check missing 32-bit Vulkan/graphics libraries.",
+            "pacnew" => "Check for active .pacnew configuration files and guide me through safe surgical merging.",
+            "audio" => "Audio is crackling or missing sinks in PipeWire/WirePlumber, how do I reset and fix it?",
+            other => other,
+        };
+        trigger_copilot_query(ui_weak_playbook.clone(), query.to_string());
     });
 
     ui.run()?;

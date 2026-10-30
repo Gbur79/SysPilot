@@ -3,31 +3,52 @@ import { Card } from "components/card.slint";
 import { GridRow } from "components/grid_row.slint";
 import { StatusBadge } from "components/status_badge.slint";
 import { ActionButton } from "components/action_button.slint";
+import { TabButton } from "components/tab_button.slint";
+import { MaintenanceCard } from "components/maintenance_card.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
 
 export component AppWindow inherits Window {
     title: "SysPilot — System Health & AI Copilot";
-    min-width: 780px;
-    min-height: 600px;
-    preferred-width: 840px;
-    preferred-height: 660px;
+    min-width: 820px;
+    min-height: 640px;
+    preferred-width: 900px;
+    preferred-height: 720px;
     background: Theme.background;
     default-font-family: "DejaVu Sans, Noto Sans, Liberation Sans, sans-serif";
 
-    // Callbacks
+    // Callbacks - Navigation & Common
     callback refresh_clicked();
     callback upgrade_clicked();
     callback audit_clicked();
     callback prune_clicked();
 
-    // Data properties
+    // Callbacks - Maintenance
+    callback run_orphans_clicked();
+    callback run_mirrors_clicked();
+    callback run_maintenance_clicked();
+    callback run_deep_clean_clicked();
+    callback run_cve_clicked();
+    callback run_firmware_clicked();
+    callback run_precache_clicked();
+
+    // Callbacks - Copilot
+    callback copilot_terminal_clicked();
+    callback copilot_ask_clicked(string);
+    callback copilot_playbook_clicked(string);
+
+    // Active Navigation Tab: 0 = Dashboard, 1 = Maintenance, 2 = Copilot
+    in-out property <int> active-tab: 0;
+
+    // Header Properties
     in property <bool> has_error: false;
     in property <string> error_message: "";
-
     in property <string> overall_status: "INITIALIZING";
     in property <string> overall_status_label: "CONNECTING...";
     in property <color> overall_status_color: Theme.text-muted;
     in property <string> hardware_info: "Probing system environment...";
+    in property <string> copilot_badge_label: "🤖 Probing Copilot...";
 
+    // Dashboard Telemetry Properties
     in property <string> kernel_status: "--";
     in property <color> kernel_color: Theme.text-muted;
     in property <string> kernel_details: "Pending telemetry...";
@@ -71,6 +92,11 @@ export component AppWindow inherits Window {
     in property <string> orphans_status: "--";
     in property <color> orphans_color: Theme.text-muted;
     in property <string> orphans_details: "Pending telemetry...";
+
+    // Copilot Properties
+    in property <string> copilot_status_text: "Probing Copilot connection...";
+    in property <string> copilot_console_text: "SysPilot Copilot ready. Enter your question below or click a 1-click playbook.";
+    in property <bool> copilot_running: false;
 
     VerticalLayout {
         padding: 16px;
@@ -116,12 +142,61 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                ActionButton {
-                    text: "REFRESH 🔄";
-                    primary: false;
-                    action-color: Theme.status-cyan;
-                    clicked => { root.refresh_clicked(); }
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: center;
+
+                    Rectangle {
+                        background: Theme.surface;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            padding-top: 6px;
+                            padding-bottom: 6px;
+                            alignment: center;
+
+                            Text {
+                                text: root.copilot_badge_label;
+                                color: Theme.status-cyan;
+                                font-size: 11px;
+                                font-weight: 700;
+                            }
+                        }
+                    }
+
+                    ActionButton {
+                        text: "REFRESH 🔄";
+                        primary: false;
+                        action-color: Theme.status-cyan;
+                        clicked => { root.refresh_clicked(); }
+                    }
                 }
+            }
+        }
+
+        // Navigation Tab Bar
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+
+            TabButton {
+                text: "✈  Dashboard";
+                active: root.active-tab == 0;
+                clicked => { root.active-tab = 0; }
+            }
+            TabButton {
+                text: "🛠  System Maintenance";
+                active: root.active-tab == 1;
+                clicked => { root.active-tab = 1; }
+            }
+            TabButton {
+                text: "🤖  AI Copilot";
+                active: root.active-tab == 2;
+                clicked => { root.active-tab = 2; }
             }
         }
 
@@ -150,8 +225,8 @@ export component AppWindow inherits Window {
             }
         }
 
-        // Main telemetry cards
-        VerticalLayout {
+        // TAB 0: DASHBOARD VIEW
+        if (root.active-tab == 0) : VerticalLayout {
             spacing: 10px;
 
             Card {
@@ -234,42 +309,259 @@ export component AppWindow inherits Window {
                     details: root.orphans_details;
                 }
             }
+
+            // Bottom Action Bar
+            Rectangle {
+                background: Theme.surface;
+                border-radius: Theme.radius-md;
+                border-width: 1px;
+                border-color: Theme.border-subtle;
+
+                HorizontalLayout {
+                    padding: 10px;
+                    spacing: 12px;
+                    alignment: space-between;
+
+                    ActionButton {
+                        text: "RUN GUARDED UPGRADE ⚡";
+                        primary: true;
+                        action-color: Theme.status-green;
+                        clicked => { root.upgrade_clicked(); }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        ActionButton {
+                            text: "DIAGNOSTIC AUDIT 🔍";
+                            primary: false;
+                            action-color: Theme.status-cyan;
+                            clicked => { root.audit_clicked(); }
+                        }
+
+                        ActionButton {
+                            text: "PRUNE ORPHANS 🗑";
+                            primary: false;
+                            action-color: Theme.status-amber;
+                            clicked => { root.prune_clicked(); }
+                        }
+                    }
+                }
+            }
         }
 
-        // Bottom Action Bar
-        Rectangle {
-            background: Theme.surface;
-            border-radius: Theme.radius-md;
-            border-width: 1px;
-            border-color: Theme.border-subtle;
+        // TAB 1: SYSTEM MAINTENANCE VIEW
+        if (root.active-tab == 1) : ScrollView {
+            VerticalLayout {
+                spacing: 10px;
+                padding-bottom: 12px;
 
-            HorizontalLayout {
-                padding: 10px;
-                spacing: 12px;
-                alignment: space-between;
+                // Suite Intro Card
+                Rectangle {
+                    background: Theme.surface;
+                    border-radius: Theme.radius-md;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
 
-                ActionButton {
-                    text: "RUN GUARDED UPGRADE ⚡";
-                    primary: true;
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+
+                        Rectangle {
+                            width: 4px;
+                            background: Theme.status-green;
+                            border-radius: 2px;
+                        }
+
+                        Text {
+                            text: "Universal SRE Maintenance Suite: Safe, atomic maintenance utilities that maintain system health without breaking package dependencies or user configuration.";
+                            color: Theme.text-primary;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                MaintenanceCard {
+                    title: "1) 🗑 Orphan Package Triage & Prune";
+                    description: "Interactive 3-tier orphan package resolver. Safely purges abandoned dependencies without breaking optdepends.";
+                    action-text: "Run Orphan Triage";
+                    action-color: Theme.status-amber;
+                    clicked => { root.run_orphans_clicked(); }
+                }
+
+                MaintenanceCard {
+                    title: "2) 🌐 Refresh & Rank Regional Mirrors";
+                    description: "Benchmarks and ranks the fastest, most reliable regional Arch and EndeavourOS mirrors with atomic backup.";
+                    action-text: "Rank Fastest Mirrors";
+                    action-color: Theme.status-cyan;
+                    clicked => { root.run_mirrors_clicked(); }
+                }
+
+                MaintenanceCard {
+                    title: "3) 🧹 Safe Maintenance & Cache Trimming";
+                    description: "Trims pacman package cache to latest 2 versions, vacuums journal logs (>14 days), and cleans old run logs.";
+                    action-text: "Execute Maintenance";
                     action-color: Theme.status-green;
-                    clicked => { root.upgrade_clicked(); }
+                    clicked => { root.run_maintenance_clicked(); }
+                }
+
+                MaintenanceCard {
+                    title: "4) 🧼 Deep Clean (Trash, Browser, Thumbnails)";
+                    description: "Deep non-destructive reclamation: empties user Trash, clears thumbnail caches, and browser cache tempfiles.";
+                    action-text: "Execute Deep Clean";
+                    action-color: Theme.status-cyan;
+                    clicked => { root.run_deep_clean_clicked(); }
+                }
+
+                MaintenanceCard {
+                    title: "5) 🔍 Security Advisories (CVE Triage)";
+                    description: "Arch Linux security database vulnerability scan (arch-audit) to identify and triage unpatched packages.";
+                    action-text: "Inspect Security CVEs";
+                    action-color: Theme.status-red;
+                    clicked => { root.run_cve_clicked(); }
+                }
+
+                MaintenanceCard {
+                    title: "6) ⚡ Hardware Firmware Upgrade (LVFS)";
+                    description: "Upgrades hardware firmware for UEFI, NVMe storage, and attached peripherals via fwupdmgr.";
+                    action-text: "Upgrade Firmware";
+                    action-color: Theme.status-purple;
+                    clicked => { root.run_firmware_clicked(); }
+                }
+
+                MaintenanceCard {
+                    title: "7) ⚡ Pre-Cache Packages into Pacman Cache";
+                    description: "Downloads pending updates ahead of time without installing them, minimizing downtime during upgrades.";
+                    action-text: "Pre-Cache Packages";
+                    action-color: Theme.status-cyan;
+                    clicked => { root.run_precache_clicked(); }
+                }
+            }
+        }
+
+        // TAB 2: AI COPILOT WORKSPACE
+        if (root.active-tab == 2) : VerticalLayout {
+            spacing: 12px;
+
+            // Connection Status Bar
+            Rectangle {
+                background: Theme.surface;
+                border-radius: Theme.radius-md;
+                border-width: 1px;
+                border-color: Theme.border-subtle;
+
+                HorizontalLayout {
+                    padding: 12px;
+                    alignment: space-between;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.copilot_status_text;
+                            color: Theme.status-green;
+                            font-size: 12px;
+                            font-weight: 700;
+                        }
+                    }
+
+                    ActionButton {
+                        text: "💻 Interactive Terminal Session";
+                        primary: false;
+                        action-color: Theme.status-cyan;
+                        clicked => { root.copilot_terminal_clicked(); }
+                    }
+                }
+            }
+
+            // Playbooks Quick Launch
+            VerticalLayout {
+                spacing: 6px;
+
+                Text {
+                    text: "Battle-Tested SRE Playbooks (1-Click Diagnostics):";
+                    color: Theme.text-primary;
+                    font-size: 12px;
+                    font-weight: 700;
                 }
 
                 HorizontalLayout {
                     spacing: 8px;
 
                     ActionButton {
-                        text: "DIAGNOSTIC AUDIT 🔍";
-                        primary: false;
+                        text: "⚡ FAF Client Repair";
                         action-color: Theme.status-cyan;
-                        clicked => { root.audit_clicked(); }
+                        clicked => { root.copilot_playbook_clicked("faf"); }
                     }
 
                     ActionButton {
-                        text: "PRUNE ORPHANS 🗑";
-                        primary: false;
+                        text: "🎮 Steam / Proton Fix";
+                        action-color: Theme.status-purple;
+                        clicked => { root.copilot_playbook_clicked("proton"); }
+                    }
+
+                    ActionButton {
+                        text: "🔧 Reconcile .pacnew";
                         action-color: Theme.status-amber;
-                        clicked => { root.prune_clicked(); }
+                        clicked => { root.copilot_playbook_clicked("pacnew"); }
+                    }
+
+                    ActionButton {
+                        text: "🔊 PipeWire Audio Fix";
+                        action-color: Theme.status-green;
+                        clicked => { root.copilot_playbook_clicked("audio"); }
+                    }
+                }
+            }
+
+            // Query Input Bar
+            Rectangle {
+                background: Theme.surface;
+                border-radius: Theme.radius-md;
+                border-width: 1px;
+                border-color: Theme.border-subtle;
+
+                HorizontalLayout {
+                    padding: 8px;
+                    spacing: 10px;
+
+                    query_input := LineEdit {
+                        placeholder-text: "Ask SysPilot Copilot anything (e.g. 'Why did my audio fail?' or 'Fix service XYZ')...";
+                        font-size: 12px;
+                        accepted(text) => {
+                            if (text != "" && !root.copilot_running) {
+                                root.copilot_ask_clicked(text);
+                            }
+                        }
+                    }
+
+                    ActionButton {
+                        text: root.copilot_running ? "Thinking... ⏳" : "Ask Copilot 🚀";
+                        primary: true;
+                        action-color: Theme.status-cyan;
+                        clicked => {
+                            if (query_input.text != "" && !root.copilot_running) {
+                                root.copilot_ask_clicked(query_input.text);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Output Console Card
+            Card {
+                title: "🤖 Copilot Diagnostic Console";
+                badge-text: root.copilot_running ? "RUNNING" : "IDLE";
+                badge-color: root.copilot_running ? Theme.status-amber : Theme.status-green;
+
+                ScrollView {
+                    min-height: 180px;
+
+                    Text {
+                        text: root.copilot_console_text;
+                        color: Theme.text-primary;
+                        font-size: 11px;
+                        wrap: word-wrap;
                     }
                 }
             }

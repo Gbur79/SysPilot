@@ -1,0 +1,43 @@
+import { Theme } from "../theme.slint";
+
+export component TabButton inherits Rectangle {
+    in property <string> text: "Tab";
+    in property <bool> active: false;
+    callback clicked();
+
+    background: touch.pressed ? Theme.surface-active
+               : touch.has-hover ? Theme.surface-hover
+               : (root.active ? Theme.surface : Colors.transparent);
+    border-radius: Theme.radius-sm;
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    VerticalLayout {
+        alignment: space-between;
+
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            alignment: center;
+
+            Text {
+                text: root.text;
+                color: root.active ? Theme.text-primary : (touch.has-hover ? Theme.text-primary : Theme.text-secondary);
+                font-size: 12px;
+                font-weight: root.active ? 700 : 500;
+                vertical-alignment: center;
+            }
+        }
+
+        // Active indicator line
+        Rectangle {
+            height: 2px;
+            background: root.active ? Theme.status-cyan : Colors.transparent;
+            border-radius: 1px;
+        }
+    }
+}

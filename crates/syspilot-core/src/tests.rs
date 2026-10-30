@@ -347,3 +347,33 @@ fn test_deserialize_schema_1_0_disk_compatibility() {
 
     let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
 }
+
+#[test]
+fn test_terminal_utilities() {
+    use crate::terminal::{find_program, is_executable};
+    use std::path::Path;
+
+    assert!(is_executable(Path::new("/usr/bin/bash")));
+    assert!(!is_executable(Path::new("/nonexistent/binary/xyz")));
+
+    let bash = find_program("bash");
+    assert!(bash.is_some());
+    assert!(bash.unwrap().ends_with("bash"));
+
+    let nonexistent = find_program("syspilot_nonexistent_command_xyz");
+    assert!(nonexistent.is_none());
+}
+
+#[test]
+fn test_copilot_info_parser() {
+    use crate::copilot::{execute_copilot_query, get_copilot_info};
+
+    let info = get_copilot_info();
+    // In Karol's rig or test rig, info returns structured data
+    let badge = info.badge_label();
+    assert!(badge.starts_with("🤖"));
+
+    let err = execute_copilot_query("   ");
+    assert!(err.is_err());
+    assert_eq!(err.unwrap_err(), "Query cannot be empty.");
+}

@@ -1,0 +1,50 @@
+import { Theme } from "../theme.slint";
+import { ActionButton } from "action_button.slint";
+
+export component MaintenanceCard inherits Rectangle {
+    in property <string> title: "Title";
+    in property <string> description: "Description";
+    in property <string> action-text: "Execute";
+    in property <color> action-color: Theme.status-cyan;
+    callback clicked();
+
+    background: Theme.surface;
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
+
+    HorizontalLayout {
+        padding: 14px;
+        spacing: 16px;
+        alignment: space-between;
+
+        VerticalLayout {
+            spacing: 4px;
+            alignment: center;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.title;
+                color: Theme.text-primary;
+                font-size: 13px;
+                font-weight: 700;
+            }
+
+            Text {
+                text: root.description;
+                color: Theme.text-secondary;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            ActionButton {
+                text: root.action-text;
+                action-color: root.action-color;
+                clicked => { root.clicked(); }
+            }
+        }
+    }
+}

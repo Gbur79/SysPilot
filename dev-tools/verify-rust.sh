@@ -84,7 +84,7 @@ test_count=$(echo "$test_out" | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {pri
 test_count=${test_count:-0}
 
 if (( quiet )); then
-    echo "RUST_VERIFY: PASS | TESTS: ${test_count}/${test_count} | CLIPPY: CLEAN | FMT: CLEAN | TARGET: syspilot-tray"
+    echo "RUST_VERIFY: PASS | TESTS: ${test_count}/${test_count} | CLIPPY: CLEAN | FMT: CLEAN | TARGET: syspilot-workspace"
 else
     echo "✔ All Rust checks passed: fmt, clippy, and ${test_count} unit tests."
 fi

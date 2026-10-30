@@ -35,10 +35,14 @@ pub struct StatusUpdates {
     pub aur_count: u32,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatusSecurity {
     #[serde(default)]
     pub available: bool,
+    #[serde(default)]
+    pub tool: String,
+    #[serde(default)]
+    pub reason: String,
     #[serde(default)]
     pub vulnerabilities_total: u32,
     #[serde(default)]
@@ -47,19 +51,32 @@ pub struct StatusSecurity {
     pub packages: Vec<String>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FirmwareQuirk {
+    pub name: String,
+    pub plugin: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatusFirmware {
     #[serde(default)]
     pub available: bool,
+    #[serde(default)]
+    pub tool: String,
+    #[serde(default)]
+    pub reason: String,
     #[serde(default)]
     pub updates_count: u32,
     #[serde(default)]
     pub devices_monitored: u32,
     #[serde(default)]
     pub pending_devices: Vec<String>,
+    #[serde(default)]
+    pub bypassed_quirks: Vec<FirmwareQuirk>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatusFirewall {
     #[serde(default)]
     pub available: bool,
@@ -67,6 +84,8 @@ pub struct StatusFirewall {
     pub active: bool,
     #[serde(default)]
     pub backend: String,
+    #[serde(default)]
+    pub default_zone: Option<String>,
     #[serde(default)]
     pub details: String,
 }

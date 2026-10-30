@@ -227,6 +227,19 @@ copilot() {
 }
 
 launch_gui() {
+    # 1. Prefer native Rust Slint GUI if compiled or installed
+    if [[ -x "$PROJECT_ROOT/target/release/syspilot-gui" ]]; then
+        nohup "$PROJECT_ROOT/target/release/syspilot-gui" >/dev/null 2>&1 &
+        exit 0
+    elif [[ -x "${XDG_BIN_HOME:-$HOME/.local/bin}/syspilot-gui" ]]; then
+        nohup "${XDG_BIN_HOME:-$HOME/.local/bin}/syspilot-gui" >/dev/null 2>&1 &
+        exit 0
+    elif have syspilot-gui; then
+        nohup syspilot-gui >/dev/null 2>&1 &
+        exit 0
+    fi
+
+    # 2. Fallback to Python/PyQt6 GUI
     local gui_script=""
     if [[ -f "$PROJECT_ROOT/gui/syspilot_gui.py" ]]; then
         gui_script="$PROJECT_ROOT/gui/syspilot_gui.py"

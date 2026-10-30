@@ -12,7 +12,7 @@ trap '[[ -n ${tmp:-} ]] && rm -f -- "$tmp"' EXIT
 cd -- "$project_root"
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
-cargo build --release --locked -p syspilot-tray
+cargo build --release --locked -p syspilot-tray -p syspilot-gui
 
 install -d -m 0755 -- "$dest_dir"
 tmp=$(mktemp --tmpdir="$dest_dir" .syspilot-tray.XXXXXX)
@@ -20,7 +20,11 @@ install -m 0755 -- target/release/syspilot-tray "$tmp"
 mv -fT -- "$tmp" "$dest"
 tmp=''
 
+tmp_gui=$(mktemp --tmpdir="$dest_dir" .syspilot-gui.XXXXXX)
+install -m 0755 -- target/release/syspilot-gui "$tmp_gui"
+mv -fT -- "$tmp_gui" "$dest_dir/syspilot-gui"
+
 if systemctl --user is-active --quiet syspilot-tray.service; then
     systemctl --user restart syspilot-tray.service
 fi
-printf 'Installed %s\n' "$dest"
+printf 'Installed %s and %s/syspilot-gui\n' "$dest" "$dest_dir"

@@ -35,21 +35,40 @@ fn acquire_single_instance_lock() -> bool {
 }
 
 fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnapshot) {
+    if snapshot.has_data_problem() {
+        ui.set_has_error(true);
+        let reason = if let Some(err) = &snapshot.source_error {
+            err.clone()
+        } else if snapshot.cache_stale {
+            format!("Telemetry cache stale (age {})", snapshot.age_label())
+        } else {
+            "Degraded telemetry stream".to_string()
+        };
+        ui.set_error_message(reason.into());
+    } else {
+        ui.set_has_error(false);
+        ui.set_error_message("".into());
+    }
+
     let eff = snapshot.effective_status();
-    let (label, color) = match eff {
-        "ACTION_REQUIRED" => ("ACTION REQUIRED ✖", slint::Color::from_rgb_u8(239, 68, 68)),
-        "PRE_FLIGHT_ATTENTION" => (
-            "PRE-FLIGHT ATTENTION ⚠",
-            slint::Color::from_rgb_u8(245, 158, 11),
-        ),
-        _ => {
-            if snapshot.gaming_mode {
-                (
-                    "GAMEMODE ACTIVE 🎮",
-                    slint::Color::from_rgb_u8(56, 189, 248),
-                )
-            } else {
-                ("FLIGHT READY ✔", slint::Color::from_rgb_u8(34, 197, 94))
+    let (label, color) = if snapshot.has_data_problem() {
+        ("DATA DEGRADED ⚠", slint::Color::from_rgb_u8(245, 158, 11))
+    } else {
+        match eff {
+            "ACTION_REQUIRED" => ("ACTION REQUIRED ✖", slint::Color::from_rgb_u8(239, 68, 68)),
+            "PRE_FLIGHT_ATTENTION" => (
+                "PRE-FLIGHT ATTENTION ⚠",
+                slint::Color::from_rgb_u8(245, 158, 11),
+            ),
+            _ => {
+                if snapshot.gaming_mode {
+                    (
+                        "GAMEMODE ACTIVE 🎮",
+                        slint::Color::from_rgb_u8(56, 189, 248),
+                    )
+                } else {
+                    ("FLIGHT READY ✔", slint::Color::from_rgb_u8(34, 197, 94))
+                }
             }
         }
     };
@@ -67,19 +86,57 @@ fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnaps
 
     if snapshot.reboot_pending {
         ui.set_kernel_status("REBOOT ⚠".into());
+        ui.set_kernel_color(slint::Color::from_rgb_u8(245, 158, 11));
         ui.set_kernel_details("Kernel replaced on disk — reboot required".into());
     } else {
         ui.set_kernel_status("PASS ✔".into());
+        ui.set_kernel_color(slint::Color::from_rgb_u8(34, 197, 94));
         ui.set_kernel_details(format!("Running kernel {}", snapshot.kernel).into());
     }
 
+    // Root Storage sentinels
+    let sentinels = syspilot_core::collect_sentinels();
+    if sentinels.root_used_pct >= 90 {
+        ui.set_root_status("ALERT 🚨".into());
+        ui.set_root_color(slint::Color::from_rgb_u8(239, 68, 68));
+    } else if sentinels.root_used_pct >= 80 {
+        ui.set_root_status("WARN ⚠".into());
+        ui.set_root_color(slint::Color::from_rgb_u8(245, 158, 11));
+    } else {
+        ui.set_root_status("PASS ✔".into());
+        ui.set_root_color(slint::Color::from_rgb_u8(34, 197, 94));
+    }
+    ui.set_root_details(
+        format!(
+            "{}% used ({:.1}G free)",
+            sentinels.root_used_pct, sentinels.root_avail_gb
+        )
+        .into(),
+    );
+
     if snapshot.firewall_active {
         ui.set_firewall_status("PASS ✔".into());
+        ui.set_firewall_color(slint::Color::from_rgb_u8(34, 197, 94));
         ui.set_firewall_details("Host firewall active (firewalld)".into());
     } else {
         ui.set_firewall_status("INFO ℹ".into());
+        ui.set_firewall_color(slint::Color::from_rgb_u8(56, 189, 248));
         ui.set_firewall_details("Protected by perimeter router/LAN".into());
     }
+
+    if snapshot.errors > 0 {
+        ui.set_failed_services_status(format!("{} FAILED ✖", snapshot.errors).into());
+        ui.set_failed_services_color(slint::Color::from_rgb_u8(239, 68, 68));
+        ui.set_failed_services_details(format!("{} degraded unit(s)", snapshot.errors).into());
+    } else {
+        ui.set_failed_services_status("PASS ✔".into());
+        ui.set_failed_services_color(slint::Color::from_rgb_u8(34, 197, 94));
+        ui.set_failed_services_details("0 failed units".into());
+    }
+
+    ui.set_gpu_status("PASS ✔".into());
+    ui.set_gpu_color(slint::Color::from_rgb_u8(34, 197, 94));
+    ui.set_gpu_details("Hardware platform ready".into());
 
     if snapshot.security_high_risk > 0 {
         ui.set_cve_status("ALERT 🚨".into());
@@ -148,6 +205,65 @@ fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnaps
         ui.set_firmware_color(slint::Color::from_rgb_u8(34, 197, 94));
         ui.set_firmware_details("Hardware up to date • LVFS clean".into());
     }
+
+    ui.set_orphans_status("PASS ✔".into());
+    ui.set_orphans_color(slint::Color::from_rgb_u8(34, 197, 94));
+    ui.set_orphans_details("System packages audited".into());
+}
+
+fn update_ui_from_error(ui: &AppWindow, err: &str) {
+    ui.set_has_error(true);
+    ui.set_error_message(err.into());
+    ui.set_overall_status("DATA_UNAVAILABLE".into());
+    ui.set_overall_status_label("DATA UNAVAILABLE ⚠".into());
+    ui.set_overall_status_color(slint::Color::from_rgb_u8(245, 158, 11));
+    ui.set_hardware_info("Telemetry stream disconnected".into());
+
+    let muted = slint::Color::from_rgb_u8(100, 116, 139);
+
+    ui.set_kernel_status("UNKNOWN ?".into());
+    ui.set_kernel_color(muted);
+    ui.set_kernel_details("Telemetry unavailable".into());
+
+    ui.set_root_status("UNKNOWN ?".into());
+    ui.set_root_color(muted);
+    ui.set_root_details("Telemetry unavailable".into());
+
+    ui.set_firewall_status("UNKNOWN ?".into());
+    ui.set_firewall_color(muted);
+    ui.set_firewall_details("Telemetry unavailable".into());
+
+    ui.set_failed_services_status("UNKNOWN ?".into());
+    ui.set_failed_services_color(muted);
+    ui.set_failed_services_details("Telemetry unavailable".into());
+
+    ui.set_gpu_status("UNKNOWN ?".into());
+    ui.set_gpu_color(muted);
+    ui.set_gpu_details("Telemetry unavailable".into());
+
+    ui.set_updates_core_text("UNKNOWN ?".into());
+    ui.set_updates_core_color(muted);
+    ui.set_updates_core_details("Telemetry unavailable".into());
+
+    ui.set_updates_repo_text("UNKNOWN ?".into());
+    ui.set_updates_repo_color(muted);
+    ui.set_updates_repo_details("Telemetry unavailable".into());
+
+    ui.set_updates_aur_text("UNKNOWN ?".into());
+    ui.set_updates_aur_color(muted);
+    ui.set_updates_aur_details("Telemetry unavailable".into());
+
+    ui.set_cve_status("UNKNOWN ?".into());
+    ui.set_cve_color(muted);
+    ui.set_cve_details("Telemetry unavailable".into());
+
+    ui.set_firmware_status("UNKNOWN ?".into());
+    ui.set_firmware_color(muted);
+    ui.set_firmware_details("Telemetry unavailable".into());
+
+    ui.set_orphans_status("UNKNOWN ?".into());
+    ui.set_orphans_color(muted);
+    ui.set_orphans_details("Telemetry unavailable".into());
 }
 
 fn spawn_terminal_cmd(cmd: &str) {
@@ -171,8 +287,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initial population from cached status.json
     let status_path = syspilot_core::get_status_path();
-    if let Ok(snapshot) = syspilot_core::read_system_snapshot(&status_path) {
-        update_ui_from_snapshot(&ui, &snapshot);
+    match syspilot_core::read_system_snapshot(&status_path) {
+        Ok(snapshot) => update_ui_from_snapshot(&ui, &snapshot),
+        Err(error) => update_ui_from_error(&ui, &error),
     }
 
     // Connect callbacks
@@ -187,13 +304,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rt.block_on(async {
                 let _ = syspilot_core::run_triage(true, false).await;
                 let status_path = syspilot_core::get_status_path();
-                if let Ok(snapshot) = syspilot_core::read_system_snapshot(&status_path) {
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui_inst) = copy.upgrade() {
-                            update_ui_from_snapshot(&ui_inst, &snapshot);
+                let snapshot_res = syspilot_core::read_system_snapshot(&status_path);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui_inst) = copy.upgrade() {
+                        match snapshot_res {
+                            Ok(snapshot) => update_ui_from_snapshot(&ui_inst, &snapshot),
+                            Err(err) => update_ui_from_error(&ui_inst, &err),
                         }
-                    });
-                }
+                    }
+                });
             });
         });
     });

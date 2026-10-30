@@ -297,3 +297,53 @@ fn test_write_and_read_status_json_atomic() {
 
     let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
 }
+
+#[test]
+fn test_deserialize_schema_1_0_disk_compatibility() {
+    let raw_schema_1_0 = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "disk": {
+            "root": {
+                "path": "/",
+                "total_gb": 457.7,
+                "avail_gb": 311.1,
+                "used_pct": 29
+            },
+            "home": {
+                "path": "/home",
+                "total_gb": 457.7,
+                "avail_gb": 311.1,
+                "used_pct": 29
+            }
+        },
+        "updates": {
+            "total": 0,
+            "core_count": 0,
+            "regular_count": 0,
+            "aur_count": 0
+        }
+    }"#;
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp_file = std::env::temp_dir().join(format!("syspilot-compat-{nanos}/status.json"));
+    std::fs::create_dir_all(tmp_file.parent().unwrap()).unwrap();
+    std::fs::write(&tmp_file, raw_schema_1_0).unwrap();
+
+    let snapshot =
+        read_system_snapshot(&tmp_file).expect("Must parse Schema 1.0 status JSON with avail_gb");
+    assert_eq!(snapshot.status, "FLIGHT_READY");
+    assert_eq!(snapshot.updates_total, 0);
+
+    let parsed: StatusJson = serde_json::from_str(raw_schema_1_0).unwrap();
+    let root = parsed.disk.unwrap().root.unwrap();
+    assert_eq!(root.total_gb, 457.7);
+    assert_eq!(root.free_gb, 311.1); // mapped from avail_gb
+    assert_eq!(root.used_gb, 0.0); // defaulted
+    assert_eq!(root.used_pct, 29);
+
+    let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
+}

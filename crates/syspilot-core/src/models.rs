@@ -20,9 +20,13 @@ pub struct FailedServicesStatus {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DiskUsage {
+    #[serde(default)]
     pub total_gb: f32,
+    #[serde(default)]
     pub used_gb: f32,
+    #[serde(default, alias = "avail_gb")]
     pub free_gb: f32,
+    #[serde(default)]
     pub used_pct: u8,
 }
 
@@ -98,6 +102,7 @@ pub struct StatusJson {
     pub gaming_mode: bool,
     #[serde(default)]
     pub reboot_pending: bool,
+    #[serde(default)]
     pub updates: StatusUpdates,
     #[serde(default)]
     pub failed_services: Option<FailedServicesStatus>,
@@ -119,9 +124,13 @@ pub struct StatusJson {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct StatusUpdates {
+    #[serde(default)]
     pub total: u32,
+    #[serde(default)]
     pub core_count: u32,
+    #[serde(default)]
     pub regular_count: u32,
+    #[serde(default)]
     pub aur_count: u32,
 }
 

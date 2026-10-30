@@ -20,49 +20,57 @@ export component AppWindow inherits Window {
     callback prune_clicked();
 
     // Data properties
-    in property <string> overall_status: "FLIGHT_READY";
-    in property <string> overall_status_label: "FLIGHT READY ✔";
-    in property <color> overall_status_color: Theme.status-green;
-    in property <string> hardware_info: "Linux • 64-bit • Wayland";
+    in property <bool> has_error: false;
+    in property <string> error_message: "";
 
-    in property <string> kernel_status: "PASS ✔";
-    in property <string> kernel_details: "Kernel up to date";
+    in property <string> overall_status: "INITIALIZING";
+    in property <string> overall_status_label: "CONNECTING...";
+    in property <color> overall_status_color: Theme.text-muted;
+    in property <string> hardware_info: "Probing system environment...";
 
-    in property <string> root_status: "PASS ✔";
-    in property <string> root_details: "Clean";
+    in property <string> kernel_status: "--";
+    in property <color> kernel_color: Theme.text-muted;
+    in property <string> kernel_details: "Pending telemetry...";
 
-    in property <string> firewall_status: "PASS ✔";
-    in property <string> firewall_details: "Active (firewalld)";
+    in property <string> root_status: "--";
+    in property <color> root_color: Theme.text-muted;
+    in property <string> root_details: "Pending telemetry...";
 
-    in property <string> failed_services_status: "PASS ✔";
-    in property <color> failed_services_color: Theme.status-green;
-    in property <string> failed_services_details: "0 failed units";
+    in property <string> firewall_status: "--";
+    in property <color> firewall_color: Theme.text-muted;
+    in property <string> firewall_details: "Pending telemetry...";
 
-    in property <string> gpu_status: "PASS ✔";
-    in property <string> gpu_details: "NVIDIA GeForce GTX 970 (580xx)";
+    in property <string> failed_services_status: "--";
+    in property <color> failed_services_color: Theme.text-muted;
+    in property <string> failed_services_details: "Pending telemetry...";
 
-    in property <string> updates_core_text: "PASS ✔";
-    in property <color> updates_core_color: Theme.status-green;
-    in property <string> updates_core_details: "0 core updates";
+    in property <string> gpu_status: "--";
+    in property <color> gpu_color: Theme.text-muted;
+    in property <string> gpu_details: "Pending telemetry...";
 
-    in property <string> updates_repo_text: "PASS ✔";
-    in property <color> updates_repo_color: Theme.status-green;
-    in property <string> updates_repo_details: "0 package updates";
+    in property <string> updates_core_text: "--";
+    in property <color> updates_core_color: Theme.text-muted;
+    in property <string> updates_core_details: "Pending telemetry...";
 
-    in property <string> updates_aur_text: "PASS ✔";
-    in property <color> updates_aur_color: Theme.status-green;
-    in property <string> updates_aur_details: "0 AUR updates";
+    in property <string> updates_repo_text: "--";
+    in property <color> updates_repo_color: Theme.text-muted;
+    in property <string> updates_repo_details: "Pending telemetry...";
 
-    in property <string> cve_status: "PASS ✔";
-    in property <color> cve_color: Theme.status-green;
-    in property <string> cve_details: "No unpatched CVEs";
+    in property <string> updates_aur_text: "--";
+    in property <color> updates_aur_color: Theme.text-muted;
+    in property <string> updates_aur_details: "Pending telemetry...";
 
-    in property <string> firmware_status: "PASS ✔";
-    in property <color> firmware_color: Theme.status-green;
-    in property <string> firmware_details: "All hardware devices up to date";
+    in property <string> cve_status: "--";
+    in property <color> cve_color: Theme.text-muted;
+    in property <string> cve_details: "Pending telemetry...";
 
-    in property <string> orphans_status: "PASS ✔";
-    in property <string> orphans_details: "0 strict orphans";
+    in property <string> firmware_status: "--";
+    in property <color> firmware_color: Theme.text-muted;
+    in property <string> firmware_details: "Pending telemetry...";
+
+    in property <string> orphans_status: "--";
+    in property <color> orphans_color: Theme.text-muted;
+    in property <string> orphans_details: "Pending telemetry...";
 
     VerticalLayout {
         padding: 16px;
@@ -117,6 +125,31 @@ export component AppWindow inherits Window {
             }
         }
 
+        // Telemetry Error / Degraded Banner
+        if (root.has_error) : Rectangle {
+            background: Theme.status-amber.transparentize(88%);
+            border-color: Theme.status-amber;
+            border-width: 1px;
+            border-radius: Theme.radius-sm;
+            min-height: 32px;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                alignment: start;
+                spacing: 8px;
+
+                Text {
+                    text: "DATA UNAVAILABLE: " + root.error_message;
+                    color: Theme.status-amber;
+                    font-size: 11px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+
         // Main telemetry cards
         VerticalLayout {
             spacing: 10px;
@@ -127,16 +160,19 @@ export component AppWindow inherits Window {
                 GridRow {
                     name: "Kernel & Modules";
                     status-text: root.kernel_status;
+                    status-color: root.kernel_color;
                     details: root.kernel_details;
                 }
                 GridRow {
                     name: "Root Storage (/)";
                     status-text: root.root_status;
+                    status-color: root.root_color;
                     details: root.root_details;
                 }
                 GridRow {
                     name: "Host Firewall (Shield)";
                     status-text: root.firewall_status;
+                    status-color: root.firewall_color;
                     details: root.firewall_details;
                 }
                 GridRow {
@@ -148,6 +184,7 @@ export component AppWindow inherits Window {
                 GridRow {
                     name: "Hardware Platform & GPU";
                     status-text: root.gpu_status;
+                    status-color: root.gpu_color;
                     details: root.gpu_details;
                 }
             }
@@ -193,6 +230,7 @@ export component AppWindow inherits Window {
                 GridRow {
                     name: "Orphan Packages";
                     status-text: root.orphans_status;
+                    status-color: root.orphans_color;
                     details: root.orphans_details;
                 }
             }

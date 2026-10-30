@@ -405,6 +405,31 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-016: [APPROVED] Full Native Rust GUI & Triage Engine (Eliminating Python & PyQt6 Runtime via Slint)
+- **Status:** `[PROPOSED]` *(SRE Certified — Audit `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1`)*
+- **Data zgłoszenia:** 2026-10-30
+- **Źródło:** Long-Term Architectural Vision (v2.0.0 Milestone) & SRE Audit (Auditor Argon Pro)
+- **Docelowe Komponenty:**
+  - `Cargo.toml` (Cargo Workspace root)
+  - `crates/syspilot-core/` (Pure Rust headless triage library: pacman/AUR updates, CVE arch-audit, fwupd/NVRAM, firewall, statvfs, terminal runners)
+  - `crates/syspilot-tray/` (Ultralight 24/7 background sentinel daemon ~1.8 MB RSS, depending on `syspilot-core`, `ksni`, `zbus`)
+  - `crates/syspilot-gui/` (On-demand Slint GUI dashboard, compiling dual renderers `renderer-femtovg` + `renderer-software` fail-safe)
+  - `packaging/PKGBUILD` (Cutover to pure Rust build, dropping `python-pyqt6` dependency)
+- **Kontekst i Uzasadnienie:**
+  SysPilot v1.2.1 operates as a hybrid architecture: an ultralight 24/7 Rust Sentinel (~1.2 MB RAM) paired with an on-demand Python/PyQt6 GUI (~75 MB RAM, ~1.2s cold start, heavy runtime dependencies). The objective of v2.0.0 is total Python elimination, achieving a unified, ultra-fast native desktop suite consuming <15 MB RAM with instant (<50ms) window launches.
+- **SRE Mandatory Guardrails (from Audit):**
+  1. **Dual Renderer Architecture:** Slint must compile both `renderer-femtovg` (OpenGL GPU) and `renderer-software` (CPU rasterizer via `wl_shm`). Guarantees zero crashing during GPU context drops or DP MST mode changes on legacy NVIDIA Maxwell / KWin Wayland (`SLINT_BACKEND=software` fallback).
+  2. **Wayland Window Focus & Single Instance:** Tray activation under KWin Wayland uses XDG Activation Token (`xdg_activation_v1`) via D-Bus (`org.syspilot.Gui.ActivateWindow(token)`) preventing taskbar yellow-flash focus loss.
+  3. **Strict Crate Isolation:** Slint GUI code is strictly isolated in `crates/syspilot-gui`. The 24/7 daemon `crates/syspilot-tray` depends only on `syspilot-core` to guarantee micro-sized background memory footprint.
+  4. **Universalism Invariant:** Zero hardcoded machine identifiers in `.slint` templates; Copilot tab remains generic `SysPilot AI Copilot` configurable via `~/.config/syspilot/config.env`.
+- **Plan Etapów Wdrożenia (Phased Rollout):**
+  - **Faza 1 (Core & CLI):** Port `core/triage.py` to `crates/syspilot-core`. Headless unit tests (`cargo test -p syspilot-core`) and Schema 2.0 JSON parity. Python GUI runs undisturbed.
+  - **Faza 2 (Slint Dashboard MVP):** Implement Slint Dashboard tab. Validate side-by-side execution on KDE Plasma Wayland (~40 MB vs ~180 MB RSS).
+  - **Faza 3 (Maintenance & Copilot Parity):** Implement Maintenance terminal runners (`terminal.rs`), Copilot console, and XDG Activation IPC.
+  - **Faza 4 (Packaging Cutover):** Retire `gui/syspilot_gui.py` and `core/triage.py`. Update PKGBUILD to pure Rust release build.
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

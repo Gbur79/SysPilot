@@ -149,7 +149,85 @@ pub fn get_copilot_info() -> CopilotInfo {
         info.provider = "Default".into();
     }
 
+    if info.recipe.is_empty() {
+        if let Some(p) = resolve_goose_recipe() {
+            if let Some(name) = p.file_name() {
+                info.recipe = name.to_string_lossy().to_string();
+            }
+        }
+    }
+
     info
+}
+
+pub fn get_compact_health() -> String {
+    let status_path = crate::models::get_status_path();
+    match crate::models::read_system_snapshot(&status_path) {
+        Ok(s) => format!(
+            "status={};age_s={};errors={};warnings={};updates={};reboot_pending={}",
+            s.effective_status(),
+            s.age_seconds().unwrap_or(0),
+            s.errors,
+            s.warnings,
+            s.updates_total,
+            s.reboot_pending
+        ),
+        Err(_) => "cache=unavailable".to_string(),
+    }
+}
+
+pub fn resolve_goose_recipe() -> Option<PathBuf> {
+    // 1. Explicit environment override
+    if let Some(p) = std::env::var_os("SYSPILOT_GOOSE_RECIPE").map(PathBuf::from) {
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+
+    // 2. SysPilot user config (~/.config/syspilot/config.env)
+    let env_path = PathBuf::from(&home).join(".config/syspilot/config.env");
+    if let Ok(content) = fs::read_to_string(&env_path) {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(val) = trimmed.strip_prefix("SYSPILOT_GOOSE_RECIPE=") {
+                let val = val.trim().trim_matches('"').trim_matches('\'');
+                let p = PathBuf::from(val);
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    // 3. User recipe directory
+    for name in ["eos-admin.yaml", "copilot-admin.yaml"] {
+        let p = PathBuf::from(&home)
+            .join(".config/goose/recipes")
+            .join(name);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    // 4. System packaged recipe
+    let sys_recipe = PathBuf::from("/usr/share/syspilot/goose/recipes/copilot-admin.yaml");
+    if sys_recipe.is_file() {
+        return Some(sys_recipe);
+    }
+
+    // 5. Development project root
+    if let Ok(current) = std::env::current_exe() {
+        for ancestor in current.ancestors().take(5) {
+            let candidate = ancestor.join("packaging/goose/recipes/copilot-admin.yaml");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
 }
 
 pub fn execute_copilot_query(query: &str) -> Result<String, String> {
@@ -188,14 +266,22 @@ pub fn execute_copilot_query(query: &str) -> Result<String, String> {
         return Err("Goose CLI is not installed or not in PATH. Install Goose or configure SYSPILOT_COPILOT_CMD in ~/.config/syspilot/config.env".to_string());
     }
 
-    // Run goose with text query
+    // Run goose with text query or recipe
     let mut cmd = Command::new("goose");
-    cmd.args(["run", "--text", trimmed]);
+    cmd.arg("run");
 
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let recipe_path = PathBuf::from(&home).join(".config/goose/recipes/eos-admin.yaml");
-    if recipe_path.is_file() {
+    if let Some(recipe_path) = resolve_goose_recipe() {
+        let health = get_compact_health();
+        let pwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".into());
+
         cmd.args(["--recipe", recipe_path.to_str().unwrap()]);
+        cmd.args(["--params", &format!("user_query={trimmed}")]);
+        cmd.args(["--params", &format!("health_context={health}")]);
+        cmd.args(["--params", &format!("working_directory={pwd}")]);
+    } else {
+        cmd.args(["--text", trimmed]);
     }
 
     cmd.env("GOOSE_MODE", "approve");

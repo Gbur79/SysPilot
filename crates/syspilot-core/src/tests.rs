@@ -377,3 +377,52 @@ fn test_copilot_info_parser() {
     assert!(err.is_err());
     assert_eq!(err.unwrap_err(), "Query cannot be empty.");
 }
+
+#[test]
+fn test_terminal_custom_fallback() {
+    use crate::terminal::build_terminal;
+    use std::path::Path;
+
+    // Must not panic on unknown / custom terminals
+    let cmd = build_terminal(
+        "wezterm",
+        Path::new("/usr/bin/wezterm"),
+        Path::new("/usr/bin/true"),
+        &["--test"],
+        "Test Title",
+    );
+    assert_eq!(cmd.get_program(), "/usr/bin/wezterm");
+
+    let cmd_path = build_terminal(
+        "/usr/local/bin/urxvt",
+        Path::new("/usr/local/bin/urxvt"),
+        Path::new("/usr/bin/true"),
+        &[],
+        "Urxvt Title",
+    );
+    assert_eq!(cmd_path.get_program(), "/usr/local/bin/urxvt");
+}
+
+#[test]
+fn test_goose_recipe_resolution() {
+    use crate::copilot::{get_compact_health, resolve_goose_recipe};
+    use std::path::PathBuf;
+
+    let health = get_compact_health();
+    assert!(health.contains("status=") || health == "cache=unavailable");
+
+    // Test with explicit SYSPILOT_GOOSE_RECIPE
+    let dummy_recipe = std::env::temp_dir().join("syspilot-test-recipe.yaml");
+    std::fs::write(&dummy_recipe, "# test recipe").unwrap();
+
+    unsafe {
+        std::env::set_var("SYSPILOT_GOOSE_RECIPE", &dummy_recipe);
+    }
+    let resolved = resolve_goose_recipe();
+    assert_eq!(resolved, Some(PathBuf::from(&dummy_recipe)));
+
+    unsafe {
+        std::env::remove_var("SYSPILOT_GOOSE_RECIPE");
+    }
+    let _ = std::fs::remove_file(dummy_recipe);
+}

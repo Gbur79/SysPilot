@@ -41,6 +41,12 @@ pub fn resolve_syspilot() -> Option<PathBuf> {
         if let Some(parent) = current.parent() {
             candidates.push(parent.join("syspilot"));
         }
+        for ancestor in current.ancestors().take(5) {
+            let candidate = ancestor.join("bin/syspilot");
+            if is_executable(&candidate) {
+                candidates.push(candidate);
+            }
+        }
     }
     candidates.push(PathBuf::from("/usr/bin/syspilot"));
     candidates.push(PathBuf::from("/usr/local/bin/syspilot"));
@@ -94,7 +100,7 @@ fn reaper() -> &'static mpsc::SyncSender<Child> {
     })
 }
 
-fn build_terminal(
+pub fn build_terminal(
     name: &str,
     terminal: &Path,
     executable: &Path,
@@ -102,7 +108,12 @@ fn build_terminal(
     title: &str,
 ) -> Command {
     let mut command = Command::new(terminal);
-    match name {
+    let stem = Path::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(name);
+
+    match stem {
         "konsole" => {
             command
                 .args(["--nofork", "-p"])
@@ -127,7 +138,10 @@ fn build_terminal(
         "xterm" => {
             command.args(["-T", title, "-e"]);
         }
-        _ => unreachable!(),
+        _ => {
+            // Universal fallback for custom terminals (wezterm, urxvt, terminator, etc.)
+            command.args(["--title", title, "-e"]);
+        }
     }
     command
         .args(["/usr/bin/bash", "-c", WRAPPER, "syspilot-runner"])

@@ -266,7 +266,21 @@ fn update_ui_from_error(ui: &AppWindow, err: &str) {
     ui.set_orphans_details("Telemetry unavailable".into());
 }
 
+static COPILOT_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn trigger_copilot_query(ui_weak: slint::Weak<AppWindow>, query: String) {
+    if COPILOT_IN_FLIGHT
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        return;
+    }
+
     if let Some(ui) = ui_weak.upgrade() {
         ui.set_copilot_running(true);
         ui.set_copilot_console_text(
@@ -280,6 +294,7 @@ fn trigger_copilot_query(ui_weak: slint::Weak<AppWindow>, query: String) {
     std::thread::spawn(move || {
         let result = syspilot_core::execute_copilot_query(&query);
         let _ = slint::invoke_from_event_loop(move || {
+            COPILOT_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_copilot_running(false);
                 match result {

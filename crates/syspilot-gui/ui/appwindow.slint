@@ -491,25 +491,41 @@ export component AppWindow inherits Window {
                     ActionButton {
                         text: "⚡ FAF Client Repair";
                         action-color: Theme.status-cyan;
-                        clicked => { root.copilot_playbook_clicked("faf"); }
+                        clicked => {
+                            if (!root.copilot_running) {
+                                root.copilot_playbook_clicked("faf");
+                            }
+                        }
                     }
 
                     ActionButton {
                         text: "🎮 Steam / Proton Fix";
                         action-color: Theme.status-purple;
-                        clicked => { root.copilot_playbook_clicked("proton"); }
+                        clicked => {
+                            if (!root.copilot_running) {
+                                root.copilot_playbook_clicked("proton");
+                            }
+                        }
                     }
 
                     ActionButton {
                         text: "🔧 Reconcile .pacnew";
                         action-color: Theme.status-amber;
-                        clicked => { root.copilot_playbook_clicked("pacnew"); }
+                        clicked => {
+                            if (!root.copilot_running) {
+                                root.copilot_playbook_clicked("pacnew");
+                            }
+                        }
                     }
 
                     ActionButton {
                         text: "🔊 PipeWire Audio Fix";
                         action-color: Theme.status-green;
-                        clicked => { root.copilot_playbook_clicked("audio"); }
+                        clicked => {
+                            if (!root.copilot_running) {
+                                root.copilot_playbook_clicked("audio");
+                            }
+                        }
                     }
                 }
             }

@@ -39,7 +39,7 @@ pub fn is_core_package(name: &str) -> bool {
         )
 }
 
-fn find_executable(name: &str) -> Option<PathBuf> {
+pub fn find_executable(name: &str) -> Option<PathBuf> {
     for dir in ["/usr/bin", "/usr/local/bin"] {
         let p = Path::new(dir).join(name);
         if p.is_file() {

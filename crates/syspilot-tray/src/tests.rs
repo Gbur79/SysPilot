@@ -309,14 +309,8 @@ fn test_security_cve_escalation_and_telemetry() {
     assert_eq!(snapshot.effective_status(), "PRE_FLIGHT_ATTENTION");
 
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let mut tray = crate::tray::SysPilotTray::new(
-        snapshot,
-        SentinelStatus::default(),
-        None,
-        false,
-        None,
-        tx,
-    );
+    let mut tray =
+        crate::tray::SysPilotTray::new(snapshot, SentinelStatus::default(), None, false, None, tx);
     tray.snapshot.cache_stale = false;
 
     // High risk CVE triggers warning icon and attention status

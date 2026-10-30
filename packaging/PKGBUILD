@@ -28,8 +28,8 @@ source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 build() {
-    cd "$srcdir/$pkgname-$pkgver/rust-tray"
-    cargo build --release --locked
+    cd "$srcdir/$pkgname-$pkgver"
+    cargo build --release --locked -p syspilot-tray
 }
 
 package() {
@@ -41,7 +41,7 @@ package() {
     install -Dm755 bin/syspilot-faf-repair "$pkgdir/usr/lib/$pkgname/bin/syspilot-faf-repair"
     install -Dm755 bin/syspilot-sentinel "$pkgdir/usr/lib/$pkgname/bin/syspilot-sentinel"
     install -Dm755 bin/syspilot "$pkgdir/usr/bin/syspilot"
-    install -Dm755 rust-tray/target/release/syspilot-tray "$pkgdir/usr/bin/syspilot-tray"
+    install -Dm755 target/release/syspilot-tray "$pkgdir/usr/bin/syspilot-tray"
 
     # Install desktop entry
     install -Dm644 autostart/syspilot.desktop "$pkgdir/etc/xdg/autostart/syspilot.desktop"

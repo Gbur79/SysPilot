@@ -6,25 +6,34 @@ IFS=$'\n\t'
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 project_root=$(cd -- "$script_dir/.." && pwd -P)
-crate="$project_root/rust-tray"
+
+if [[ -f "$project_root/Cargo.toml" ]]; then
+    target_dir="$project_root"
+elif [[ -d "$project_root/crates/syspilot-tray" ]]; then
+    target_dir="$project_root/crates/syspilot-tray"
+elif [[ -d "$project_root/rust-tray" ]]; then
+    target_dir="$project_root/rust-tray"
+else
+    target_dir="$project_root"
+fi
 
 quiet=0
 if [[ "${1:-}" == "-q" || "${1:-}" == "--quiet" ]]; then
     quiet=1
 fi
 
-if [[ ! -d "$crate" ]]; then
+if [[ ! -d "$target_dir" || (! -f "$target_dir/Cargo.toml" && ! -d "$target_dir/crates") ]]; then
     if (( quiet )); then
-        echo "RUST_VERIFY: FAIL | TESTS: 0/0 | CLIPPY: SKIP | FMT: SKIP | TARGET: syspilot-tray"
-        echo "DIAG_1: STEP=init;EXIT=1;TARGET=$crate"
+        echo "RUST_VERIFY: FAIL | TESTS: 0/0 | CLIPPY: SKIP | FMT: SKIP | TARGET: syspilot-workspace"
+        echo "DIAG_1: STEP=init;EXIT=1;TARGET=$target_dir"
         echo "DIAG_2: SUMMARY=crate directory not found"
     else
-        echo "Error: Crate directory '$crate' not found." >&2
+        echo "Error: Target directory '$target_dir' not found or invalid." >&2
     fi
     exit 1
 fi
 
-cd -- "$crate"
+cd -- "$target_dir"
 
 # 1. Formatting
 fmt_out=""
@@ -71,7 +80,7 @@ if ! test_out=$(cargo test --locked 2>&1); then
     exit 1
 fi
 
-test_count=$(echo "$test_out" | grep -oE '[0-9]+ passed' | awk '{print $1}' | tail -n 1)
+test_count=$(echo "$test_out" | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
 test_count=${test_count:-0}
 
 if (( quiet )); then

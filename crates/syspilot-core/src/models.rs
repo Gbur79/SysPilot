@@ -1,102 +1,99 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const MAX_STATUS_BYTES: u64 = 1024 * 1024;
-const SUPPORTED_SCHEMA_MAJOR: &str = "1";
+pub const MAX_STATUS_BYTES: u64 = 1024 * 1024;
+pub const SUPPORTED_SCHEMA_MAJOR: &str = "1";
 pub const STALE_AFTER_SECS: u64 = 6 * 60 * 60;
 
-#[derive(Debug, Deserialize)]
-struct StatusJson {
-    schema_version: String,
-    status: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusJson {
+    pub schema_version: String,
+    pub status: String,
     #[serde(default)]
-    gaming_mode: bool,
+    pub gaming_mode: bool,
     #[serde(default)]
-    reboot_pending: bool,
-    updates: StatusUpdates,
+    pub reboot_pending: bool,
+    pub updates: StatusUpdates,
     #[serde(default)]
-    sys_health: Option<SysHealth>,
+    pub sys_health: Option<SysHealth>,
     #[serde(default)]
-    security: Option<StatusSecurity>,
+    pub security: Option<StatusSecurity>,
     #[serde(default)]
-    firmware: Option<StatusFirmware>,
+    pub firmware: Option<StatusFirmware>,
     #[serde(default)]
-    firewall: Option<StatusFirewall>,
+    pub firewall: Option<StatusFirewall>,
 }
 
-#[derive(Debug, Deserialize)]
-struct StatusUpdates {
-    total: u32,
-    core_count: u32,
-    regular_count: u32,
-    aur_count: u32,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusUpdates {
+    pub total: u32,
+    pub core_count: u32,
+    pub regular_count: u32,
+    pub aur_count: u32,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Default, Deserialize)]
-struct StatusSecurity {
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct StatusSecurity {
     #[serde(default)]
-    available: bool,
+    pub available: bool,
     #[serde(default)]
-    vulnerabilities_total: u32,
+    pub vulnerabilities_total: u32,
     #[serde(default)]
-    high_risk_count: u32,
+    pub high_risk_count: u32,
     #[serde(default)]
-    packages: Vec<String>,
+    pub packages: Vec<String>,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Default, Deserialize)]
-struct StatusFirmware {
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct StatusFirmware {
     #[serde(default)]
-    available: bool,
+    pub available: bool,
     #[serde(default)]
-    updates_count: u32,
+    pub updates_count: u32,
     #[serde(default)]
-    devices_monitored: u32,
+    pub devices_monitored: u32,
     #[serde(default)]
-    pending_devices: Vec<String>,
+    pub pending_devices: Vec<String>,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Default, Deserialize)]
-struct StatusFirewall {
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct StatusFirewall {
     #[serde(default)]
-    available: bool,
+    pub available: bool,
     #[serde(default)]
-    active: bool,
+    pub active: bool,
     #[serde(default)]
-    backend: String,
+    pub backend: String,
     #[serde(default)]
-    details: String,
+    pub details: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct SysHealth {
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct SysHealth {
     #[serde(default)]
-    available: bool,
+    pub available: bool,
     #[serde(default)]
-    errors: u32,
+    pub errors: u32,
     #[serde(default)]
-    warnings: u32,
+    pub warnings: u32,
     #[serde(default)]
-    environment: Option<SysHealthEnvironment>,
+    pub environment: Option<SysHealthEnvironment>,
     #[serde(default)]
-    gaming: Option<SysHealthGaming>,
+    pub gaming: Option<SysHealthGaming>,
 }
 
-#[derive(Debug, Deserialize)]
-struct SysHealthEnvironment {
-    os: Option<String>,
-    kernel: Option<String>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SysHealthEnvironment {
+    pub os: Option<String>,
+    pub kernel: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct SysHealthGaming {
-    detected: Option<bool>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SysHealthGaming {
+    pub detected: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -182,7 +179,7 @@ impl SystemSnapshot {
     }
 }
 
-fn state_base() -> PathBuf {
+pub fn state_base() -> PathBuf {
     std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
@@ -203,7 +200,7 @@ pub fn get_status_path() -> PathBuf {
     }
 }
 
-fn valid_schema(schema: &str) -> bool {
+pub fn valid_schema(schema: &str) -> bool {
     let mut components = schema.split('.');
     matches!(
         (components.next(), components.next(), components.next()),
@@ -212,7 +209,7 @@ fn valid_schema(schema: &str) -> bool {
     )
 }
 
-fn is_stale(modified: Option<SystemTime>) -> bool {
+pub fn is_stale(modified: Option<SystemTime>) -> bool {
     match modified.and_then(|time| SystemTime::now().duration_since(time).ok()) {
         Some(age) => age.as_secs() > STALE_AFTER_SECS,
         None => true,

@@ -45,7 +45,10 @@ pub fn check_pacman_lock() -> (bool, bool) {
             let comm_path = entry.path().join("comm");
             if let Ok(comm) = fs::read_to_string(comm_path) {
                 let comm = comm.trim();
-                if matches!(comm, "pacman" | "yay" | "paru" | "checkupdates" | "pamac-daemon") {
+                if matches!(
+                    comm,
+                    "pacman" | "yay" | "paru" | "checkupdates" | "pamac-daemon"
+                ) {
                     active = true;
                     break;
                 }

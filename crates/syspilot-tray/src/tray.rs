@@ -185,7 +185,10 @@ impl Tray for SysPilotTray {
         } else if self.snapshot.effective_status() == "ACTION_REQUIRED" {
             "SysPilot — action required".into()
         } else if self.snapshot.security_high_risk > 0 {
-            format!("SysPilot — {} high-risk security CVE(s) pending", self.snapshot.security_high_risk)
+            format!(
+                "SysPilot — {} high-risk security CVE(s) pending",
+                self.snapshot.security_high_risk
+            )
         } else if total_updates > 0 {
             format!("SysPilot — {total_updates} updates available ({core_updates} core)")
         } else if self.gamemode_active {
@@ -198,7 +201,11 @@ impl Tray for SysPilotTray {
             "Updates: {} ({} core)\nReboot: {}\nDisk (/): {}% used ({:.1}G free)",
             total_updates,
             core_updates,
-            if reboot_required { "REQUIRED ⚠" } else { "clean" },
+            if reboot_required {
+                "REQUIRED ⚠"
+            } else {
+                "clean"
+            },
             self.sentinels.root_used_pct,
             self.sentinels.root_avail_gb,
         );

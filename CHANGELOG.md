@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0-alpha.1] - 2026-10-30
 
+### Added / Phase 4: Packaging Cutover & Legacy Python Retirement (`0aae6c6` ➔ `346390d`)
+- **Total Python Runtime Emancipation**:
+  - Retired 3,802 lines of legacy Python code: `core/triage.py`, `core/copilot_config.py`, `gui/syspilot_gui.py`, `bin/syspilot-sentinel`, `systemd/syspilot-sentinel.service`, `systemd/syspilot-sentinel.timer`.
+  - Upgraded `packaging/PKGBUILD` to v2.0.0 pure Rust release build (`-p syspilot-tray -p syspilot-gui`).
+  - Purged runtime dependencies: dropped `python` and `python-pyqt6`; added minimal runtime graphics libraries `fontconfig`, `freetype2`, and `hicolor-icon-theme`.
+- **Desktop Launcher & XDG Autostart Decoupling**:
+  - Implemented dedicated application launcher `packaging/syspilot.desktop` (`Exec=syspilot --gui`) for desktop application menus (KDE Kickoff, GNOME Dash, rofi/wofi).
+  - Preserved `autostart/syspilot.desktop` (`Exec=syspilot --tray`) strictly for background tray autostart.
+- **Deterministic FAF Runner & Repair Integration**:
+  - Added CLI fast-path routing `--faf-repair|--faf-setup` in `bin/syspilot` resolving project tree, `/usr/lib/syspilot/bin`, and PATH.
+  - Installed `bin/syspilot-faf-repair` directly to `/usr/bin/syspilot-faf-repair`.
+- **SRE Post-Implementation Audit (`SRE-AUDIT-20261030-PATCH-016-PHASE-4-POST`) by Auditor Argon**:
+  - Audited commit `0aae6c6`; rejected initial packaging due to FM-1 (FAF isolation), FM-2 (desktop entry conflation), FM-3 (missing `sys-health` in optdepends), FM-4 (ShellCheck SC1007), and FM-5 (README drift).
+  - Designed and certified resilient drop-in blueprint in commit `346390d`.
+  - Added `'sys-health: canonical system diagnostics and maintenance engine'` to `PKGBUILD` `optdepends`.
+  - Formal certification: **CERTIFIED [Argon]** for `346390d`. Test suite: 31/31 unit tests PASS, Clippy clean, fmt clean.
+
 ### Added / Multi-Agent CLI Adapter & Hardened Flag Negotiation (`b85dbf3`)
 - **Discrete Token Parsing & Flag Adaptation (`crates/syspilot-core/src/copilot.rs`)**:
   - Implemented token-aware flag negotiation converting `-i` / `--prompt-interactive` to `-p` (`--print`) for non-interactive execution without corrupting agent names (`sys-info`) or colliding with flags like `--project` or `--profile`.

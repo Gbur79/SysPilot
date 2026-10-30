@@ -16,12 +16,13 @@
 | SYS-002 | Decoupling roadmap | `DECOUPLING_PLAN.md` | HARDENED [Legacy] | Medium | Targeted roadmap review before engine changes |
 | SYS-003 | Runtime staging tree | `/home/gbur/Projects/sysPilot_Karol` | HARDENED [Legacy] | High | Regression suite and explicit promotion gate |
 | SYS-004 | Legacy Rust SNI tray | `rust-tray/` | RETIRED [Argon] | Low | Replaced by `crates/syspilot-tray/` |
-| SYS-005 | PyQt6 GUI | `gui/` | LEGACY [Sol] | Medium | GUI worker timeout and structured-output fixtures |
+| SYS-005 | PyQt6 GUI | `gui/` | RETIRED [Argon] | Medium | Replaced by `crates/syspilot-gui/` (Slint 1.18) |
 | SYS-006 | CLI entrypoint router | `bin/syspilot` | CERTIFIED [Argon] | High | POSIX array-safe multi-agent router with fallback to native binary |
-| SYS-007 | Legacy Triage engine | `core/triage.py` | LEGACY [Sol] | High | Replaced by `crates/syspilot-core/` |
+| SYS-007 | Legacy Triage engine | `core/triage.py` | RETIRED [Argon] | High | Replaced by `crates/syspilot-core/` |
 | SYS-008 | Pure Rust Triage Core | `crates/syspilot-core/` | CERTIFIED [Argon] | High | Resilient Serde Schema 1.0/2.0, Goose & AGY multi-agent CLI adapter, token safety, 31 tests |
 | SYS-009 | Rust StatusNotifierItem Tray | `crates/syspilot-tray/` | CERTIFIED [Argon] | Medium | Zero-waste sentinel ~5.7 MB RSS, zbus 5.19, ksni |
 | SYS-010 | Slint Native Desktop GUI | `crates/syspilot-gui/` | CERTIFIED [Argon] | High | 3-tab cockpit, Maintenance suite, AI Copilot, SRE playbooks, dual renderers |
+| SYS-011 | Packaging & XDG Integration | `packaging/` | CERTIFIED [Argon] | High | Pure Rust PKGBUILD v2.0.0, dedicated GUI & tray desktop entries, optdepends |
 | GOV-001 | Clerical fast-path | matrix registry + `project_inbox.py` | CERTIFIED [Sol] | Medium | `validate_project_inbox.py`: PASS 12/12 |
 
 ---

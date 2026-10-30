@@ -406,7 +406,7 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 ---
 
 ### PATCH-016: [APPROVED] Full Native Rust GUI & Triage Engine (Eliminating Python & PyQt6 Runtime via Slint)
-- **Status:** `[IN PROGRESS - FAZA 4]` *(SRE Certified — Audit `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1`, `SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST`, `SRE-AUDIT-20261030-PATCH-016-PHASE-3-POST`, `SRE-AUDIT-20261030-PATCH-016-MULTI-AGENT-POST`)*
+- **Status:** `[COMPLETED]` *(SRE Certified — Audit `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1`, `SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST`, `SRE-AUDIT-20261030-PATCH-016-PHASE-3-POST`, `SRE-AUDIT-20261030-PATCH-016-MULTI-AGENT-POST`, `SRE-AUDIT-20261030-PATCH-016-PHASE-4-POST`)*
 - **Data zgłoszenia:** 2026-10-30
 - **Źródło:** Long-Term Architectural Vision (v2.0.0 Milestone) & SRE Audit (Auditor Argon Pro)
 - **Audyty SRE:**
@@ -414,6 +414,7 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
   - `SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST` (Auditor Argon): Audyt powdrożeniowy Faz 1 & 2. Triage rozbieżności amber-warning w trayu vs green GUI. Wdrożenie resilient Serde (`#[serde(default)]`, alias `avail_gb`), fail-closed UI w Slint (`has_error`, `error_message`, neutral `--`), hermetyczny test kompatybilności Schema 1.0/2.0 (`test_deserialize_schema_1_0_disk_compatibility`). Testy: 24/24 PASS.
   - `SRE-AUDIT-20261030-PATCH-016-PHASE-3-POST` (Auditor Argon): Audyt powdrożeniowy Fazy 3 (Maintenance & Copilot). Wykrycie i naprawa FM-1 (wzajemne wykluczanie flag `--text` i `--recipe` w Goose CLI 1.57+ oraz wstrzykiwanie parametrów `user_query`, `health_context`, `working_directory`), FM-2 (likwidacja paniki `unreachable!()` w `build_terminal` dla niestandardowych terminali z universal fallbackiem), FM-3 (dynamiczna kaskada rezolucji receptury Goose), FM-4 (debouncing przycisków playbooków w Slint i `AtomicBool` w Rust). Testy: 28/28 PASS.
   - `SRE-AUDIT-20261030-PATCH-016-MULTI-AGENT-POST` (Auditor Argon): Audyt adaptera CLI agentów AI (`8a28b73` ➔ `b85dbf3`). Wykrycie 4 wad: FM-A (uszkadzanie flag `-i` w substringach nazw agentów i flag typu `--interactive`), FM-B (fałszywa kolizja substringu `-p` z `--project`/`--profile`), FM-C (POSIX word-splitting w `bin/syspilot`), FM-D (nadpisywanie zmiennych środowiskowych procesu plikiem z dysku). Blueprint wdrożył dyskretny token parser, tablicową ewaluację w bashu i testy higieny flag (`test_agy_command_identification`, `test_agy_flag_adaptation_hygiene`). Decyzja: CERTIFIED [Argon] dla `b85dbf3`. Testy: 31/31 PASS.
+  - `SRE-AUDIT-20261030-PATCH-016-PHASE-4-POST` (Auditor Argon): Audyt wdrożenia Fazy 4 (Packaging Cutover & Python Retirement `0aae6c6` ➔ `346390d`). Wykrycie 5 wad w commitcie `0aae6c6`: FM-1 (izolacja `syspilot-faf-repair` w `/usr/lib/syspilot/bin` poza `$PATH` i brak opcji `--faf-repair` w routerze), FM-2 (instalacja launchera tacki w `/usr/share/applications/syspilot.desktop` zamiast kokpitu GUI), FM-3 (brak `sys-health` w `optdepends`), FM-4 (ostrzeżenie SC1007 w `bin/syspilot`), FM-5 (dryf dokumentacji w `README.md`). Decyzja: REJECTED [Argon] dla `0aae6c6`. Wdrożenie blueprintu w commitcie `346390d`: dodanie funkcji `launch_faf_repair()`, rozdzielenie wpisów `.desktop` (`packaging/syspilot.desktop` z `Exec=syspilot --gui`), dodanie `sys-health` do `optdepends`, eliminacja ostrzeżeń linera i aktualizacja `README.md`. Ostateczna decyzja: **CERTIFIED [Argon]** dla `346390d`.
 - **Docelowe Komponenty:**
   - `Cargo.toml` (Cargo Workspace root)
   - `crates/syspilot-core/` (Pure Rust headless triage library: pacman/AUR updates, CVE arch-audit, fwupd/NVRAM, firewall, statvfs, terminal runners)
@@ -431,7 +432,7 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
   - **Faza 1 (Core & CLI):** [DONE] Port `core/triage.py` to `crates/syspilot-core`. Headless unit tests (`cargo test -p syspilot-core`) and Schema 2.0 JSON parity.
   - **Faza 2 (Slint Dashboard MVP):** [DONE] Implement Slint Dashboard tab. Validate execution on KDE Plasma Wayland (14 MB standalone binary). Post-implementation SRE audit verified & resolved.
   - **Faza 3 (Maintenance & Copilot Parity):** [DONE] Implement Maintenance terminal runners (`terminal.rs`), Copilot console, navigation tabs, and SRE playbook triggers. Post-implementation SRE audit verified & resolved.
-  - **Faza 4 (Packaging Cutover):** [PENDING] Retire `gui/syspilot_gui.py` and `core/triage.py`. Update PKGBUILD to pure Rust release build.
+  - **Faza 4 (Packaging Cutover):** [DONE] Retire `gui/syspilot_gui.py` and `core/triage.py`. Update PKGBUILD to pure Rust release build. SRE blueprint hardened and certified in `346390d`.
 
 ---
 

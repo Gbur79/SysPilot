@@ -449,3 +449,67 @@ fn test_agy_copilot_detection() {
         std::env::remove_var("COPILOT_LABEL");
     }
 }
+
+#[test]
+fn test_agy_command_identification() {
+    use crate::copilot::is_agy_command;
+
+    assert!(is_agy_command("agy --agent eos-admin"));
+    assert!(is_agy_command("/usr/bin/agy -i"));
+    assert!(is_agy_command("/home/user/.local/bin/agy"));
+    assert!(is_agy_command("env FOO=1 agy -i"));
+    assert!(!is_agy_command("bagy --agent foo"));
+    assert!(!is_agy_command("pedagogy --mode learn"));
+    assert!(!is_agy_command("strategy-tool --run"));
+    assert!(!is_agy_command("goose run --text"));
+}
+
+#[test]
+fn test_agy_flag_adaptation_hygiene() {
+    use crate::copilot::adapt_agy_cmd_noninteractive;
+
+    // 1. Standalone -i replaced with -p
+    assert_eq!(
+        adapt_agy_cmd_noninteractive("agy --agent eos-admin -i"),
+        "agy --agent eos-admin -p"
+    );
+
+    // 2. Standalone --prompt-interactive replaced with -p
+    assert_eq!(
+        adapt_agy_cmd_noninteractive("agy --prompt-interactive"),
+        "agy -p"
+    );
+
+    // 3. Substring with '-i' in flag/agent name NOT corrupted
+    assert_eq!(
+        adapt_agy_cmd_noninteractive("agy --agent sys-info"),
+        "agy --agent sys-info -p"
+    );
+    assert_eq!(
+        adapt_agy_cmd_noninteractive("agy --interactive"),
+        "agy --interactive -p"
+    );
+    assert_eq!(
+        adapt_agy_cmd_noninteractive("agy --stdin"),
+        "agy --stdin -p"
+    );
+
+    // 4. Substring with '-p' in long flags NOT treated as -p print mode
+    assert_eq!(
+        adapt_agy_cmd_noninteractive("agy --project eos"),
+        "agy --project eos -p"
+    );
+    assert_eq!(
+        adapt_agy_cmd_noninteractive("agy --profile dev"),
+        "agy --profile dev -p"
+    );
+    assert_eq!(
+        adapt_agy_cmd_noninteractive("agy --plugins /opt/plugins"),
+        "agy --plugins /opt/plugins -p"
+    );
+
+    // 5. Existing print flags preserved untouched
+    assert_eq!(adapt_agy_cmd_noninteractive("agy -p"), "agy -p");
+    assert_eq!(adapt_agy_cmd_noninteractive("agy --print"), "agy --print");
+    assert_eq!(adapt_agy_cmd_noninteractive("agy --prompt"), "agy --prompt");
+}

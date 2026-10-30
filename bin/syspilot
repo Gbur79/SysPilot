@@ -184,11 +184,24 @@ copilot() {
     [[ -n $prompt ]] || die "--copilot requires a question"
 
     if [[ -n ${SYSPILOT_COPILOT_CMD:-} ]]; then
-        if [[ $SYSPILOT_COPILOT_CMD == *"agy"* ]] && [[ $SYSPILOT_COPILOT_CMD != *"-i"* ]] && [[ $SYSPILOT_COPILOT_CMD != *"-p"* ]]; then
-            terminal_exec $SYSPILOT_COPILOT_CMD -i "$prompt"
-        else
-            terminal_exec $SYSPILOT_COPILOT_CMD "$@"
+        local -a custom_cmd
+        eval "custom_cmd=($SYSPILOT_COPILOT_CMD)"
+        local is_agy=0 has_mode=0 arg
+        if [[ ${custom_cmd[0]:-} =~ (^|/)agy$ ]] || [[ $SYSPILOT_COPILOT_CMD =~ (^|[[:space:]/])agy([[:space:]]|$) ]]; then
+            is_agy=1
         fi
+        for arg in "${custom_cmd[@]}"; do
+            if [[ $arg == "-i" || $arg == "--prompt-interactive" || $arg == "-p" || $arg == "--print" || $arg == "--prompt" ]]; then
+                has_mode=1
+                break
+            fi
+        done
+        if (( is_agy && !has_mode )); then
+            custom_cmd+=(-i "$prompt")
+        else
+            custom_cmd+=("$prompt")
+        fi
+        terminal_exec "${custom_cmd[@]}"
         return
     fi
 

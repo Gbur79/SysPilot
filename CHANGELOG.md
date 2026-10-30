@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0-alpha.1] - 2026-10-30
 
+### Fixed / Slint Maintenance Action Grid & Typography Centering (`38de341`)
+- **Action Button Grid Standardization (`maintenance_card.slint`)**:
+  - Enforced a uniform `width: 175px` across all 7 action buttons in System Maintenance cards, replacing ragged, text-dependent button widths with an aligned right-hand action column.
+  - Set `min-height: 68px` on `MaintenanceCard` ensuring uniform card proportions.
+- **Pixel-Perfect Typography & Vertical Centering (`action_button.slint`, `status_badge.slint`, `appwindow.slint`)**:
+  - Standardized interactive buttons and HUD header badge to a shared `height: 32px`.
+  - Added explicit `vertical-alignment: center` and `horizontal-alignment: center` to `ActionButton`, `StatusBadge`, and the Copilot metadata header badge, eliminating upward text shift and optical baseline misalignment.
+  - SRE verification: `dev-tools/verify-rust.sh -q` ➔ 31/31 unit tests PASS, Clippy clean, fmt clean.
+
 ### Fixed / Slint Navigation Bar & Vertical Stretch Constraint (`9f96ab1`)
 - **Slint Layout Engine Optimization (`appwindow.slint`, `tab_button.slint`)**:
   - Enforced `vertical-stretch: 0` and fixed `height: 36px` on `TabButton` and `HorizontalLayout` navigation bar, as well as top HUD header and error banners.

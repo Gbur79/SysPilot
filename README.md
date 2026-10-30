@@ -1,7 +1,7 @@
 # ✈️ SysPilot
 
 > **The Token-Lean SRE Desktop Copilot & Sentinel for Arch Linux & Derivatives**  
-> *Ultra-lightweight 24/7 Rust Sentinel (~1.2 MB RAM) • Decoupled on-demand GUI • Zero token waste • Native D-Bus.*
+> *Ultra-lightweight 24/7 Rust Sentinel (~3.2 MB RAM) • Decoupled on-demand GUI • Zero token waste • Native D-Bus.*
 
 ---
 

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.1] - 2026-10-30
+
+### Fixed
+- **Post-Upgrade Tray State Desynchronization**:
+  - Fixed an issue where the tray icon remained an amber warning triangle (`dialog-warning` / `NeedsAttention`) after upgrades completed until the 3600s updater timer elapsed.
+  - Implemented `effective_updates(&self)` in `tray.rs` prioritizing clean `SystemSnapshot` state (`updates_total == 0`) over stale background polling cache.
+  - Model cache invalidation: reset internal `tray.updates = None` in `refresh()` whenever authoritative telemetry drops to zero updates.
+  - Re-evaluating updater hook: added pacman lock release transition detector (`pacman_unlocked`) in `sentinels_timer` spawning a non-blocking background check upon package manager exit.
+  - Added unit test `test_effective_updates_cache_invalidation` verifying state precedence across snapshot and background cache.
+
+---
+
 ## [1.1.0] - 2026-10-30
 
 ### Added

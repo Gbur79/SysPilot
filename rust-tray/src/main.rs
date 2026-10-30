@@ -64,7 +64,12 @@ async fn refresh(
 
             if changed {
                 handle
-                    .update(move |tray| tray.snapshot = snapshot)
+                    .update(move |tray| {
+                        tray.snapshot = snapshot;
+                        if tray.snapshot.updates_total == 0 {
+                            tray.updates = None;
+                        }
+                    })
                     .await
                     .is_some()
             } else {
@@ -233,15 +238,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ = sentinels_timer.tick() => {
                 let current_sentinels = sentinels::collect_sentinels();
+                let pacman_unlocked = sentinels_state.pacman_locked && !current_sentinels.pacman_locked;
                 if current_sentinels != sentinels_state {
                     sentinels_state = current_sentinels.clone();
+                    let update_sentinels = current_sentinels.clone();
                     if handle
-                        .update(move |tray| tray.sentinels = current_sentinels)
+                        .update(move |tray| tray.sentinels = update_sentinels)
                         .await
                         .is_none()
                     {
                         break;
                     }
+                }
+                if pacman_unlocked && !gamemode_active {
+                    let handle_clone = handle.clone();
+                    tokio::spawn(async move {
+                        if let Some(updates) = updater::run_full_update_check(false).await {
+                            let _ = handle_clone.update(move |tray| tray.updates = Some(updates)).await;
+                        }
+                    });
                 }
             }
             _ = updater_timer.tick() => {

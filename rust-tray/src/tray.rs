@@ -37,6 +37,20 @@ impl SysPilotTray {
         }
     }
 
+    pub fn effective_updates(&self) -> (u32, u32) {
+        if let Some(u) = &self.updates {
+            // If snapshot was refreshed to 0 (e.g. after upgrade),
+            // while internal cache holds older package count, authoritative state is clean (0).
+            if self.snapshot.updates_total == 0 && u.total() > 0 {
+                (0, 0)
+            } else {
+                (u.total(), u.core_count)
+            }
+        } else {
+            (self.snapshot.updates_total, self.snapshot.core_updates)
+        }
+    }
+
     fn action_gui(&self, label: &str) -> MenuItem<Self> {
         use ksni::menu::StandardItem;
         let executable = self.syspilot.clone();
@@ -95,11 +109,7 @@ impl Tray for SysPilotTray {
     }
 
     fn status(&self) -> Status {
-        let total_updates = self
-            .updates
-            .as_ref()
-            .map(|u| u.total())
-            .unwrap_or(self.snapshot.updates_total);
+        let (total_updates, _) = self.effective_updates();
 
         if self.sentinels.pacman_orphaned_lock
             || self.sentinels.reboot_pending
@@ -138,11 +148,7 @@ impl Tray for SysPilotTray {
         if self.sentinels.reboot_pending || self.snapshot.reboot_pending {
             return "dialog-warning".into();
         }
-        let total_updates = self
-            .updates
-            .as_ref()
-            .map(|u| u.total())
-            .unwrap_or(self.snapshot.updates_total);
+        let (total_updates, _) = self.effective_updates();
 
         if total_updates > 0 {
             return "dialog-warning".into();
@@ -161,11 +167,7 @@ impl Tray for SysPilotTray {
     }
 
     fn tool_tip(&self) -> ToolTip {
-        let (total_updates, core_updates) = if let Some(u) = &self.updates {
-            (u.total(), u.core_count)
-        } else {
-            (self.snapshot.updates_total, self.snapshot.core_updates)
-        };
+        let (total_updates, core_updates) = self.effective_updates();
 
         let reboot_required = self.sentinels.reboot_pending || self.snapshot.reboot_pending;
 
@@ -210,16 +212,7 @@ impl Tray for SysPilotTray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         use ksni::menu::StandardItem;
 
-        let total_updates = self
-            .updates
-            .as_ref()
-            .map(|u| u.total())
-            .unwrap_or(self.snapshot.updates_total);
-        let core_updates = self
-            .updates
-            .as_ref()
-            .map(|u| u.core_count)
-            .unwrap_or(self.snapshot.core_updates);
+        let (total_updates, core_updates) = self.effective_updates();
 
         let header = if self.sentinels.pacman_orphaned_lock {
             "CRITICAL — Pacman database locked (orphaned db.lck)".into()

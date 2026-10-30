@@ -210,3 +210,49 @@ fn test_collect_sentinels() {
     assert!(status.root_avail_gb > 0.0);
     assert!(status.root_used_pct <= 100);
 }
+
+#[test]
+fn test_effective_updates_cache_invalidation() {
+    use ksni::Tray;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let mut tray = crate::tray::SysPilotTray::new(
+        SystemSnapshot {
+            updates_total: 0,
+            core_updates: 0,
+            status: "ALL_CLEAR".into(),
+            cache_stale: false,
+            ..Default::default()
+        },
+        SentinelStatus::default(),
+        Some(UpdateSummary {
+            regular_count: 1,
+            ..Default::default()
+        }),
+        false,
+        None,
+        tx,
+    );
+
+    // 1. Snapshot says 0 updates -> effective_updates MUST return (0, 0) despite stale cache
+    assert_eq!(tray.effective_updates(), (0, 0));
+    assert_eq!(tray.icon_name(), "security-high");
+    assert_eq!(tray.status(), ksni::Status::Active);
+
+    // 2. Snapshot has updates and self.updates is None -> returns snapshot values
+    tray.snapshot.updates_total = 3;
+    tray.snapshot.core_updates = 1;
+    tray.updates = None;
+    assert_eq!(tray.effective_updates(), (3, 1));
+    assert_eq!(tray.icon_name(), "dialog-warning");
+    assert_eq!(tray.status(), ksni::Status::NeedsAttention);
+
+    // 3. Both have updates -> self.updates takes precedence
+    tray.updates = Some(UpdateSummary {
+        regular_count: 2,
+        core_count: 2,
+        aur_count: 1,
+        ..Default::default()
+    });
+    assert_eq!(tray.effective_updates(), (5, 2));
+}

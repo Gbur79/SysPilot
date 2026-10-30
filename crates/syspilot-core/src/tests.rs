@@ -426,3 +426,26 @@ fn test_goose_recipe_resolution() {
     }
     let _ = std::fs::remove_file(dummy_recipe);
 }
+
+#[test]
+fn test_agy_copilot_detection() {
+    use crate::copilot::get_copilot_info;
+
+    unsafe {
+        std::env::set_var("SYSPILOT_COPILOT_CMD", "agy --agent eos-admin");
+        std::env::set_var("COPILOT_LABEL", "Antigravity (eos-admin)");
+    }
+
+    let info = get_copilot_info();
+    assert_eq!(info.provider, "Antigravity CLI");
+    assert_eq!(info.model, "Antigravity (eos-admin)");
+    assert_eq!(
+        info.badge_label(),
+        "🤖 Antigravity (eos-admin) (Antigravity CLI)"
+    );
+
+    unsafe {
+        std::env::remove_var("SYSPILOT_COPILOT_CMD");
+        std::env::remove_var("COPILOT_LABEL");
+    }
+}

@@ -15,6 +15,8 @@ impl CopilotInfo {
     pub fn badge_label(&self) -> String {
         if !self.ready {
             "🤖 Copilot: Not Configured".to_string()
+        } else if self.provider == "Antigravity CLI" || self.provider == "Hermes Agent" {
+            format!("🤖 {} ({})", self.model, self.provider)
         } else if let Some(cmd) = &self.custom_cmd {
             format!("🤖 Custom: {cmd}")
         } else {
@@ -68,13 +70,19 @@ pub fn get_copilot_info() -> CopilotInfo {
                 if !val.is_empty() {
                     info.custom_cmd = Some(val.to_string());
                     info.ready = true;
-                    info.model = "Custom Command".into();
-                    info.provider = "Custom".into();
+                    if val.contains("agy") {
+                        info.provider = "Antigravity CLI".into();
+                        info.model = "AGY Agent".into();
+                    } else if val.contains("hermes") {
+                        info.provider = "Hermes Agent".into();
+                        info.model = "Hermes".into();
+                    } else {
+                        info.provider = "Custom".into();
+                        info.model = "Custom Command".into();
+                    }
                 }
-            } else if key == "COPILOT_LABEL" {
-                if !val.is_empty() {
-                    info.model = val.to_string();
-                }
+            } else if key == "COPILOT_LABEL" && !val.is_empty() {
+                info.model = val.to_string();
             } else if key == "SYSPILOT_GOOSE_RECIPE" && !val.is_empty() {
                 let recipe_path = Path::new(val);
                 if let Some(file_name) = recipe_path.file_name() {
@@ -83,6 +91,31 @@ pub fn get_copilot_info() -> CopilotInfo {
                     info.recipe = val.to_string();
                 }
             }
+        }
+    }
+
+    // 2. Process environment variables override config file
+    if let Ok(val) = std::env::var("SYSPILOT_COPILOT_CMD") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            info.custom_cmd = Some(trimmed.to_string());
+            info.ready = true;
+            if trimmed.contains("agy") {
+                info.provider = "Antigravity CLI".into();
+                info.model = "AGY Agent".into();
+            } else if trimmed.contains("hermes") {
+                info.provider = "Hermes Agent".into();
+                info.model = "Hermes".into();
+            } else {
+                info.provider = "Custom".into();
+                info.model = "Custom Command".into();
+            }
+        }
+    }
+    if let Ok(val) = std::env::var("COPILOT_LABEL") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            info.model = trimmed.to_string();
         }
     }
 
@@ -142,11 +175,18 @@ pub fn get_copilot_info() -> CopilotInfo {
         }
     }
 
-    // 3. Fallback: check if goose command is in PATH
-    if !info.ready && crate::terminal::find_program("goose").is_some() {
-        info.ready = true;
-        info.model = "Goose SRE".into();
-        info.provider = "Default".into();
+    // 3. Fallback: check if goose or agy command is in PATH
+    if !info.ready {
+        if crate::terminal::find_program("goose").is_some() {
+            info.ready = true;
+            info.model = "Goose SRE".into();
+            info.provider = "Default".into();
+        } else if crate::terminal::find_program("agy").is_some() {
+            info.ready = true;
+            info.model = "Antigravity".into();
+            info.provider = "Antigravity CLI".into();
+            info.custom_cmd = Some("agy".into());
+        }
     }
 
     if info.recipe.is_empty() {
@@ -239,8 +279,21 @@ pub fn execute_copilot_query(query: &str) -> Result<String, String> {
     let info = get_copilot_info();
 
     if let Some(cmd) = info.custom_cmd {
+        // Adapt interactive flags for non-interactive execution if agy is used
+        let effective_cmd = if cmd.contains("agy") {
+            if cmd.contains("-i") {
+                cmd.replace("-i", "-p")
+            } else if !cmd.contains("-p") && !cmd.contains("--print") {
+                format!("{cmd} -p")
+            } else {
+                cmd
+            }
+        } else {
+            cmd
+        };
+
         let output = Command::new("/usr/bin/bash")
-            .args(["-c", &format!("{cmd} \"$@\"", cmd = cmd), "--", trimmed])
+            .args(["-c", &format!("{effective_cmd} \"$@\""), "--", trimmed])
             .output()
             .map_err(|e| format!("Failed to execute custom Copilot command: {e}"))?;
 
@@ -261,9 +314,26 @@ pub fn execute_copilot_query(query: &str) -> Result<String, String> {
         });
     }
 
-    // Check if goose is available
+    // Check if goose is available, fallback to agy
     if crate::terminal::find_program("goose").is_none() {
-        return Err("Goose CLI is not installed or not in PATH. Install Goose or configure SYSPILOT_COPILOT_CMD in ~/.config/syspilot/config.env".to_string());
+        if crate::terminal::find_program("agy").is_some() {
+            let output = Command::new("agy")
+                .args(["-p", trimmed])
+                .output()
+                .map_err(|e| format!("Failed to execute agy CLI: {e}"))?;
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if !output.status.success() {
+                let err_msg = if !stderr.is_empty() { stderr } else { stdout };
+                return Err(err_msg);
+            }
+            return Ok(if stdout.is_empty() {
+                "Query completed successfully. (No stdout returned)".to_string()
+            } else {
+                stdout
+            });
+        }
+        return Err("Neither Goose CLI nor agy CLI found. Install Goose or configure SYSPILOT_COPILOT_CMD in ~/.config/syspilot/config.env".to_string());
     }
 
     // Run goose with text query or recipe

@@ -184,11 +184,21 @@ copilot() {
     [[ -n $prompt ]] || die "--copilot requires a question"
 
     if [[ -n ${SYSPILOT_COPILOT_CMD:-} ]]; then
-        terminal_exec $SYSPILOT_COPILOT_CMD "$@"
+        if [[ $SYSPILOT_COPILOT_CMD == *"agy"* ]] && [[ $SYSPILOT_COPILOT_CMD != *"-i"* ]] && [[ $SYSPILOT_COPILOT_CMD != *"-p"* ]]; then
+            terminal_exec $SYSPILOT_COPILOT_CMD -i "$prompt"
+        else
+            terminal_exec $SYSPILOT_COPILOT_CMD "$@"
+        fi
         return
     fi
 
-    have goose || die "Goose CLI is not installed"
+    if ! have goose; then
+        if have agy; then
+            terminal_exec agy -i "$prompt"
+            return
+        fi
+        die "Neither Goose CLI nor agy CLI found. Configure SYSPILOT_COPILOT_CMD in ~/.config/syspilot/config.env"
+    fi
 
     # Recipe Resolution:
     # 1. User config override: SYSPILOT_GOOSE_RECIPE

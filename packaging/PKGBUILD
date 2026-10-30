@@ -19,6 +19,7 @@ makedepends=(
     'cargo'
 )
 optdepends=(
+    'sys-health: canonical system diagnostics and maintenance engine'
     'arch-audit: for CVE vulnerability telemetry'
     'fwupd: for hardware firmware update checks'
     'goose-cli: for autonomous AI diagnostics'
@@ -43,11 +44,12 @@ package() {
     install -Dm755 target/release/syspilot-tray "$pkgdir/usr/bin/syspilot-tray"
     install -Dm755 target/release/syspilot-gui "$pkgdir/usr/bin/syspilot-gui"
     install -Dm755 bin/syspilot "$pkgdir/usr/bin/syspilot"
+    install -Dm755 bin/syspilot-faf-repair "$pkgdir/usr/bin/syspilot-faf-repair"
     install -Dm755 bin/syspilot-faf-repair "$pkgdir/usr/lib/$pkgname/bin/syspilot-faf-repair"
 
-    # Install desktop entry
+    # Install desktop entries (GUI launcher for app menu, tray launcher for autostart)
+    install -Dm644 packaging/syspilot.desktop "$pkgdir/usr/share/applications/syspilot.desktop"
     install -Dm644 autostart/syspilot.desktop "$pkgdir/etc/xdg/autostart/syspilot.desktop"
-    install -Dm644 autostart/syspilot.desktop "$pkgdir/usr/share/applications/syspilot.desktop"
 
     # Install systemd user service
     install -Dm644 systemd/syspilot-tray.service "$pkgdir/usr/lib/systemd/user/syspilot-tray.service"

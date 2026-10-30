@@ -42,6 +42,7 @@ Usage: syspilot [OPTION]
   --copilot QUESTION          Start terminal-native Goose SRE session
   --copilot-shell             Open an interactive Goose SRE session
   --tray                      Start the StatusNotifierItem tray
+  --faf-repair, --faf-setup   Setup or repair Forged Alliance Forever runner
   --enable-autostart          Enable packaged systemd user service
   --disable-autostart         Disable packaged systemd user service
   -h, --help                  Show help
@@ -177,7 +178,7 @@ terminal_exec() {
 }
 
 copilot() {
-    local prompt= caller_pwd="$PWD" recipe="" health=""
+    local prompt="" caller_pwd="$PWD" recipe="" health=""
     local -a cmd
     printf -v prompt '%s ' "$@"
     prompt=${prompt% }
@@ -265,6 +266,20 @@ launch_gui() {
     fi
 }
 
+launch_faf_repair() {
+    local faf_bin=""
+    if [[ -x "$PROJECT_ROOT/bin/syspilot-faf-repair" ]]; then
+        faf_bin="$PROJECT_ROOT/bin/syspilot-faf-repair"
+    elif [[ -x "/usr/lib/syspilot/bin/syspilot-faf-repair" ]]; then
+        faf_bin="/usr/lib/syspilot/bin/syspilot-faf-repair"
+    elif have syspilot-faf-repair; then
+        faf_bin=$(command -v syspilot-faf-repair)
+    else
+        die "syspilot-faf-repair utility not found"
+    fi
+    exec "$faf_bin" "$@"
+}
+
 forward_engine() {
     local engine
     engine=$(resolve_engine)
@@ -299,6 +314,10 @@ case ${1:-} in
         ;;
     --copilot-shell)
         copilot "Begin an interactive system SRE session. Do not run diagnostics until asked."
+        ;;
+    --faf-repair|--faf-setup)
+        shift
+        launch_faf_repair "$@"
         ;;
     --tray|"")
         if [[ -x "$PROJECT_ROOT/target/release/syspilot-tray" ]]; then

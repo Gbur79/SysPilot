@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=SysPilot
+GenericName=System Health Cockpit & AI Copilot
+Comment=Ultra-lean Native Rust SRE Desktop Cockpit & Health Sentinel for Arch Linux
+Exec=syspilot --gui
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;Utility;
+StartupNotify=true

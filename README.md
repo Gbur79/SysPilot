@@ -49,14 +49,14 @@ Most AI agents on Linux waste tens of thousands of tokens by indiscriminately du
                   └───────────────────────────────────────────────┘
 ```
 
-By having the local Rust sentinel and Python triage engine perform 100% of the heavy lifting for free, the AI Copilot receives only the exact surgical slice of telemetry needed to resolve the fault.
+By having the local Rust sentinel and triage engine perform 100% of the heavy lifting for free, the AI Copilot receives only the exact surgical slice of telemetry needed to resolve the fault.
 
 ---
 
 ## 🛡️ Core Features
 
-- **Ultralight 24/7 Rust Sentinel (`rust-tray`):**
-  - Native StatusNotifierItem (SNI) implementation (`ksni 0.3`) for KDE Plasma Wayland and X11 desktops.
+- **Ultralight 24/7 Rust Sentinel (`syspilot-tray`):**
+  - Native StatusNotifierItem (SNI) implementation (`ksni 0.3`) for KDE Plasma Wayland and X11 desktops (~1.2 MB RSS).
   - Native D-Bus client (`zbus 5.19`) for zero-fork GameMode queries.
   - Immediate detection of un-rebooted kernel upgrades by monitoring `/usr/lib/modules/<version>`.
   - Non-blocking disk space queries using `libc::statvfs` directly without invoking external shell binaries.
@@ -78,8 +78,9 @@ By having the local Rust sentinel and Python triage engine perform 100% of the h
 - **Endpoint Host Firewall Inspection (Shield):**
   - High-speed (<5ms) multi-backend inspector verifying `firewalld`, `ufw`, or `nftables` state and active zones.
   - Follows the SRE Universalism Standard: machines relying on upstream perimeter routers (e.g. pfSense) report neutral `INFO ℹ` without false alerts.
-- **Decoupled Single-Instance Dashboard (`syspilot_gui.py`):**
-  - Atomic startup lock (`fcntl.flock`) and early `QLocalServer` binding eliminate duplicate windows upon rapid double-clicks.
+- **Native Slint Desktop Cockpit (`syspilot-gui`):**
+  - Ultra-fast native GUI built with Slint 1.18 and dual renderers (FemtoVG OpenGL + software CPU rasterizer fallback).
+  - Single instance locking via non-blocking `libc::flock`.
   - Dynamic **Hardware Platform & GPU** telemetry row detecting CPU architecture, GPU model, and active driver stack without hardcoded assumptions.
   - Responsive status synchronization: zero lag between tray amber warnings and dashboard components.
 - **Universal & Configurable AI Copilot:**
@@ -176,25 +177,14 @@ syspilot --enable-autostart
 
 ```text
 sysPilot/
+├── Cargo.toml                   # Cargo Workspace root (syspilot-core, syspilot-tray, syspilot-gui)
 ├── bin/
 │   ├── syspilot                 # Unified master CLI & GUI runner
-│   ├── syspilot-faf-repair      # Deterministic FAF runner & shortcut repair tool
-│   └── syspilot-sentinel        # CLI background monitoring daemon
-├── rust-tray/                   # High-performance 24/7 Rust StatusNotifierItem Tray Sentinel
-│   ├── Cargo.toml               # Native zbus 5.19 & ksni 0.3 dependencies
-│   ├── ARCHITECTURE.md          # Full architectural breakdown & SRE contracts
-│   └── src/
-│       ├── main.rs              # Event loop & timers
-│       ├── sentinels.rs         # Reboot, pacman lock, libc statvfs probes
-│       ├── updater.rs           # Async checkupdates, AUR, and software updates
-│       ├── gamemode.rs          # Native zbus D-Bus GameMode proxy
-│       ├── tray.rs              # Ergonomic 5-action SNI menu & multi-line tooltip
-│       └── tests.rs             # Hermetic unit tests (cargo test --locked)
-├── core/
-│   ├── triage.py                # High-speed (<1s) zero-sudo telemetry collector
-│   └── copilot_config.py        # Copilot configuration & ~/.config/syspilot/config.env resolver
-├── gui/
-│   └── syspilot_gui.py          # Decoupled PyQt6 Dashboard (single-instance flock)
+│   └── syspilot-faf-repair      # Deterministic FAF runner & shortcut repair tool
+├── crates/
+│   ├── syspilot-core/           # Headless triage engine, CVE, LVFS, firewall, terminal & copilot runners
+│   ├── syspilot-tray/           # High-performance 24/7 Rust StatusNotifierItem Tray Sentinel (~1.2 MB RAM)
+│   └── syspilot-gui/            # Native Slint Desktop Cockpit (3-tab HUD, Maintenance Suite & AI Copilot)
 ├── copilot/
 │   ├── recipe.yaml              # Public AI SRE recipe definition
 │   ├── skills/
@@ -205,13 +195,12 @@ sysPilot/
 │   ├── build-and-install.sh     # One-step test, compile & install helper
 │   └── verify-rust.sh           # SRE hermetic verification script
 ├── autostart/
-│   └── syspilot.desktop         # XDG autostart entry
+│   └── syspilot.desktop         # XDG autostart entry for background tray sentinel
 ├── packaging/
-│   └── PKGBUILD                 # Arch Linux / AUR package specification (v1.1.0)
+│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.0.0)
+│   └── syspilot.desktop         # Application menu desktop launcher (Exec=syspilot --gui)
 └── systemd/
-    ├── syspilot-tray.service    # User systemd service for 24/7 Rust Sentinel
-    ├── syspilot-sentinel.service# Optional systemd user service
-    └── syspilot-sentinel.timer  # Periodic 3-hour evaluation timer
+    └── syspilot-tray.service    # User systemd service for 24/7 Rust Sentinel
 ```
 
 ---

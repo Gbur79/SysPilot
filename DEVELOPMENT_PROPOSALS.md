@@ -406,13 +406,14 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 ---
 
 ### PATCH-016: [APPROVED] Full Native Rust GUI & Triage Engine (Eliminating Python & PyQt6 Runtime via Slint)
-- **Status:** `[IN PROGRESS - FAZA 4]` *(SRE Certified — Audit `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1`, `SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST`, `SRE-AUDIT-20261030-PATCH-016-PHASE-3-POST`)*
+- **Status:** `[IN PROGRESS - FAZA 4]` *(SRE Certified — Audit `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1`, `SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST`, `SRE-AUDIT-20261030-PATCH-016-PHASE-3-POST`, `SRE-AUDIT-20261030-PATCH-016-MULTI-AGENT-POST`)*
 - **Data zgłoszenia:** 2026-10-30
 - **Źródło:** Long-Term Architectural Vision (v2.0.0 Milestone) & SRE Audit (Auditor Argon Pro)
 - **Audyty SRE:**
   - `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1` (Auditor Argon): Blueprint architektoniczny Cargo Workspace, Slint dual-renderers, zero-hallucination Serde / Context7.
   - `SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST` (Auditor Argon): Audyt powdrożeniowy Faz 1 & 2. Triage rozbieżności amber-warning w trayu vs green GUI. Wdrożenie resilient Serde (`#[serde(default)]`, alias `avail_gb`), fail-closed UI w Slint (`has_error`, `error_message`, neutral `--`), hermetyczny test kompatybilności Schema 1.0/2.0 (`test_deserialize_schema_1_0_disk_compatibility`). Testy: 24/24 PASS.
   - `SRE-AUDIT-20261030-PATCH-016-PHASE-3-POST` (Auditor Argon): Audyt powdrożeniowy Fazy 3 (Maintenance & Copilot). Wykrycie i naprawa FM-1 (wzajemne wykluczanie flag `--text` i `--recipe` w Goose CLI 1.57+ oraz wstrzykiwanie parametrów `user_query`, `health_context`, `working_directory`), FM-2 (likwidacja paniki `unreachable!()` w `build_terminal` dla niestandardowych terminali z universal fallbackiem), FM-3 (dynamiczna kaskada rezolucji receptury Goose), FM-4 (debouncing przycisków playbooków w Slint i `AtomicBool` w Rust). Testy: 28/28 PASS.
+  - `SRE-AUDIT-20261030-PATCH-016-MULTI-AGENT-POST` (Auditor Argon): Audyt adaptera CLI agentów AI (`8a28b73` ➔ `b85dbf3`). Wykrycie 4 wad: FM-A (uszkadzanie flag `-i` w substringach nazw agentów i flag typu `--interactive`), FM-B (fałszywa kolizja substringu `-p` z `--project`/`--profile`), FM-C (POSIX word-splitting w `bin/syspilot`), FM-D (nadpisywanie zmiennych środowiskowych procesu plikiem z dysku). Blueprint wdrożył dyskretny token parser, tablicową ewaluację w bashu i testy higieny flag (`test_agy_command_identification`, `test_agy_flag_adaptation_hygiene`). Decyzja: CERTIFIED [Argon] dla `b85dbf3`. Testy: 31/31 PASS.
 - **Docelowe Komponenty:**
   - `Cargo.toml` (Cargo Workspace root)
   - `crates/syspilot-core/` (Pure Rust headless triage library: pacman/AUR updates, CVE arch-audit, fwupd/NVRAM, firewall, statvfs, terminal runners)

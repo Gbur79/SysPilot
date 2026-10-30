@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0-alpha.1] - 2026-10-30
 
+### Added / Multi-Agent CLI Adapter & Hardened Flag Negotiation (`b85dbf3`)
+- **Discrete Token Parsing & Flag Adaptation (`crates/syspilot-core/src/copilot.rs`)**:
+  - Implemented token-aware flag negotiation converting `-i` / `--prompt-interactive` to `-p` (`--print`) for non-interactive execution without corrupting agent names (`sys-info`) or colliding with flags like `--project` or `--profile`.
+  - Added binary identification engine `is_agy_command` protecting against false positives (`pedagogy`, `strategy-tool`).
+  - Added discrete token inspection and shell array safety in `bin/syspilot` using `eval "custom_cmd=($SYSPILOT_COPILOT_CMD)"`.
+  - Enforced environment variable precedence over `~/.config/syspilot/config.env` values.
+- **SRE Post-Implementation Audit (`SRE-AUDIT-20261030-PATCH-016-MULTI-AGENT-POST`) by Auditor Argon**:
+  - Formal audit rejected naive substring replacement in commit `8a28b73`.
+  - Architected and certified hardened blueprint in commit `b85dbf3`.
+  - Added regression test suite: `test_agy_command_identification`, `test_agy_flag_adaptation_hygiene` (workspace test suite: 31/31 passing).
+
 ### Added / System Maintenance Suite & AI Copilot Workspace (PATCH-016 Phase 3)
 - **Central Terminal Runner (`crates/syspilot-core/src/terminal.rs`)**:
   - Centralized terminal execution engine across the entire workspace (re-exported in `syspilot-tray`).

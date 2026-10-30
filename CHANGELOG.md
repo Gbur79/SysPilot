@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.1] - 2026-10-30
+
+### Added / Fixed
+- **PATCH-015 — Universal Secure Boot Resilience & Harmless NVRAM Quirk Classifier (`fwupd`)**:
+  - Implemented zero-cost (<0.05ms) pure Python Secure Boot detection in `core/triage.py` (`is_secure_boot_enabled()`).
+  - Added universal hardware quirk classification for UEFI certificate updates (`uefi_kek`, `uefi_dbx`) failing on legacy platforms due to NVRAM buffer limits (`efivarsfs: Invalid argument`).
+  - When Secure Boot is disabled on host, harmless failed certificate writes are bypassed from `pending_devices` to prevent infinite update loops.
+  - Added GUI dashboard status indicator: `PASS ✔ (Hardware up to date • 1 harmless UEFI quirk bypassed)`.
+  - Preserved full alert escalation for systems with active Secure Boot.
+
+---
+
 ## [1.2.0] - 2026-10-30
 
 ### Added

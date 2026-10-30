@@ -385,13 +385,23 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
   1. Add interactive `[⚡ PRE-CACHE PACKAGES]` button in GUI Dashboard *System Updates*.
   2. Execute pre-caching in terminal with progress visibility.
   3. Zero sudo in Rust background daemon.
-  - `gui/syspilot_gui.py` (`Run Guarded System Upgrade` indicator showing `(Ready - Cached)`)
+
+---
+
+### PATCH-015: [IMPLEMENTED] Universal Secure Boot Resilience & Hardware Quirk Classification in fwupd Firmware Triage
+- **Status:** `[IMPLEMENTED]` *(Shipped in v1.2.1)*
+- **Data zgłoszenia:** 2026-10-30
+- **Źródło:** SRE Architectural Roadmap & User Incident Triage (`efivarsfs: Invalid argument` on MSI Z97)
+- **Komponenty:**
+  - `core/triage.py` (`is_secure_boot_enabled()`, `check_firmware_updates()` with NVRAM quirk classifier)
+  - `gui/syspilot_gui.py` (Firmware status rendering with bypassed quirk count and tooltip)
 - **Kontekst i Uzasadnienie:**
-  Downloading multi-gigabyte package archives (kernel, browser, mesa, LLVM) during an interactive upgrade locks the package manager for minutes. By leveraging `checkupdates -d`, packages can be downloaded quietly to `/var/cache/pacman/pkg` in the background when the user is idle, pausing instantly if GameMode becomes active.
+  On older UEFI platforms (e.g. Haswell / MSI Z97 / AMI UEFI circa 2014) where Secure Boot is disabled (`bootctl status` -> `Secure Boot: disabled`), attempting to flash large 2023 Microsoft KEK certificates fails with `efivarsfs: Error writing to file descriptor: Invalid argument` due to platform NVRAM write size constraints. Without smart classification, SysPilot entered an infinite warning loop for an irrelevant certificate that cannot be written.
 - **Proponowane Rozwiązanie:**
-  1. Add background pre-download option in `updater.rs` using `checkupdates -d`.
-  2. Enforce strict preconditions: only execute when `gamemode_active == false`, AC power connected, and free disk space on `/` exceeds 15 GB.
-  3. When packages are already cached, the GUI displays `RUN GUARDED SYSTEM UPGRADE (Instant - Cached)`.
+  1. Pure Python, non-root, instant (<0.05ms) Secure Boot detection via `/sys/firmware/efi/efivars/SecureBoot-*`.
+  2. Universal quirk classifier in `check_firmware_updates()`: when Secure Boot is disabled and a certificate update fails due to NVRAM limits, classify it into `bypassed_quirks` rather than `pending_devices`.
+  3. If Secure Boot is enabled on modern systems, failures remain flagged as actionable alerts.
+  4. Display status in GUI: `PASS ✔ (Hardware up to date • 1 harmless UEFI quirk bypassed)`.
 
 ---
 

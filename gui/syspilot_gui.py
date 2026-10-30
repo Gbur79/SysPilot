@@ -1703,26 +1703,37 @@ X-GNOME-Autostart-enabled=true
             self.btn_update_goose.setVisible(False)
 
         # Hardware Firmware (fwupd)
-        if firmware.get("available", False):
-            fw_up = firmware.get("updates_count", 0)
-            fw_devs = firmware.get("pending_devices", [])
-            fw_mon = firmware.get("devices_monitored", 0)
-            if fw_up > 0:
-                preview = ", ".join(fw_devs[:3])
-                if len(fw_devs) > 3: preview += f" (+{len(fw_devs)-3} more)"
-                self.firmware_val_lbl.setText(f"UPDATE ⚠ ({fw_up} firmware update(s) available: {preview})")
-                self.firmware_val_lbl.setStyleSheet("color: #ffaf00; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
-                self.btn_upgrade_firmware.setText(f"⚡ UPGRADE FIRMWARE ({fw_up})")
-                self.btn_upgrade_firmware.setVisible(True)
-            else:
-                self.firmware_val_lbl.setText(f"PASS ✔ (All {fw_mon} monitored devices and peripherals up to date)")
-                self.firmware_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
-                self.btn_upgrade_firmware.setVisible(False)
-        else:
-            reason = firmware.get("reason", "not_installed")
+        fw = data.get("firmware", {})
+        fw_avail = fw.get("available", False)
+        fw_cnt = fw.get("updates_count", 0)
+        fw_quirks = fw.get("bypassed_quirks", [])
+        fw_devs = fw.get("pending_devices", [])
+
+        if not fw_avail:
+            reason = fw.get("reason", "not_installed")
             msg = "Optional tool not installed — pacman -S fwupd" if reason == "not_installed" else "fwupd daemon inactive"
             self.firmware_val_lbl.setText(f"INFO ℹ ({msg})")
             self.firmware_val_lbl.setStyleSheet("color: #5fd7ff; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            self.firmware_val_lbl.setToolTip("")
+            self.btn_upgrade_firmware.setVisible(False)
+        elif fw_cnt > 0:
+            preview = ", ".join(fw_devs[:3])
+            if len(fw_devs) > 3:
+                preview += f" (+{len(fw_devs)-3} more)"
+            self.firmware_val_lbl.setText(f"UPDATE ⚠ ({fw_cnt} firmware update(s) available: {preview})")
+            self.firmware_val_lbl.setStyleSheet("color: #ffaf00; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            self.firmware_val_lbl.setToolTip("")
+            self.btn_upgrade_firmware.setText(f"⚡ UPGRADE FIRMWARE ({fw_cnt})")
+            self.btn_upgrade_firmware.setVisible(True)
+        elif len(fw_quirks) > 0:
+            self.firmware_val_lbl.setText(f"PASS ✔ (Hardware up to date • {len(fw_quirks)} harmless UEFI quirk bypassed)")
+            self.firmware_val_lbl.setStyleSheet(STYLE_BADGE_PASS)
+            self.firmware_val_lbl.setToolTip("Secure Boot is disabled on host; NVRAM certificate updates skipped.")
+            self.btn_upgrade_firmware.setVisible(False)
+        else:
+            self.firmware_val_lbl.setText("PASS ✔ (Hardware devices up to date)")
+            self.firmware_val_lbl.setStyleSheet(STYLE_BADGE_PASS)
+            self.firmware_val_lbl.setToolTip("")
             self.btn_upgrade_firmware.setVisible(False)
 
         # ----------------------------------------------------------------------

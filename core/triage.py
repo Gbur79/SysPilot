@@ -658,6 +658,22 @@ def check_security_vulnerabilities(skip_network: bool = False) -> Dict[str, Any]
     return default_res
 
 
+def is_secure_boot_enabled() -> bool:
+    """
+    Check if UEFI Secure Boot is active via efivars.
+    Returns False on missing file or read exception.
+    """
+    sb_var = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+    if not os.path.isfile(sb_var):
+        return False
+    try:
+        with open(sb_var, "rb") as f:
+            data = f.read(5)
+        return len(data) >= 5 and data[4] == 1
+    except Exception:
+        return False
+
+
 def check_firmware_updates(skip: bool = False) -> Dict[str, Any]:
     """
     Check hardware firmware status and pending device updates via fwupdmgr.
@@ -669,7 +685,8 @@ def check_firmware_updates(skip: bool = False) -> Dict[str, Any]:
         "reason": "skipped" if skip else "not_installed",
         "updates_count": 0,
         "devices_monitored": 0,
-        "pending_devices": []
+        "pending_devices": [],
+        "bypassed_quirks": [],
     }
     if skip:
         return default_res
@@ -689,13 +706,42 @@ def check_firmware_updates(skip: bool = False) -> Dict[str, Any]:
         if res.returncode == 0 and stdout:
             data = json.loads(stdout)
             devices = data.get("Devices", [])
-            pending_names = [d.get("Name", "Unknown") for d in devices if isinstance(d, dict)]
+            secure_boot_active = is_secure_boot_enabled()
+            pending_names: List[str] = []
+            bypassed: List[Dict[str, str]] = []
+
+            for d in devices:
+                if not isinstance(d, dict):
+                    continue
+                dev_name = str(d.get("Name", "Unknown"))
+                plugin = str(d.get("Plugin", "")).lower()
+                protocol = str(d.get("Protocol", "")).lower()
+                protocols = [str(p).lower() for p in d.get("Protocols", [])] if isinstance(d.get("Protocols"), list) else []
+                update_state = d.get("UpdateState")
+                update_err = str(d.get("UpdateError", "")).lower()
+
+                is_sb_cert = (
+                    plugin in ("uefi_kek", "uefi_dbx", "uefi_db", "uefi_pk")
+                    or protocol.startswith("org.uefi.dbx")
+                    or any(p.startswith("org.uefi.dbx") for p in protocols)
+                    or any(k in dev_name.lower() for k in ("kek", "dbx", "uefi ca"))
+                )
+                has_nvram_error = (
+                    update_state == 3
+                    or any(err in update_err for err in ("efivarsfs", "invalid argument", "no space left", "resource busy"))
+                )
+                if is_sb_cert and has_nvram_error and not secure_boot_active:
+                    bypassed.append({"name": dev_name, "plugin": plugin, "reason": "NVRAM write limit (Secure Boot disabled)"})
+                else:
+                    pending_names.append(dev_name)
+
             return {
                 "available": True,
                 "tool": "fwupd",
-                "updates_count": len(devices),
+                "updates_count": len(pending_names),
                 "devices_monitored": len(devices),
-                "pending_devices": pending_names
+                "pending_devices": pending_names,
+                "bypassed_quirks": bypassed,
             }
         elif res.returncode == 2 or not stdout or "no updatable devices" in res.stderr.lower():
             return {
@@ -703,7 +749,8 @@ def check_firmware_updates(skip: bool = False) -> Dict[str, Any]:
                 "tool": "fwupd",
                 "updates_count": 0,
                 "devices_monitored": 0,
-                "pending_devices": []
+                "pending_devices": [],
+                "bypassed_quirks": [],
             }
         else:
             default_res["reason"] = f"exit_{res.returncode}"

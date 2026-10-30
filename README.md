@@ -5,7 +5,9 @@
 
 ---
 
-<img width="1160" height="962" alt="image" src="https://github.com/user-attachments/assets/a0e65fa0-afdf-4382-9878-9ef52fd3e310" />
+<img width="902" height="751" alt="image" src="https://github.com/user-attachments/assets/c2720ce8-8bef-4d11-83d2-cac23b243281" />
+
+<img width="904" height="783" alt="image" src="https://github.com/user-attachments/assets/1739eb87-c309-481f-9f3a-261410d3d579" />
 
 
 ## 🌟 Overview

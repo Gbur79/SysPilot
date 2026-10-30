@@ -8,15 +8,105 @@ pub const MAX_STATUS_BYTES: u64 = 1024 * 1024;
 pub const SUPPORTED_SCHEMA_MAJOR: &str = "1";
 pub const STALE_AFTER_SECS: u64 = 6 * 60 * 60;
 
+use std::collections::BTreeMap;
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FailedServicesStatus {
+    #[serde(default)]
+    pub system: Vec<String>,
+    #[serde(default)]
+    pub user: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DiskUsage {
+    pub total_gb: f32,
+    pub used_gb: f32,
+    pub free_gb: f32,
+    pub used_pct: u8,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DiskStatus {
+    #[serde(default)]
+    pub root: Option<DiskUsage>,
+    #[serde(default)]
+    pub home: Option<DiskUsage>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PacnewStatus {
+    #[serde(default)]
+    pub count: usize,
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OrphanStatus {
+    #[serde(default)]
+    pub checked: bool,
+    #[serde(default)]
+    pub query_status: String,
+    #[serde(default)]
+    pub severity: String,
+    #[serde(default)]
+    pub affects_flight_status: bool,
+    #[serde(default)]
+    pub tiering_complete: bool,
+    #[serde(default)]
+    pub count: usize,
+    #[serde(default)]
+    pub packages: Vec<String>,
+    #[serde(default)]
+    pub optional_count: usize,
+    #[serde(default)]
+    pub optional_packages: Vec<String>,
+    #[serde(default)]
+    pub candidate_count: usize,
+    #[serde(default)]
+    pub tier1_count: usize,
+    #[serde(default)]
+    pub tier1_packages: Vec<String>,
+    #[serde(default)]
+    pub tier2_count: usize,
+    #[serde(default)]
+    pub tier2_packages: Vec<String>,
+    #[serde(default)]
+    pub tier3_count: usize,
+    #[serde(default)]
+    pub tier3_packages: Vec<String>,
+    #[serde(default)]
+    pub tier3_tags: BTreeMap<String, String>,
+    #[serde(default)]
+    pub unclassified_packages: Vec<String>,
+    #[serde(default)]
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusJson {
     pub schema_version: String,
     pub status: String,
     #[serde(default)]
+    pub status_reasons: Vec<String>,
+    #[serde(default)]
+    pub informational_reasons: Vec<String>,
+    #[serde(default)]
+    pub timestamp: Option<String>,
+    #[serde(default)]
     pub gaming_mode: bool,
     #[serde(default)]
     pub reboot_pending: bool,
     pub updates: StatusUpdates,
+    #[serde(default)]
+    pub failed_services: Option<FailedServicesStatus>,
+    #[serde(default)]
+    pub disk: Option<DiskStatus>,
+    #[serde(default)]
+    pub pacnew: Option<PacnewStatus>,
+    #[serde(default)]
+    pub orphans: Option<OrphanStatus>,
     #[serde(default)]
     pub sys_health: Option<SysHealth>,
     #[serde(default)]
@@ -27,7 +117,7 @@ pub struct StatusJson {
     pub firewall: Option<StatusFirewall>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct StatusUpdates {
     pub total: u32,
     pub core_count: u32,

@@ -406,9 +406,12 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 ---
 
 ### PATCH-016: [APPROVED] Full Native Rust GUI & Triage Engine (Eliminating Python & PyQt6 Runtime via Slint)
-- **Status:** `[PROPOSED]` *(SRE Certified — Audit `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1`)*
+- **Status:** `[IN PROGRESS - FAZA 3]` *(SRE Certified — Audit `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1` & `SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST`)*
 - **Data zgłoszenia:** 2026-10-30
 - **Źródło:** Long-Term Architectural Vision (v2.0.0 Milestone) & SRE Audit (Auditor Argon Pro)
+- **Audyty SRE:**
+  - `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1` (Auditor Argon): Blueprint architektoniczny Cargo Workspace, Slint dual-renderers, zero-hallucination Serde / Context7.
+  - `SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST` (Auditor Argon): Audyt powdrożeniowy Faz 1 & 2. Triage rozbieżności amber-warning w trayu vs green GUI. Wdrożenie resilient Serde (`#[serde(default)]`, alias `avail_gb`), fail-closed UI w Slint (`has_error`, `error_message`, neutral `--`), hermetyczny test kompatybilności Schema 1.0/2.0 (`test_deserialize_schema_1_0_disk_compatibility`). Testy: 24/24 PASS.
 - **Docelowe Komponenty:**
   - `Cargo.toml` (Cargo Workspace root)
   - `crates/syspilot-core/` (Pure Rust headless triage library: pacman/AUR updates, CVE arch-audit, fwupd/NVRAM, firewall, statvfs, terminal runners)
@@ -423,10 +426,10 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
   3. **Strict Crate Isolation:** Slint GUI code is strictly isolated in `crates/syspilot-gui`. The 24/7 daemon `crates/syspilot-tray` depends only on `syspilot-core` to guarantee micro-sized background memory footprint.
   4. **Universalism Invariant:** Zero hardcoded machine identifiers in `.slint` templates; Copilot tab remains generic `SysPilot AI Copilot` configurable via `~/.config/syspilot/config.env`.
 - **Plan Etapów Wdrożenia (Phased Rollout):**
-  - **Faza 1 (Core & CLI):** Port `core/triage.py` to `crates/syspilot-core`. Headless unit tests (`cargo test -p syspilot-core`) and Schema 2.0 JSON parity. Python GUI runs undisturbed.
-  - **Faza 2 (Slint Dashboard MVP):** Implement Slint Dashboard tab. Validate side-by-side execution on KDE Plasma Wayland (~40 MB vs ~180 MB RSS).
-  - **Faza 3 (Maintenance & Copilot Parity):** Implement Maintenance terminal runners (`terminal.rs`), Copilot console, and XDG Activation IPC.
-  - **Faza 4 (Packaging Cutover):** Retire `gui/syspilot_gui.py` and `core/triage.py`. Update PKGBUILD to pure Rust release build.
+  - **Faza 1 (Core & CLI):** [DONE] Port `core/triage.py` to `crates/syspilot-core`. Headless unit tests (`cargo test -p syspilot-core`) and Schema 2.0 JSON parity.
+  - **Faza 2 (Slint Dashboard MVP):** [DONE] Implement Slint Dashboard tab. Validate execution on KDE Plasma Wayland (14 MB standalone binary). Post-implementation SRE audit verified & resolved.
+  - **Faza 3 (Maintenance & Copilot Parity):** [IN PROGRESS] Implement Maintenance terminal runners (`terminal.rs`), Copilot console, navigation tabs, and XDG Activation IPC.
+  - **Faza 4 (Packaging Cutover):** [PENDING] Retire `gui/syspilot_gui.py` and `core/triage.py`. Update PKGBUILD to pure Rust release build.
 
 ---
 

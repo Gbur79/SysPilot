@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.0-alpha.1] - 2026-10-30
+
+### Added / Architectural Migration (PATCH-016 Phases 1 & 2)
+- **Cargo Workspace Architecture**:
+  - Initialized workspace root managing `crates/syspilot-core`, `crates/syspilot-tray`, and `crates/syspilot-gui`.
+  - Migrated legacy `rust-tray` to `crates/syspilot-tray`, reducing background RAM to ~5.7 MB RSS on KDE Plasma Wayland.
+- **Headless Core Triage Engine (`syspilot-core`)**:
+  - Pure Rust implementation of system triage, CVE security audit (`arch-audit`), hardware firmware LVFS probe (`fwupd`), multi-backend host firewall (`firewalld`, `ufw`, `nftables`), 3-tier orphan package classification, and transient systemd unit filtering.
+  - Zero Python dependencies for core diagnostics.
+- **Native Slint Desktop GUI (`syspilot-gui`)**:
+  - Implemented standalone 14 MB native executable using Slint 1.18.1.
+  - Dual renderers (`renderer-femtovg` OpenGL + `renderer-software` fail-safe CPU rasterizer) for Maxwell / Wayland resilience.
+  - Single instance locking via non-blocking `libc::flock`.
+- **SRE Post-Implementation Audit (`SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST`) by Auditor Argon**:
+  - Triaged and resolved systray warning vs GUI green state discrepancy.
+  - Implemented resilient Serde deserialization for `DiskUsage` and `StatusUpdates` (`#[serde(default)]`, alias `avail_gb`), guaranteeing 100% backward compatibility with `sys-health.sh` Schema 1.0.
+  - Converted GUI state machine to fail-closed UI: removed optimistic mock defaults from `appwindow.slint`, added reactive error banner (`has_error`, `error_message`), and neutral initial states (`--` / `CONNECTING...`).
+  - Added hermetic unit test `test_deserialize_schema_1_0_disk_compatibility` (workspace test suite: 24/24 passing).
+
+---
+
 ## [1.2.1] - 2026-10-30
 
 ### Added / Fixed

@@ -15,10 +15,13 @@
 | SYS-001 | Public governance backlog | `DEVELOPMENT_PROPOSALS.md` | CERTIFIED [Sol] | Low | Exactly one Clerical Inbox and one Rejected Decisions block |
 | SYS-002 | Decoupling roadmap | `DECOUPLING_PLAN.md` | HARDENED [Legacy] | Medium | Targeted roadmap review before engine changes |
 | SYS-003 | Runtime staging tree | `/home/gbur/Projects/sysPilot_Karol` | HARDENED [Legacy] | High | Regression suite and explicit promotion gate |
-| SYS-004 | Rust SNI tray | `rust-tray/` | HARDENED [Legacy] | Medium | Build, tray lifecycle and IPC fixtures |
-| SYS-005 | PyQt6 GUI | `gui/` | HARDENED [Legacy] | Medium | GUI worker timeout and structured-output fixtures |
-| SYS-006 | CLI entrypoint | `bin/syspilot` | HARDENED [Legacy] | High | CLI contract and exit-code fixtures |
-| SYS-007 | Triage engine | `core/triage.py` | HARDENED [Legacy] | High | Hermetic telemetry fixtures and fail-visible errors |
+| SYS-004 | Legacy Rust SNI tray | `rust-tray/` | RETIRED [Argon] | Low | Replaced by `crates/syspilot-tray/` |
+| SYS-005 | PyQt6 GUI | `gui/` | LEGACY [Sol] | Medium | GUI worker timeout and structured-output fixtures |
+| SYS-006 | CLI entrypoint router | `bin/syspilot` | HARDENED [Argon] | High | CLI routing to native binary with fallback |
+| SYS-007 | Legacy Triage engine | `core/triage.py` | LEGACY [Sol] | High | Replaced by `crates/syspilot-core/` |
+| SYS-008 | Pure Rust Triage Core | `crates/syspilot-core/` | CERTIFIED [Argon] | High | Resilient Serde Schema 1.0/2.0, 24 unit tests |
+| SYS-009 | Rust StatusNotifierItem Tray | `crates/syspilot-tray/` | CERTIFIED [Argon] | Medium | Zero-waste sentinel ~5.7 MB RSS, zbus 5.19, ksni |
+| SYS-010 | Slint Native Desktop GUI | `crates/syspilot-gui/` | HARDENED [Argon] | High | Dual renderers, fail-closed UI, single-instance flock |
 | GOV-001 | Clerical fast-path | matrix registry + `project_inbox.py` | CERTIFIED [Sol] | Medium | `validate_project_inbox.py`: PASS 12/12 |
 
 ---

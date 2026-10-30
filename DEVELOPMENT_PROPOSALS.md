@@ -406,12 +406,13 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 ---
 
 ### PATCH-016: [APPROVED] Full Native Rust GUI & Triage Engine (Eliminating Python & PyQt6 Runtime via Slint)
-- **Status:** `[IN PROGRESS - FAZA 3]` *(SRE Certified — Audit `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1` & `SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST`)*
+- **Status:** `[IN PROGRESS - FAZA 4]` *(SRE Certified — Audit `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1`, `SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST`, `SRE-AUDIT-20261030-PATCH-016-PHASE-3-POST`)*
 - **Data zgłoszenia:** 2026-10-30
 - **Źródło:** Long-Term Architectural Vision (v2.0.0 Milestone) & SRE Audit (Auditor Argon Pro)
 - **Audyty SRE:**
   - `SRE-AUDIT-20261030-PATCH-016-SLINT-MIGRATION-V1` (Auditor Argon): Blueprint architektoniczny Cargo Workspace, Slint dual-renderers, zero-hallucination Serde / Context7.
   - `SRE-AUDIT-20261030-PATCH-016-PHASE-1-2-POST` (Auditor Argon): Audyt powdrożeniowy Faz 1 & 2. Triage rozbieżności amber-warning w trayu vs green GUI. Wdrożenie resilient Serde (`#[serde(default)]`, alias `avail_gb`), fail-closed UI w Slint (`has_error`, `error_message`, neutral `--`), hermetyczny test kompatybilności Schema 1.0/2.0 (`test_deserialize_schema_1_0_disk_compatibility`). Testy: 24/24 PASS.
+  - `SRE-AUDIT-20261030-PATCH-016-PHASE-3-POST` (Auditor Argon): Audyt powdrożeniowy Fazy 3 (Maintenance & Copilot). Wykrycie i naprawa FM-1 (wzajemne wykluczanie flag `--text` i `--recipe` w Goose CLI 1.57+ oraz wstrzykiwanie parametrów `user_query`, `health_context`, `working_directory`), FM-2 (likwidacja paniki `unreachable!()` w `build_terminal` dla niestandardowych terminali z universal fallbackiem), FM-3 (dynamiczna kaskada rezolucji receptury Goose), FM-4 (debouncing przycisków playbooków w Slint i `AtomicBool` w Rust). Testy: 28/28 PASS.
 - **Docelowe Komponenty:**
   - `Cargo.toml` (Cargo Workspace root)
   - `crates/syspilot-core/` (Pure Rust headless triage library: pacman/AUR updates, CVE arch-audit, fwupd/NVRAM, firewall, statvfs, terminal runners)
@@ -428,7 +429,7 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 - **Plan Etapów Wdrożenia (Phased Rollout):**
   - **Faza 1 (Core & CLI):** [DONE] Port `core/triage.py` to `crates/syspilot-core`. Headless unit tests (`cargo test -p syspilot-core`) and Schema 2.0 JSON parity.
   - **Faza 2 (Slint Dashboard MVP):** [DONE] Implement Slint Dashboard tab. Validate execution on KDE Plasma Wayland (14 MB standalone binary). Post-implementation SRE audit verified & resolved.
-  - **Faza 3 (Maintenance & Copilot Parity):** [IN PROGRESS] Implement Maintenance terminal runners (`terminal.rs`), Copilot console, navigation tabs, and XDG Activation IPC.
+  - **Faza 3 (Maintenance & Copilot Parity):** [DONE] Implement Maintenance terminal runners (`terminal.rs`), Copilot console, navigation tabs, and SRE playbook triggers. Post-implementation SRE audit verified & resolved.
   - **Faza 4 (Packaging Cutover):** [PENDING] Retire `gui/syspilot_gui.py` and `core/triage.py`. Update PKGBUILD to pure Rust release build.
 
 ---

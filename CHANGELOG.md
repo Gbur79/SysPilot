@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0-alpha.1] - 2026-10-30
 
+### Added / System Maintenance Suite & AI Copilot Workspace (PATCH-016 Phase 3)
+- **Central Terminal Runner (`crates/syspilot-core/src/terminal.rs`)**:
+  - Centralized terminal execution engine across the entire workspace (re-exported in `syspilot-tray`).
+  - Dynamic discovery for 7 terminal emulators (`konsole`, `ghostty`, `kitty`, `alacritty`, `gnome-terminal`, `foot`, `xterm`) + universal fallback for custom emulators (`wezterm`, `urxvt`, `terminator`) without panics.
+  - Slot reservation (`MAX_TERMINALS = 8`) and background child reaper thread.
+- **System Maintenance Suite Tab (`appwindow.slint`)**:
+  - Dedicated interactive tab with 7 maintenance actions: 3-tier orphan package triage, regional mirror benchmark/ranking, safe cache maintenance, deep clean, CVE advisory inspection, LVFS firmware upgrade, and pacman package pre-caching.
+- **Native AI Copilot Workspace (`crates/syspilot-core/src/copilot.rs` & Slint)**:
+  - Zero-dependency configuration parser reading `~/.config/syspilot/config.env` and `~/.config/goose/config.yaml`.
+  - Dynamic recipe resolution cascade honoring `SYSPILOT_GOOSE_RECIPE`, user recipe folder, packaged recipe (`copilot-admin.yaml`), and development tree.
+  - SRE 1-Click Battle-Tested Playbooks: FAF client repair, Steam / Proton launch fix, .pacnew surgical merging, PipeWire audio reset.
+  - Non-blocking asynchronous query dispatching with atomic in-flight debouncing (`AtomicBool`) preventing concurrent process spawns.
+- **SRE Post-Implementation Audit (`SRE-AUDIT-20261030-PATCH-016-PHASE-3-POST`) by Auditor Argon**:
+  - Resolved FM-1 (Goose CLI 1.57+ argument separation: `--recipe` + `--params` vs `--text` isolation).
+  - Resolved FM-2 (universal fallback in `build_terminal` eliminating `unreachable!()` panic).
+  - Resolved FM-3 (dynamic recipe cascade eliminating hardcoded `eos-admin.yaml`).
+  - Resolved FM-4 (debouncing playbook triggers in Slint UI and Rust runtime).
+  - Added unit tests: `test_terminal_custom_fallback`, `test_goose_recipe_resolution` (workspace test suite: 28/28 passing).
+
 ### Added / Architectural Migration (PATCH-016 Phases 1 & 2)
 - **Cargo Workspace Architecture**:
   - Initialized workspace root managing `crates/syspilot-core`, `crates/syspilot-tray`, and `crates/syspilot-gui`.

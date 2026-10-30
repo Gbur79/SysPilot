@@ -78,7 +78,7 @@ pub async fn check_official_updates() -> (u32, u32, Vec<String>) {
             let uid = unsafe { libc::getuid() };
             let lock_path = PathBuf::from(format!("/tmp/checkup-db-{uid}/db.lck"));
             if lock_path.exists() {
-                let _ = tokio::fs::remove_file(lock_path).await;
+                let _ = std::fs::remove_file(lock_path);
                 if let Ok(retry) = Command::new(&checkupdates).output().await {
                     if retry.status.success() {
                         return parse_checkupdates_stdout(&retry.stdout);

@@ -1,0 +1,43 @@
+import { Theme } from "../theme.slint";
+import { StatusBadge } from "status_badge.slint";
+
+export component GridRow inherits Rectangle {
+    in property <string> name: "";
+    in property <string> status-text: "PASS ✔";
+    in property <color> status-color: Theme.status-green;
+    in property <string> details: "";
+
+    background: Colors.transparent;
+
+    HorizontalLayout {
+        spacing: 12px;
+        alignment: space-between;
+
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.name;
+                color: Theme.text-primary;
+                font-size: 12px;
+                vertical-alignment: center;
+                min-width: 170px;
+            }
+
+            if root.details != "" : Text {
+                text: root.details;
+                color: Theme.text-muted;
+                font-size: 11px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        StatusBadge {
+            text: root.status-text;
+            badge-color: root.status-color;
+        }
+    }
+}

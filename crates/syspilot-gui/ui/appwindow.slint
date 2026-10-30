@@ -1,0 +1,240 @@
+import { Theme } from "theme.slint";
+import { Card } from "components/card.slint";
+import { GridRow } from "components/grid_row.slint";
+import { StatusBadge } from "components/status_badge.slint";
+import { ActionButton } from "components/action_button.slint";
+
+export component AppWindow inherits Window {
+    title: "SysPilot — System Health & AI Copilot";
+    min-width: 780px;
+    min-height: 600px;
+    preferred-width: 840px;
+    preferred-height: 660px;
+    background: Theme.background;
+    default-font-family: "DejaVu Sans, Noto Sans, Liberation Sans, sans-serif";
+
+    // Callbacks
+    callback refresh_clicked();
+    callback upgrade_clicked();
+    callback audit_clicked();
+    callback prune_clicked();
+
+    // Data properties
+    in property <string> overall_status: "FLIGHT_READY";
+    in property <string> overall_status_label: "FLIGHT READY ✔";
+    in property <color> overall_status_color: Theme.status-green;
+    in property <string> hardware_info: "Linux • 64-bit • Wayland";
+
+    in property <string> kernel_status: "PASS ✔";
+    in property <string> kernel_details: "Kernel up to date";
+
+    in property <string> root_status: "PASS ✔";
+    in property <string> root_details: "Clean";
+
+    in property <string> firewall_status: "PASS ✔";
+    in property <string> firewall_details: "Active (firewalld)";
+
+    in property <string> failed_services_status: "PASS ✔";
+    in property <color> failed_services_color: Theme.status-green;
+    in property <string> failed_services_details: "0 failed units";
+
+    in property <string> gpu_status: "PASS ✔";
+    in property <string> gpu_details: "NVIDIA GeForce GTX 970 (580xx)";
+
+    in property <string> updates_core_text: "PASS ✔";
+    in property <color> updates_core_color: Theme.status-green;
+    in property <string> updates_core_details: "0 core updates";
+
+    in property <string> updates_repo_text: "PASS ✔";
+    in property <color> updates_repo_color: Theme.status-green;
+    in property <string> updates_repo_details: "0 package updates";
+
+    in property <string> updates_aur_text: "PASS ✔";
+    in property <color> updates_aur_color: Theme.status-green;
+    in property <string> updates_aur_details: "0 AUR updates";
+
+    in property <string> cve_status: "PASS ✔";
+    in property <color> cve_color: Theme.status-green;
+    in property <string> cve_details: "No unpatched CVEs";
+
+    in property <string> firmware_status: "PASS ✔";
+    in property <color> firmware_color: Theme.status-green;
+    in property <string> firmware_details: "All hardware devices up to date";
+
+    in property <string> orphans_status: "PASS ✔";
+    in property <string> orphans_details: "0 strict orphans";
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        // Top HUD Header
+        Rectangle {
+            background: root.overall_status_color.transparentize(92%);
+            border-color: root.overall_status_color.transparentize(50%);
+            border-width: 2px;
+            border-radius: Theme.radius-md;
+
+            HorizontalLayout {
+                padding: 14px;
+                alignment: space-between;
+
+                VerticalLayout {
+                    spacing: 4px;
+                    alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        Text {
+                            text: "SYS PILOT";
+                            color: Theme.text-primary;
+                            font-size: 16px;
+                            font-weight: 800;
+                            letter-spacing: 1px;
+                            vertical-alignment: center;
+                        }
+
+                        StatusBadge {
+                            text: root.overall_status_label;
+                            badge-color: root.overall_status_color;
+                        }
+                    }
+
+                    Text {
+                        text: root.hardware_info;
+                        color: Theme.text-muted;
+                        font-size: 11px;
+                    }
+                }
+
+                ActionButton {
+                    text: "REFRESH 🔄";
+                    primary: false;
+                    action-color: Theme.status-cyan;
+                    clicked => { root.refresh_clicked(); }
+                }
+            }
+        }
+
+        // Main telemetry cards
+        VerticalLayout {
+            spacing: 10px;
+
+            Card {
+                title: "🛡 System Health & Hygiene";
+
+                GridRow {
+                    name: "Kernel & Modules";
+                    status-text: root.kernel_status;
+                    details: root.kernel_details;
+                }
+                GridRow {
+                    name: "Root Storage (/)";
+                    status-text: root.root_status;
+                    details: root.root_details;
+                }
+                GridRow {
+                    name: "Host Firewall (Shield)";
+                    status-text: root.firewall_status;
+                    details: root.firewall_details;
+                }
+                GridRow {
+                    name: "Failed System Services";
+                    status-text: root.failed_services_status;
+                    status-color: root.failed_services_color;
+                    details: root.failed_services_details;
+                }
+                GridRow {
+                    name: "Hardware Platform & GPU";
+                    status-text: root.gpu_status;
+                    details: root.gpu_details;
+                }
+            }
+
+            Card {
+                title: "📦 System Updates";
+
+                GridRow {
+                    name: "Core System (Kernel/Drivers)";
+                    status-text: root.updates_core_text;
+                    status-color: root.updates_core_color;
+                    details: root.updates_core_details;
+                }
+                GridRow {
+                    name: "Official Repositories";
+                    status-text: root.updates_repo_text;
+                    status-color: root.updates_repo_color;
+                    details: root.updates_repo_details;
+                }
+                GridRow {
+                    name: "AUR Packages";
+                    status-text: root.updates_aur_text;
+                    status-color: root.updates_aur_color;
+                    details: root.updates_aur_details;
+                }
+                GridRow {
+                    name: "Security Advisories (CVE)";
+                    status-text: root.cve_status;
+                    status-color: root.cve_color;
+                    details: root.cve_details;
+                }
+            }
+
+            Card {
+                title: "🔌 Third-Party & Peripherals";
+
+                GridRow {
+                    name: "Hardware Firmware (LVFS)";
+                    status-text: root.firmware_status;
+                    status-color: root.firmware_color;
+                    details: root.firmware_details;
+                }
+                GridRow {
+                    name: "Orphan Packages";
+                    status-text: root.orphans_status;
+                    details: root.orphans_details;
+                }
+            }
+        }
+
+        // Bottom Action Bar
+        Rectangle {
+            background: Theme.surface;
+            border-radius: Theme.radius-md;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+
+            HorizontalLayout {
+                padding: 10px;
+                spacing: 12px;
+                alignment: space-between;
+
+                ActionButton {
+                    text: "RUN GUARDED UPGRADE ⚡";
+                    primary: true;
+                    action-color: Theme.status-green;
+                    clicked => { root.upgrade_clicked(); }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    ActionButton {
+                        text: "DIAGNOSTIC AUDIT 🔍";
+                        primary: false;
+                        action-color: Theme.status-cyan;
+                        clicked => { root.audit_clicked(); }
+                    }
+
+                    ActionButton {
+                        text: "PRUNE ORPHANS 🗑";
+                        primary: false;
+                        action-color: Theme.status-amber;
+                        clicked => { root.prune_clicked(); }
+                    }
+                }
+            }
+        }
+    }
+}

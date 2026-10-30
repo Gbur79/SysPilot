@@ -1,0 +1,51 @@
+import { Theme } from "../theme.slint";
+
+export component Card inherits Rectangle {
+    in property <string> title: "";
+    in property <string> badge-text: "";
+    in property <color> badge-color: Theme.status-green;
+
+    background: Theme.surface;
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+
+        if title != "" : HorizontalLayout {
+            alignment: space-between;
+            Text {
+                text: root.title;
+                color: Theme.text-primary;
+                font-size: 13px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+
+            if badge-text != "" : Rectangle {
+                background: root.badge-color.transparentize(85%);
+                border-radius: Theme.radius-sm;
+                border-color: root.badge-color.transparentize(60%);
+                border-width: 1px;
+
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    padding-top: 2px;
+                    padding-bottom: 2px;
+
+                    Text {
+                        text: root.badge-text;
+                        color: root.badge-color;
+                        font-size: 10px;
+                        font-weight: 700;
+                    }
+                }
+            }
+        }
+
+        @children
+    }
+}

@@ -1,0 +1,16 @@
+[package]
+name = "syspilot-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+syspilot-core = { path = "../syspilot-core" }
+slint = { version = "1.18", features = ["renderer-femtovg", "renderer-software"] }
+tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread", "time"] }
+libc = "0.2"
+
+[build-dependencies]
+slint-build = "1.18"

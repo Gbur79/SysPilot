@@ -2,6 +2,7 @@
 members = [
     "crates/syspilot-core",
     "crates/syspilot-tray",
+    "crates/syspilot-gui",
 ]
 resolver = "2"
 

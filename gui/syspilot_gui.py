@@ -636,7 +636,15 @@ class SysPilotWindow(QMainWindow):
         grid1_l.addWidget(create_grid_row("Core System Packages", self.core_pkgs_val_lbl, is_alt=False, has_bottom_border=True))
 
         self.repo_pkgs_val_lbl = QLabel("Checking...")
-        grid1_l.addWidget(create_grid_row("Official Repositories", self.repo_pkgs_val_lbl, is_alt=True, has_bottom_border=False))
+        grid1_l.addWidget(create_grid_row("Official Repositories", self.repo_pkgs_val_lbl, is_alt=True, has_bottom_border=True))
+
+        self.security_val_lbl = QLabel("Checking...")
+        self.btn_inspect_cve = QPushButton("🔍 INSPECT CVE")
+        self.btn_inspect_cve.setProperty("class", "pillWarning")
+        self.btn_inspect_cve.setFixedHeight(26)
+        self.btn_inspect_cve.setVisible(False)
+        self.btn_inspect_cve.clicked.connect(self.run_inspect_cve_terminal)
+        grid1_l.addWidget(create_grid_row("Security Advisories (arch-audit)", self.security_val_lbl, is_alt=False, has_bottom_border=False, extra_widget=self.btn_inspect_cve))
 
         l1.addWidget(grid1)
 
@@ -647,6 +655,11 @@ class SysPilotWindow(QMainWindow):
         self.btn_guarded_upgrade.setProperty("class", "primaryAction")
         self.btn_guarded_upgrade.clicked.connect(self.run_guarded_upgrade_terminal)
         btn_box1.addWidget(self.btn_guarded_upgrade)
+
+        self.btn_precache_pkgs = QPushButton("⚡ PRE-CACHE PACKAGES")
+        self.btn_precache_pkgs.setProperty("class", "ghostAction")
+        self.btn_precache_pkgs.clicked.connect(self.run_precache_terminal)
+        btn_box1.addWidget(self.btn_precache_pkgs)
 
         self.btn_quick_audit = QPushButton("🔍 FULL DIAGNOSTIC AUDIT")
         self.btn_quick_audit.setProperty("class", "ghostAction")
@@ -692,7 +705,15 @@ class SysPilotWindow(QMainWindow):
         grid2_l.addWidget(create_grid_row("Flatpak Applications", self.flatpak_val_lbl, is_alt=True, has_bottom_border=True))
 
         self.devtools_val_lbl = QLabel("Checking...")
-        grid2_l.addWidget(create_grid_row("Developer Tools (Goose/UV)", self.devtools_val_lbl, is_alt=False, has_bottom_border=False))
+        grid2_l.addWidget(create_grid_row("Developer Tools (Goose/UV)", self.devtools_val_lbl, is_alt=False, has_bottom_border=True))
+
+        self.firmware_val_lbl = QLabel("Checking...")
+        self.btn_upgrade_firmware = QPushButton("⚡ UPGRADE FIRMWARE")
+        self.btn_upgrade_firmware.setProperty("class", "pillWarning")
+        self.btn_upgrade_firmware.setFixedHeight(26)
+        self.btn_upgrade_firmware.setVisible(False)
+        self.btn_upgrade_firmware.clicked.connect(self.run_firmware_upgrade_terminal)
+        grid2_l.addWidget(create_grid_row("Hardware Firmware (fwupd)", self.firmware_val_lbl, is_alt=True, has_bottom_border=False, extra_widget=self.btn_upgrade_firmware))
 
         l2.addWidget(grid2)
 
@@ -771,7 +792,10 @@ class SysPilotWindow(QMainWindow):
         grid3_l.addWidget(create_grid_row("Gaming & Proton Stack", self.gaming_val_lbl, is_alt=True, has_bottom_border=True))
 
         self.hardware_val_lbl = QLabel("Detecting...")
-        grid3_l.addWidget(create_grid_row("Hardware Platform & GPU", self.hardware_val_lbl, is_alt=False, has_bottom_border=False))
+        grid3_l.addWidget(create_grid_row("Hardware Platform & GPU", self.hardware_val_lbl, is_alt=False, has_bottom_border=True))
+
+        self.firewall_val_lbl = QLabel("Checking...")
+        grid3_l.addWidget(create_grid_row("Host Firewall (Shield)", self.firewall_val_lbl, is_alt=True, has_bottom_border=False))
 
         l3.addWidget(grid3)
         layout.addWidget(self.sec3_frame)
@@ -1466,6 +1490,9 @@ X-GNOME-Autostart-enabled=true
         reboot_pending = data.get("reboot_pending", False)
         gaming_mode = data.get("gaming_mode", False)
         sys_health_data = data.get("sys_health", {})
+        security = data.get("security", {})
+        firmware = data.get("firmware", {})
+        firewall = data.get("firewall", {})
 
         # ----------------------------------------------------------------------
         # Header Dynamic Severity Styling (Modern Flat HUD)
@@ -1475,6 +1502,7 @@ X-GNOME-Autostart-enabled=true
         sys_errors = sys_health_data.get("errors", 0) if isinstance(sys_health_data, dict) else 0
         sys_warnings = sys_health_data.get("warnings", 0) if isinstance(sys_health_data, dict) else 0
         updates_total = updates.get("total", 0) if isinstance(updates, dict) else 0
+        sec_high = security.get("high_risk_count", 0) if isinstance(security, dict) else 0
 
         if status == "ACTION_REQUIRED" or sys_errors > 0:
             effective_status = "ACTION_REQUIRED"
@@ -1483,6 +1511,7 @@ X-GNOME-Autostart-enabled=true
             or sys_warnings > 0
             or updates_total > 0
             or reboot_pending
+            or sec_high > 0
         ):
             effective_status = "PRE_FLIGHT_ATTENTION"
 
@@ -1567,6 +1596,33 @@ X-GNOME-Autostart-enabled=true
             self.repo_pkgs_val_lbl.setText("PASS ✔ (All repository packages up to date)")
             self.repo_pkgs_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
 
+        # Security Advisories (arch-audit)
+        if security.get("available", False):
+            high_cve = security.get("high_risk_count", 0)
+            tot_cve = security.get("vulnerabilities_total", 0)
+            vuln_pkgs = security.get("packages", [])
+            if high_cve > 0:
+                preview = ", ".join(vuln_pkgs[:4])
+                if len(vuln_pkgs) > 4: preview += f" (+{len(vuln_pkgs)-4} more)"
+                self.security_val_lbl.setText(f"ALERT 🚨 ({high_cve} High-Risk CVE(s) in pending updates: {preview})")
+                self.security_val_lbl.setStyleSheet("color: #ef4444; font-weight: bold; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+                self.btn_inspect_cve.setVisible(True)
+            elif tot_cve > 0:
+                preview = ", ".join(vuln_pkgs[:4])
+                self.security_val_lbl.setText(f"INFO ℹ ({tot_cve} non-critical CVE(s) pending: {preview})")
+                self.security_val_lbl.setStyleSheet("color: #5fd7ff; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+                self.btn_inspect_cve.setVisible(True)
+            else:
+                self.security_val_lbl.setText("PASS ✔ (No known unpatched CVEs in pending updates)")
+                self.security_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+                self.btn_inspect_cve.setVisible(False)
+        else:
+            reason = security.get("reason", "not_installed")
+            msg = "Optional tool not installed — pacman -S arch-audit" if reason == "not_installed" else "Inspection pending"
+            self.security_val_lbl.setText(f"INFO ℹ ({msg})")
+            self.security_val_lbl.setStyleSheet("color: #5fd7ff; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            self.btn_inspect_cve.setVisible(False)
+
         self.btn_guarded_upgrade.setText(f"⚡ RUN GUARDED SYSTEM UPGRADE ({tot_up})")
 
         # ----------------------------------------------------------------------
@@ -1645,6 +1701,29 @@ X-GNOME-Autostart-enabled=true
             self.devtools_val_lbl.setText("INFO ℹ (Pending inspection - click below)")
             self.devtools_val_lbl.setStyleSheet("color: #5fd7ff; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
             self.btn_update_goose.setVisible(False)
+
+        # Hardware Firmware (fwupd)
+        if firmware.get("available", False):
+            fw_up = firmware.get("updates_count", 0)
+            fw_devs = firmware.get("pending_devices", [])
+            fw_mon = firmware.get("devices_monitored", 0)
+            if fw_up > 0:
+                preview = ", ".join(fw_devs[:3])
+                if len(fw_devs) > 3: preview += f" (+{len(fw_devs)-3} more)"
+                self.firmware_val_lbl.setText(f"UPDATE ⚠ ({fw_up} firmware update(s) available: {preview})")
+                self.firmware_val_lbl.setStyleSheet("color: #ffaf00; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+                self.btn_upgrade_firmware.setText(f"⚡ UPGRADE FIRMWARE ({fw_up})")
+                self.btn_upgrade_firmware.setVisible(True)
+            else:
+                self.firmware_val_lbl.setText(f"PASS ✔ (All {fw_mon} monitored devices and peripherals up to date)")
+                self.firmware_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+                self.btn_upgrade_firmware.setVisible(False)
+        else:
+            reason = firmware.get("reason", "not_installed")
+            msg = "Optional tool not installed — pacman -S fwupd" if reason == "not_installed" else "fwupd daemon inactive"
+            self.firmware_val_lbl.setText(f"INFO ℹ ({msg})")
+            self.firmware_val_lbl.setStyleSheet("color: #5fd7ff; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+            self.btn_upgrade_firmware.setVisible(False)
 
         # ----------------------------------------------------------------------
         # SECTION 3: SYSTEM HEALTH & STORAGE HYGIENE
@@ -1787,6 +1866,17 @@ X-GNOME-Autostart-enabled=true
         self.hardware_val_lbl.setText(hw_txt)
         self.hardware_val_lbl.setStyleSheet(f"color: {hw_color}; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
 
+        # Host Firewall (Shield)
+        fw_active = firewall.get("active", False)
+        fw_backend = firewall.get("backend", "none")
+        fw_details = firewall.get("details", "")
+        if fw_active:
+            self.firewall_val_lbl.setText(f"PASS ✔ (Active: {fw_backend} • {fw_details})")
+            self.firewall_val_lbl.setStyleSheet("color: #4ade80; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+        else:
+            self.firewall_val_lbl.setText(f"INFO ℹ (Host firewall inactive • {fw_details})")
+            self.firewall_val_lbl.setStyleSheet("color: #5fd7ff; font-size: 13px; margin-left: 8px; font-family: 'Hack', monospace;")
+
         # Update tray icon
         if self.tray_app and hasattr(self.tray_app, "update_tray_icon"):
             self.tray_app.update_tray_icon(status, gaming_mode)
@@ -1914,6 +2004,21 @@ X-GNOME-Autostart-enabled=true
 
     def run_custom_terminal(self, command: str, title: str):
         term_cmd = get_terminal_cmd(command, title)
+        self._spawn_terminal(term_cmd)
+
+    def run_inspect_cve_terminal(self):
+        cmd = "echo '🔍 Arch Linux Security Advisories (CVE Triage)...'; if type -P arch-audit &>/dev/null; then arch-audit -u; else echo 'arch-audit is not installed. Install via: sudo pacman -S arch-audit'; fi; echo ''; echo 'Press Enter to return...'; read -r"
+        term_cmd = get_terminal_cmd(cmd, "SysPilot Security CVE Inspection")
+        self._spawn_terminal(term_cmd)
+
+    def run_firmware_upgrade_terminal(self):
+        cmd = "echo '⚡ Hardware Firmware Upgrade (fwupd / LVFS)...'; if type -P fwupdmgr &>/dev/null; then fwupdmgr update; else echo 'fwupd is not installed. Install via: sudo pacman -S fwupd'; fi; echo ''; echo 'Press Enter to return...'; read -r"
+        term_cmd = get_terminal_cmd(cmd, "SysPilot Hardware Firmware Upgrade")
+        self._spawn_terminal(term_cmd)
+
+    def run_precache_terminal(self):
+        cmd = "echo '⚡ Pre-caching pending package updates into pacman cache...'; if type -P checkupdates &>/dev/null; then checkupdates -d || sudo pacman -Sw --noconfirm; else sudo pacman -Sw --noconfirm; fi; echo ''; echo '✔ Package pre-cache complete. Press Enter to return...'; read -r"
+        term_cmd = get_terminal_cmd(cmd, "SysPilot Package Pre-Caching")
         self._spawn_terminal(term_cmd)
 
     def open_copilot_terminal(self):

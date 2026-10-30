@@ -317,6 +317,84 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-011: [IMPLEMENTED] Arch Linux Security Advisories & CVE Severity Highlighting (arch-audit Integration)
+- **Status:** `[IMPLEMENTED]` *(Shipped in v1.2.0)*
+- **Data zgłoszenia:** 2026-10-30
+- **Źródło:** SRE Architectural Roadmap & User Initiative (HowToGeek Security Integration)
+- **Komponenty:**
+  - `core/triage.py` (`check_security_vulnerabilities()`, integration with `arch-audit -u --json`)
+  - `gui/syspilot_gui.py` (Security Vulnerabilities row in *System Updates*, dynamic High/Critical CVE badges, `[🔍 INSPECT CVE]`)
+  - `rust-tray/src/state.rs` & `rust-tray/src/tray.rs` (security flag in Tooltip and NeedsAttention escalation)
+- **Kontekst i Uzasadnienie:**
+  SysPilot currently aggregates total package update counts, but treats a benign utility upgrade identically to a zero-day remote code execution vulnerability patch in `chromium`, `systemd`, or `glibc`. The official `arch-audit` package queries Arch Linux Security Tracker data (`security.archlinux.org`). Integrating this empowers users with actionable security intelligence.
+- **Proponowane Rozwiązanie:**
+  1. Add token-free, non-blocking check `arch-audit -u --json` in `core/triage.py` with 3-second execution timeout.
+  2. If pending updates contain High Risk CVEs, display a prominent warning banner and badge in *System Updates*:
+     `Security Advisories (CVE) │ ALERT 🚨 (N High-Risk CVEs in <packages>) [INSPECT ADVISORIES]`.
+  3. If all updates are non-security or no updates exist:
+     `Security Advisories (CVE) │ PASS ✔ (No known unpatched CVEs)`.
+  4. Escalate tray icon to `dialog-warning` when fixable high-risk security advisories are detected.
+
+---
+
+### PATCH-012: [IMPLEMENTED] Hardware Firmware & Peripherals Telemetry & Safe Update Action (fwupd Integration)
+- **Status:** `[IMPLEMENTED]` *(Shipped in v1.2.0)*
+- **Data zgłoszenia:** 2026-10-30
+- **Źródło:** SRE Architectural Roadmap & User Initiative (Arch Wiki Fwupd / LVFS)
+- **Komponenty:**
+  - `core/triage.py` (`check_firmware_updates()`, query via `fwupdmgr get-updates --no-unreported-check --json`)
+  - `gui/syspilot_gui.py` (Hardware Firmware row in *Third-Party Updates*, interactive `[⚡ UPGRADE FIRMWARE]` button launching terminal runner)
+  - `rust-tray/src/state.rs` (firmware telemetry fields)
+- **Kontekst i Uzasadnienie:**
+  Standard Arch Linux package updates completely ignore device firmware (UEFI microcode, NVMe/SATA SSDs, wireless dongles like Logitech Unifying, TPMs). The machine has `fwupd 2.1.9` installed with 5 detected updateable devices. Without firmware monitoring, critical storage controller bugs and wireless vulnerabilities remain unpatched indefinitely.
+- **Proponowane Rozwiązanie:**
+  1. Add firmware query in `core/triage.py` executing `fwupdmgr get-updates --no-unreported-check --json` safely with fallback when daemon is inactive.
+  2. Surface a dedicated row in GUI under *Third-Party Updates*:
+     `Hardware Firmware (fwupd) │ PASS ✔ (All devices up to date)` or `UPDATE ⚠ (ADATA SSD / Logitech Receiver)` with interactive `UPGRADE FIRMWARE` action.
+  3. Safe guarded execution: firmware flashing is performed inside an explicit terminal window with battery/power safeguards.
+
+---
+
+### PATCH-013: [IMPLEMENTED] Host Firewall Health & Shield Inspection Row (Multi-Backend)
+- **Status:** `[IMPLEMENTED]` *(Shipped in v1.2.0)*
+- **Data zgłoszenia:** 2026-10-30
+- **Źródło:** SRE Architectural Roadmap & User Initiative (HowToGeek Firewall Hardening)
+- **Komponenty:**
+  - `core/triage.py` (`check_host_firewall()`, multi-backend probing `firewalld`/`ufw`/`nftables`)
+  - `gui/syspilot_gui.py` (Host Firewall row under *System Health & Hygiene*)
+  - `rust-tray/src/state.rs` (firewall telemetry fields)
+- **Kontekst i Uzasadnienie:**
+  While perimeter defense is handled by the upstream pfSense router, modern host security requires endpoint firewall verification. The system runs `firewalld` (`firewalld.service active`), but SysPilot provided zero visibility into whether the host firewall is active, which zone is active, or if rogue processes opened listening ports.
+- **Proponowane Rozwiązanie:**
+  1. Add `check_host_firewall()` inspecting `firewalld`, `ufw`, or `nftables` state in <5ms without D-Bus blocking.
+  2. Surface telemetry row:
+     `Host Firewall (Shield) │ PASS ✔ (Active: firewalld • default zone: public)`.
+  3. Universalism standard: report `INFO ℹ` if no host firewall is active (perimeter protected).
+
+---
+
+### PATCH-014: [IMPLEMENTED] On-Demand Package Pre-Caching (Instant Upgrade UX)
+- **Status:** `[IMPLEMENTED]` *(Shipped in v1.2.0)*
+- **Data zgłoszenia:** 2026-10-30
+- **Źródło:** SRE Architectural Roadmap & User Initiative (man checkupdates.8.en)
+- **Komponenty:**
+  - `gui/syspilot_gui.py` (`[⚡ PRE-CACHE PACKAGES]` action button, terminal download runner)
+- **Kontekst i Uzasadnienie:**
+  Downloading multi-gigabyte package archives during an interactive upgrade locks the package manager for minutes. By providing an interactive pre-caching action, packages can be downloaded into `/var/cache/pacman/pkg` before initiating the full transaction.
+- **Proponowane Rozwiązanie:**
+  1. Add interactive `[⚡ PRE-CACHE PACKAGES]` button in GUI Dashboard *System Updates*.
+  2. Execute pre-caching in terminal with progress visibility.
+  3. Zero sudo in Rust background daemon.
+  - `gui/syspilot_gui.py` (`Run Guarded System Upgrade` indicator showing `(Ready - Cached)`)
+- **Kontekst i Uzasadnienie:**
+  Downloading multi-gigabyte package archives (kernel, browser, mesa, LLVM) during an interactive upgrade locks the package manager for minutes. By leveraging `checkupdates -d`, packages can be downloaded quietly to `/var/cache/pacman/pkg` in the background when the user is idle, pausing instantly if GameMode becomes active.
+- **Proponowane Rozwiązanie:**
+  1. Add background pre-download option in `updater.rs` using `checkupdates -d`.
+  2. Enforce strict preconditions: only execute when `gamemode_active == false`, AC power connected, and free disk space on `/` exceeds 15 GB.
+  3. When packages are already cached, the GUI displays `RUN GUARDED SYSTEM UPGRADE (Instant - Cached)`.
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

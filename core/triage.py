@@ -601,6 +601,186 @@ def get_sys_health_status() -> Dict[str, Any]:
     return {"available": False}
 
 
+def check_security_vulnerabilities(skip_network: bool = False) -> Dict[str, Any]:
+    """
+    Check pending package updates for known CVE security vulnerabilities via arch-audit.
+    Fail-safe: Returns neutral INFO if arch-audit is missing or times out.
+    """
+    default_res = {
+        "available": False,
+        "tool": "arch-audit",
+        "reason": "skipped" if skip_network else "not_installed",
+        "vulnerabilities_total": 0,
+        "high_risk_count": 0,
+        "packages": []
+    }
+    if skip_network:
+        return default_res
+
+    audit_bin = shutil.which("arch-audit")
+    if not audit_bin:
+        return default_res
+
+    try:
+        res = subprocess.run(
+            [audit_bin, "-u", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=3.0
+        )
+        if res.returncode == 0:
+            stdout = res.stdout.strip()
+            data = json.loads(stdout) if stdout else []
+            high_risk = 0
+            vuln_pkgs = set()
+
+            for item in data:
+                sev = item.get("severity", "Unknown")
+                if sev.lower() in ("high", "critical"):
+                    high_risk += 1
+                for p in item.get("packages", []):
+                    vuln_pkgs.add(p)
+
+            return {
+                "available": True,
+                "tool": "arch-audit",
+                "vulnerabilities_total": len(data),
+                "high_risk_count": high_risk,
+                "packages": sorted(list(vuln_pkgs))
+            }
+        else:
+            default_res["reason"] = f"exit_{res.returncode}"
+    except subprocess.TimeoutExpired:
+        default_res["reason"] = "timeout"
+    except Exception:
+        default_res["reason"] = "exception"
+
+    return default_res
+
+
+def check_firmware_updates(skip: bool = False) -> Dict[str, Any]:
+    """
+    Check hardware firmware status and pending device updates via fwupdmgr.
+    Fail-safe: Returns neutral INFO if fwupd is not installed or daemon is inactive.
+    """
+    default_res = {
+        "available": False,
+        "tool": "fwupd",
+        "reason": "skipped" if skip else "not_installed",
+        "updates_count": 0,
+        "devices_monitored": 0,
+        "pending_devices": []
+    }
+    if skip:
+        return default_res
+
+    fwupd_bin = shutil.which("fwupdmgr")
+    if not fwupd_bin:
+        return default_res
+
+    try:
+        res = subprocess.run(
+            [fwupd_bin, "get-updates", "--no-unreported-check", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=3.0
+        )
+        stdout = res.stdout.strip()
+        if res.returncode == 0 and stdout:
+            data = json.loads(stdout)
+            devices = data.get("Devices", [])
+            pending_names = [d.get("Name", "Unknown") for d in devices if isinstance(d, dict)]
+            return {
+                "available": True,
+                "tool": "fwupd",
+                "updates_count": len(devices),
+                "devices_monitored": len(devices),
+                "pending_devices": pending_names
+            }
+        elif res.returncode == 2 or not stdout or "no updatable devices" in res.stderr.lower():
+            return {
+                "available": True,
+                "tool": "fwupd",
+                "updates_count": 0,
+                "devices_monitored": 0,
+                "pending_devices": []
+            }
+        else:
+            default_res["reason"] = f"exit_{res.returncode}"
+    except subprocess.TimeoutExpired:
+        default_res["reason"] = "timeout"
+    except Exception:
+        default_res["reason"] = "exception"
+
+    return default_res
+
+
+def check_host_firewall() -> Dict[str, Any]:
+    """
+    Inspect local host firewall status across multiple backends (firewalld, ufw, nftables).
+    Fail-safe: Reports neutral INFO if no local firewall is active.
+    """
+    # 1. Probe firewalld via systemctl & local config (instant, zero-D-Bus-hang)
+    try:
+        res = subprocess.run(["systemctl", "is-active", "firewalld"], capture_output=True, text=True, timeout=0.8)
+        if res.returncode == 0 and res.stdout.strip() == "active":
+            zone = "public"
+            conf_path = "/etc/firewalld/firewalld.conf"
+            if os.path.isfile(conf_path):
+                try:
+                    with open(conf_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith("DefaultZone="):
+                                zone = line.split("=", 1)[1].strip()
+                                break
+                except Exception:
+                    pass
+            return {
+                "available": True,
+                "active": True,
+                "backend": "firewalld",
+                "default_zone": zone,
+                "details": f"default zone: {zone}"
+            }
+    except Exception:
+        pass
+
+    # 2. Probe ufw
+    if shutil.which("ufw"):
+        try:
+            res = subprocess.run(["systemctl", "is-active", "ufw"], capture_output=True, text=True, timeout=0.8)
+            if res.returncode == 0 and res.stdout.strip() == "active":
+                return {
+                    "available": True,
+                    "active": True,
+                    "backend": "ufw",
+                    "details": "active"
+                }
+        except Exception:
+            pass
+
+    # 3. Probe nftables
+    try:
+        res = subprocess.run(["systemctl", "is-active", "nftables"], capture_output=True, text=True, timeout=0.8)
+        if res.returncode == 0 and res.stdout.strip() == "active":
+            return {
+                "available": True,
+                "active": True,
+                "backend": "nftables",
+                "details": "active"
+            }
+    except Exception:
+        pass
+
+    return {
+        "available": True,
+        "active": False,
+        "backend": "none",
+        "details": "protected by perimeter router/LAN"
+    }
+
+
 def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
     """Execute complete triage and compute overall flight readiness."""
     os.makedirs(STATE_DIR, exist_ok=True)
@@ -630,10 +810,15 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
     if not check_pkgs and cached_payload.get("updates"):
         updates = cached_payload.get("updates", {})
         standalone = cached_payload.get("standalone_software", {})
+        security = cached_payload.get("security", {})
+        firmware = cached_payload.get("firmware", {})
     else:
         updates = check_updates(skip_network=not check_pkgs)
         standalone = check_standalone_software(skip=not check_pkgs)
+        security = check_security_vulnerabilities(skip_network=not check_pkgs)
+        firmware = check_firmware_updates(skip=not check_pkgs)
 
+    firewall = check_host_firewall()
     sys_health = get_sys_health_status()
 
     # Determine Overall Flight Status
@@ -676,6 +861,10 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
         if root_disk_used >= 80:
             status = "PRE_FLIGHT_ATTENTION"
             status_reasons.append(f"Root disk usage elevated ({root_disk_used}%)")
+        if security.get("high_risk_count", 0) > 0:
+            status = "PRE_FLIGHT_ATTENTION"
+            vuln_pkgs = ", ".join(security.get("packages", []))
+            status_reasons.append(f"{security['high_risk_count']} high-risk security vulnerability patch(es) pending ({vuln_pkgs})")
 
     # Orphan presence is an INFO maintenance advisory. Only inability to perform
     # the strict query is WARN-equivalent and may degrade readiness.
@@ -696,6 +885,17 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
             "review before removal"
         )
 
+    if firmware.get("updates_count", 0) > 0:
+        devs = ", ".join(firmware.get("pending_devices", []))
+        informational_reasons.append(f"{firmware['updates_count']} hardware firmware update(s) available via fwupd: {devs}")
+    elif not firmware.get("available", True) and firmware.get("reason") != "skipped":
+        informational_reasons.append("Hardware firmware telemetry unavailable (fwupd inactive or missing)")
+
+    if firewall.get("active", False):
+        informational_reasons.append(f"Host firewall active ({firewall.get('backend')}: {firewall.get('details')})")
+    else:
+        informational_reasons.append("Host firewall inactive (protected by perimeter router/LAN)")
+
     payload = {
         "schema_version": "1.0",
         "timestamp": datetime.now().astimezone().isoformat(),
@@ -713,6 +913,9 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
         "orphans": orphans,
         "updates": updates,
         "standalone_software": standalone,
+        "security": security,
+        "firmware": firmware,
+        "firewall": firewall,
         "sys_health": sys_health
     }
 

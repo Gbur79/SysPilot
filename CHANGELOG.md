@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-10-30
+
+### Added
+- **PATCH-011 — Arch Linux Security Advisories & CVE Severity Highlighting (`arch-audit`)**:
+  - Added non-blocking CVE telemetry in `core/triage.py` querying `arch-audit -u --json` with 3s timeout.
+  - Added `Security Advisories (arch-audit)` row in GUI Dashboard *System Updates* with High/Critical CVE badges.
+  - Added interactive `[🔍 INSPECT CVE]` action launching terminal CVE inspection.
+  - Extended Rust Sentinel (`state.rs` & `tray.rs`) to escalate status to `NeedsAttention` and icon to `dialog-warning` when fixable High-Risk CVEs are detected.
+- **PATCH-012 — Hardware Firmware & Peripherals Telemetry & Upgrade Action (`fwupd` / LVFS)**:
+  - Added local firmware status probe via `fwupdmgr get-updates --no-unreported-check --json` in `core/triage.py`.
+  - Added `Hardware Firmware (fwupd)` row in GUI Dashboard *Third-Party Updates* monitoring SSDs, UEFI, and peripherals.
+  - Added safe, interactive `[⚡ UPGRADE FIRMWARE]` button running `fwupdmgr update` in terminal with user confirmation.
+- **PATCH-013 — Multi-Backend Host Firewall & Shield Inspection (`firewalld` / `ufw` / `nftables`)**:
+  - Implemented multi-backend host firewall detection in `core/triage.py` reading systemd state and default zone in <5ms.
+  - Added `Host Firewall (Shield)` row in GUI Dashboard *System Health & Hygiene*.
+  - Universalism & fail-safe: systems relying on perimeter routers (e.g. pfSense) report neutral `INFO ℹ` without false-positive alarms.
+- **PATCH-014 — On-Demand Package Pre-Caching (`[⚡ PRE-CACHE PACKAGES]`)**:
+  - Added `[⚡ PRE-CACHE PACKAGES]` action button in GUI Dashboard *System Updates* to download pending packages into pacman cache interactively before upgrading.
+  - Strictly forbidden background sudo execution in Rust tray daemon to prevent TTY authentication failure.
+
+---
+
 ## [1.1.1] - 2026-10-30
 
 ### Fixed

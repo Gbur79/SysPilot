@@ -256,3 +256,71 @@ fn test_effective_updates_cache_invalidation() {
     });
     assert_eq!(tray.effective_updates(), (5, 2));
 }
+
+#[test]
+fn test_security_cve_escalation_and_telemetry() {
+    use ksni::Tray;
+
+    let dir = TempTestDir::new();
+    let path = dir.path.join("status.json");
+    let json_content = r#"{
+  "schema_version": "1.0",
+  "status": "FLIGHT_READY",
+  "gaming_mode": false,
+  "reboot_pending": false,
+  "updates": {
+    "total": 0,
+    "core_count": 0,
+    "regular_count": 0,
+    "aur_count": 0
+  },
+  "security": {
+    "available": true,
+    "tool": "arch-audit",
+    "vulnerabilities_total": 2,
+    "high_risk_count": 1,
+    "packages": ["chromium"]
+  },
+  "firmware": {
+    "available": true,
+    "tool": "fwupd",
+    "updates_count": 1,
+    "devices_monitored": 5,
+    "pending_devices": ["KEK CA"]
+  },
+  "firewall": {
+    "available": true,
+    "active": true,
+    "backend": "firewalld",
+    "details": "default zone: public"
+  }
+}"#;
+    File::create(&path)
+        .unwrap()
+        .write_all(json_content.as_bytes())
+        .unwrap();
+
+    let snapshot = read_system_snapshot(&path).unwrap();
+    assert_eq!(snapshot.security_high_risk, 1);
+    assert_eq!(snapshot.firmware_updates, 1);
+    assert!(snapshot.firewall_active);
+
+    // High-risk CVE must escalate effective_status to PRE_FLIGHT_ATTENTION even if updates_total is 0
+    assert_eq!(snapshot.effective_status(), "PRE_FLIGHT_ATTENTION");
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let mut tray = crate::tray::SysPilotTray::new(
+        snapshot,
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        tx,
+    );
+    tray.snapshot.cache_stale = false;
+
+    // High risk CVE triggers warning icon and attention status
+    assert_eq!(tray.icon_name(), "dialog-warning");
+    assert_eq!(tray.status(), ksni::Status::NeedsAttention);
+    assert!(tray.tool_tip().title.contains("high-risk security CVE"));
+}

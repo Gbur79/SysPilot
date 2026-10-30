@@ -19,6 +19,12 @@ struct StatusJson {
     updates: StatusUpdates,
     #[serde(default)]
     sys_health: Option<SysHealth>,
+    #[serde(default)]
+    security: Option<StatusSecurity>,
+    #[serde(default)]
+    firmware: Option<StatusFirmware>,
+    #[serde(default)]
+    firewall: Option<StatusFirewall>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -27,6 +33,45 @@ struct StatusUpdates {
     core_count: u32,
     regular_count: u32,
     aur_count: u32,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Default, Deserialize)]
+struct StatusSecurity {
+    #[serde(default)]
+    available: bool,
+    #[serde(default)]
+    vulnerabilities_total: u32,
+    #[serde(default)]
+    high_risk_count: u32,
+    #[serde(default)]
+    packages: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Default, Deserialize)]
+struct StatusFirmware {
+    #[serde(default)]
+    available: bool,
+    #[serde(default)]
+    updates_count: u32,
+    #[serde(default)]
+    devices_monitored: u32,
+    #[serde(default)]
+    pending_devices: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Default, Deserialize)]
+struct StatusFirewall {
+    #[serde(default)]
+    available: bool,
+    #[serde(default)]
+    active: bool,
+    #[serde(default)]
+    backend: String,
+    #[serde(default)]
+    details: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -71,6 +116,9 @@ pub struct SystemSnapshot {
     pub modified: Option<SystemTime>,
     pub cache_stale: bool,
     pub source_error: Option<String>,
+    pub security_high_risk: u32,
+    pub firmware_updates: u32,
+    pub firewall_active: bool,
 }
 
 impl Default for SystemSnapshot {
@@ -91,6 +139,9 @@ impl Default for SystemSnapshot {
             modified: None,
             cache_stale: true,
             source_error: None,
+            security_high_risk: 0,
+            firmware_updates: 0,
+            firewall_active: false,
         }
     }
 }
@@ -118,6 +169,7 @@ impl SystemSnapshot {
         ) || self.warnings > 0
             || self.updates_total > 0
             || self.reboot_pending
+            || self.security_high_risk > 0
         {
             "PRE_FLIGHT_ATTENTION"
         } else {
@@ -252,6 +304,10 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
             .filter(|time| time.duration_since(UNIX_EPOCH).is_ok())
     });
 
+    let security = parsed.security.unwrap_or_default();
+    let firmware = parsed.firmware.unwrap_or_default();
+    let firewall = parsed.firewall.unwrap_or_default();
+
     Ok(SystemSnapshot {
         status,
         errors,
@@ -268,5 +324,8 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
         modified,
         cache_stale: is_stale(modified),
         source_error: None,
+        security_high_risk: security.high_risk_count,
+        firmware_updates: firmware.updates_count,
+        firewall_active: firewall.active,
     })
 }

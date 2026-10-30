@@ -184,6 +184,8 @@ impl Tray for SysPilotTray {
             )
         } else if self.snapshot.effective_status() == "ACTION_REQUIRED" {
             "SysPilot — action required".into()
+        } else if self.snapshot.security_high_risk > 0 {
+            format!("SysPilot — {} high-risk security CVE(s) pending", self.snapshot.security_high_risk)
         } else if total_updates > 0 {
             format!("SysPilot — {total_updates} updates available ({core_updates} core)")
         } else if self.gamemode_active {

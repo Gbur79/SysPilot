@@ -5,6 +5,8 @@ export component TabButton inherits Rectangle {
     in property <bool> active: false;
     callback clicked();
 
+    vertical-stretch: 0;
+    height: 36px;
     background: touch.pressed ? Theme.surface-active
                : touch.has-hover ? Theme.surface-hover
                : (root.active ? Theme.surface : Colors.transparent);

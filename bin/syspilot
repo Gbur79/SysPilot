@@ -250,7 +250,7 @@ copilot() {
 }
 
 launch_gui() {
-    # 1. Prefer native Rust Slint GUI if compiled or installed
+    # Prefer native Rust Slint GUI if compiled or installed
     if [[ -x "$PROJECT_ROOT/target/release/syspilot-gui" ]]; then
         nohup "$PROJECT_ROOT/target/release/syspilot-gui" >/dev/null 2>&1 &
         exit 0
@@ -260,22 +260,8 @@ launch_gui() {
     elif have syspilot-gui; then
         nohup syspilot-gui >/dev/null 2>&1 &
         exit 0
-    fi
-
-    # 2. Fallback to Python/PyQt6 GUI
-    local gui_script=""
-    if [[ -f "$PROJECT_ROOT/gui/syspilot_gui.py" ]]; then
-        gui_script="$PROJECT_ROOT/gui/syspilot_gui.py"
-    elif [[ -f "/usr/lib/syspilot/gui/syspilot_gui.py" ]]; then
-        gui_script="/usr/lib/syspilot/gui/syspilot_gui.py"
-    fi
-
-    if [[ -n $gui_script && -f $gui_script ]]; then
-        # Launch detached single-instance GUI without terminal
-        nohup python3 "$gui_script" >/dev/null 2>&1 &
-        exit 0
     else
-        die "SysPilot GUI component not found"
+        die "syspilot-gui is not installed or built"
     fi
 }
 
@@ -315,12 +301,14 @@ case ${1:-} in
         copilot "Begin an interactive system SRE session. Do not run diagnostics until asked."
         ;;
     --tray|"")
-        if have syspilot-tray; then
+        if [[ -x "$PROJECT_ROOT/target/release/syspilot-tray" ]]; then
+            exec "$PROJECT_ROOT/target/release/syspilot-tray"
+        elif [[ -x "${XDG_BIN_HOME:-$HOME/.local/bin}/syspilot-tray" ]]; then
+            exec "${XDG_BIN_HOME:-$HOME/.local/bin}/syspilot-tray"
+        elif have syspilot-tray; then
             exec syspilot-tray
-        elif [[ -f "$PROJECT_ROOT/gui/syspilot_gui.py" ]]; then
-            exec python3 "$PROJECT_ROOT/gui/syspilot_gui.py" --tray
         else
-            die "SysPilot tray component is not installed"
+            die "syspilot-tray is not installed or built"
         fi
         ;;
     --enable-autostart)  user_unit enable ;;

@@ -1,24 +1,28 @@
 # Maintainer: Karol Gbur
 pkgname=syspilot
-pkgver=1.1.0
+pkgver=2.0.0
 pkgrel=1
-pkgdesc="Token-Lean Autonomous SRE Desktop Copilot & Health Sentinel for Arch Linux"
+pkgdesc="Ultra-lean Native Rust SRE Desktop Cockpit & Health Sentinel for Arch Linux"
 arch=('x86_64')
 url="https://github.com/Gbur79/SysPilot"
 license=('Apache-2.0')
 depends=(
     'bash'
-    'python'
-    'python-pyqt6'
     'pacman-contrib'
     'jq'
     'libnotify'
+    'fontconfig'
+    'freetype2'
+    'hicolor-icon-theme'
 )
 makedepends=(
     'cargo'
 )
 optdepends=(
-    'goose-cli: for autonomous AI-powered error diagnostics and automated fixes'
+    'arch-audit: for CVE vulnerability telemetry'
+    'fwupd: for hardware firmware update checks'
+    'goose-cli: for autonomous AI diagnostics'
+    'antigravity: for Antigravity SRE copilot sessions'
     'gamemode: for automatic diagnostics inhibition during active gaming sessions'
     'yay: for AUR updates triage'
     'paru: for AUR updates triage'
@@ -29,30 +33,28 @@ sha256sums=('SKIP')
 
 build() {
     cd "$srcdir/$pkgname-$pkgver"
-    cargo build --release --locked -p syspilot-tray
+    cargo build --release --locked -p syspilot-tray -p syspilot-gui
 }
 
 package() {
     cd "$srcdir/$pkgname-$pkgver"
 
     # Install main executables
-    install -dm755 "$pkgdir/usr/lib/$pkgname"
-    cp -r core gui copilot assets "$pkgdir/usr/lib/$pkgname/"
-    install -Dm755 bin/syspilot-faf-repair "$pkgdir/usr/lib/$pkgname/bin/syspilot-faf-repair"
-    install -Dm755 bin/syspilot-sentinel "$pkgdir/usr/lib/$pkgname/bin/syspilot-sentinel"
-    install -Dm755 bin/syspilot "$pkgdir/usr/bin/syspilot"
     install -Dm755 target/release/syspilot-tray "$pkgdir/usr/bin/syspilot-tray"
+    install -Dm755 target/release/syspilot-gui "$pkgdir/usr/bin/syspilot-gui"
+    install -Dm755 bin/syspilot "$pkgdir/usr/bin/syspilot"
+    install -Dm755 bin/syspilot-faf-repair "$pkgdir/usr/lib/$pkgname/bin/syspilot-faf-repair"
 
     # Install desktop entry
     install -Dm644 autostart/syspilot.desktop "$pkgdir/etc/xdg/autostart/syspilot.desktop"
     install -Dm644 autostart/syspilot.desktop "$pkgdir/usr/share/applications/syspilot.desktop"
 
-    # Install systemd user services
+    # Install systemd user service
     install -Dm644 systemd/syspilot-tray.service "$pkgdir/usr/lib/systemd/user/syspilot-tray.service"
-    install -Dm644 systemd/syspilot-sentinel.service "$pkgdir/usr/lib/systemd/user/syspilot-sentinel.service"
-    install -Dm644 systemd/syspilot-sentinel.timer "$pkgdir/usr/lib/systemd/user/syspilot-sentinel.timer"
 
-    # Install goose public recipe and skill
+    # Install copilot playbooks, quirks, and recipes
+    install -dm755 "$pkgdir/usr/share/$pkgname"
+    cp -r copilot "$pkgdir/usr/share/$pkgname/"
     install -Dm644 packaging/goose/recipes/copilot-admin.yaml "$pkgdir/usr/share/$pkgname/goose/recipes/copilot-admin.yaml"
     install -Dm644 packaging/goose/skills/copilot-admin/SKILL.md "$pkgdir/usr/share/$pkgname/goose/skills/copilot-admin/SKILL.md"
 

@@ -34,15 +34,18 @@ if [[ ! -d "$target_dir" || (! -f "$target_dir/Cargo.toml" && ! -d "$target_dir/
 fi
 
 cd -- "$target_dir"
+err_log="/tmp/syspilot-build-err.log"
 
 # 1. Formatting
 fmt_out=""
 if ! fmt_out=$(cargo fmt --check 2>&1); then
+    echo "$fmt_out" > "$err_log"
     if (( quiet )); then
-        echo "RUST_VERIFY: FAIL | TESTS: UNTESTED | CLIPPY: UNTESTED | FMT: FAIL | TARGET: syspilot-tray"
-        echo "DIAG_1: STEP=fmt;EXIT=1;TARGET=syspilot-tray"
+        echo "RUST_VERIFY: FAIL | TESTS: UNTESTED | CLIPPY: UNTESTED | FMT: FAIL | TARGET: syspilot-workspace"
+        echo "DIAG_1: STEP=fmt;EXIT=1;TARGET=syspilot-workspace"
         first_line=$(echo "$fmt_out" | head -n 1 | tr '|' '_')
         echo "DIAG_2: SUMMARY=${first_line:-cargo fmt mismatch}"
+        echo "FULL_LOG: $err_log"
     else
         echo "cargo fmt failed:" >&2
         echo "$fmt_out" >&2
@@ -53,11 +56,13 @@ fi
 # 2. Clippy
 clippy_out=""
 if ! clippy_out=$(cargo clippy --locked --all-targets -- -D warnings 2>&1); then
+    echo "$clippy_out" > "$err_log"
     if (( quiet )); then
-        echo "RUST_VERIFY: FAIL | TESTS: UNTESTED | CLIPPY: FAIL | FMT: PASS | TARGET: syspilot-tray"
-        echo "DIAG_1: STEP=clippy;EXIT=1;TARGET=syspilot-tray"
+        echo "RUST_VERIFY: FAIL | TESTS: UNTESTED | CLIPPY: FAIL | FMT: PASS | TARGET: syspilot-workspace"
+        echo "DIAG_1: STEP=clippy;EXIT=1;TARGET=syspilot-workspace"
         first_line=$(echo "$clippy_out" | grep -m1 "error:" | tr '|' '_')
         echo "DIAG_2: SUMMARY=${first_line:-cargo clippy failed}"
+        echo "FULL_LOG: $err_log"
     else
         echo "cargo clippy failed:" >&2
         echo "$clippy_out" >&2
@@ -68,11 +73,13 @@ fi
 # 3. Tests
 test_out=""
 if ! test_out=$(cargo test --locked 2>&1); then
+    echo "$test_out" > "$err_log"
     if (( quiet )); then
-        echo "RUST_VERIFY: FAIL | TESTS: FAIL | CLIPPY: PASS | FMT: PASS | TARGET: syspilot-tray"
-        echo "DIAG_1: STEP=test;EXIT=1;TARGET=syspilot-tray"
+        echo "RUST_VERIFY: FAIL | TESTS: FAIL | CLIPPY: PASS | FMT: PASS | TARGET: syspilot-workspace"
+        echo "DIAG_1: STEP=test;EXIT=1;TARGET=syspilot-workspace"
         failed_test=$(echo "$test_out" | grep -m1 "FAILED" | tr '|' '_')
         echo "DIAG_2: SUMMARY=${failed_test:-cargo test assertions failed}"
+        echo "FULL_LOG: $err_log"
     else
         echo "cargo test failed:" >&2
         echo "$test_out" >&2

@@ -66,6 +66,18 @@ By having the local Rust sentinel and Python triage engine perform 100% of the h
   - Distinguishes **Core System Updates** (kernel, systemd, glibc, dracut, grub, mesa, nvidia) from regular packages.
   - Auto-heals stale lockfiles in temporary checkupdate databases.
   - Suspends all background update and disk checks during active gaming sessions (GameMode Freeze).
+  - **On-Demand Package Pre-Caching (`[⚡ PRE-CACHE PACKAGES]`):** Interactively pre-downloads multi-gigabyte package archives into `/var/cache/pacman/pkg` prior to initiating the full upgrade, minimizing system lock times.
+- **Security & Vulnerability Intelligence (`arch-audit`):**
+  - Instant, non-blocking CVE tracking parsing official Arch Linux Security Tracker data (`security.archlinux.org`).
+  - Distinguishes benign utility updates from High/Critical remote code execution or privilege escalation zero-days.
+  - Automatically escalates Rust Tray Sentinel status and tooltip when actionable security advisories are detected, paired with an interactive `[🔍 INSPECT CVE]` terminal audit.
+- **Hardware Firmware & Peripherals Telemetry (`fwupd` / LVFS):**
+  - Full visibility into firmware status for NVMe/SATA SSDs, wireless dongles (Logitech Unifying), TPMs, and motherboard UEFI.
+  - Interactive, guarded `[⚡ UPGRADE FIRMWARE]` action running LVFS updates in an isolated terminal.
+  - **Universal NVRAM Resilience:** Smart hardware-quirk classification that bypasses oversized UEFI certificates (KEK/dbx) on platforms with legacy BIOS NVRAM buffer limits when Secure Boot is disabled, eliminating false-positive warning loops.
+- **Endpoint Host Firewall Inspection (Shield):**
+  - High-speed (<5ms) multi-backend inspector verifying `firewalld`, `ufw`, or `nftables` state and active zones.
+  - Follows the SRE Universalism Standard: machines relying on upstream perimeter routers (e.g. pfSense) report neutral `INFO ℹ` without false alerts.
 - **Decoupled Single-Instance Dashboard (`syspilot_gui.py`):**
   - Atomic startup lock (`fcntl.flock`) and early `QLocalServer` binding eliminate duplicate windows upon rapid double-clicks.
   - Dynamic **Hardware Platform & GPU** telemetry row detecting CPU architecture, GPU model, and active driver stack without hardcoded assumptions.
@@ -88,7 +100,7 @@ By having the local Rust sentinel and Python triage engine perform 100% of the h
 
 The SysPilot graphical interface is organized into 5 focused tabs:
 
-1. **✈ Dashboard:** Lean operational overview. Shows Official Updates, Standalone & 3rd-Party App Updates, System Health & Hygiene (Reboot, Systemd, Baloo & Journal, Orphans, .pacnew, Disk, Gaming, and Hardware Platform & GPU).
+1. **✈ Dashboard:** Lean operational overview. Shows Official Updates (with Security Advisories & CVE risk scoring, Pre-caching, Guarded Upgrades), Standalone & 3rd-Party App Updates (AUR, Flatpak, UV, Goose, Hardware Firmware via `fwupd`), and System Health & Hygiene (Host Firewall Shield, Reboot, Systemd units, Baloo & Journal, Orphans, .pacnew, Disk storage, Gaming readiness, and Hardware Platform & GPU).
 2. **🛠 System Maintenance:** One-click safe maintenance tools (Orphan package triage, Mirror ranking, Safe Cache Trimming, Deep Clean, and `.pacnew` reconciler).
 3. **🤖 AI Copilot:** Embedded AI troubleshooting console with 1-click playbook buttons (FAF Setup, Proton launch fix, PipeWire audio repair, `.pacnew` diffing) and the 30-second onboarding wizard.
 4. **🧠 SRE Skill & Persona:** Full transparency view. Inspect pre-gathered 0-token telemetry, customize persistent user directives, and browse loaded playbooks.

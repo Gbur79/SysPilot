@@ -58,7 +58,7 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
 ## 🛡️ Core Features
 
 - **Ultralight 24/7 Rust Sentinel (`syspilot-tray`):**
-  - Native StatusNotifierItem (SNI) implementation (`ksni 0.3`) for KDE Plasma Wayland and X11 desktops (~1.2 MB RSS).
+  - Native StatusNotifierItem (SNI) implementation (`ksni 0.3`) for KDE Plasma Wayland and X11 desktops (~3.2 MB RSS).
   - Native D-Bus client (`zbus 5.19`) for zero-fork GameMode queries.
   - Immediate detection of un-rebooted kernel upgrades by monitoring `/usr/lib/modules/<version>`.
   - Non-blocking disk space queries using `libc::statvfs` directly without invoking external shell binaries.

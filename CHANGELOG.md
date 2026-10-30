@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-10-30
+
+### Added
+- **PATCH-009 — High-Performance 24/7 Rust Sentinel (`rust-tray`), Native D-Bus (`zbus 5.19`), IPC Single-Instance & Instant Responsiveness**:
+  - Implemented ultra-lightweight Rust StatusNotifierItem daemon (`syspilot-tray`) running 24/7 in KDE Plasma Wayland and X11 sessions consuming only **~1.2 MB RAM and 0.0% CPU**.
+  - Migrated D-Bus queries from periodic external `busctl` shell executions to native session bus calls via `zbus 5.19`, eliminating ~28,800 fork/exec calls per day.
+  - Implemented `sentinels.rs`:
+    - Non-blocking kernel reboot detection via `/proc/sys/kernel/osrelease` and `/usr/lib/modules/<version>`.
+    - Intelligent pacman database lock monitor: differentiates running ALPM package managers (`pacman`, `yay`, `paru`, `pamac-daemon`) from orphaned `/var/lib/pacman/db.lck` locks.
+    - Native `libc::statvfs` disk capacity measurements for `/` and `/home` directly in memory without shell forks.
+  - Implemented `updater.rs`:
+    - Async Tokio background worker evaluating official packages (`checkupdates` with isolated temporary DB in `/tmp` and auto-healing of stale locks).
+    - Prioritized Core Package classification (`linux`, `systemd`, `nvidia`, `grub`, `dracut`, `glibc`, `pipewire`, `wireplumber`).
+    - Async AUR update evaluation (`yay -Qua` / `paru -Qua`) and standalone third-party tools triage (`sys-health --software --json`).
+    - **GameMode Freeze:** background disk and network scans are automatically paused during active gaming sessions.
+  - Spillage-free context menu: flattened context menu to 5 ergonomic actions and rich multi-line tooltip.
+  - Hermetic unit tests in `rust-tray/src/tests.rs` expanded to 10 comprehensive tests (`cargo test --locked`, 10/10 PASS).
+- **PATCH-010 — Dynamic Hardware Platform & GPU Row & Universal Decoupled AI Copilot**:
+  - Added `Hardware Platform & GPU` telemetry row under *System Health & Hygiene* dynamically querying CPU model and GPU architecture/driver via `/proc/cpuinfo` and `nvidia-smi`/`lspci`/`summary.json` without hardcoding.
+  - Introduced configuration resolver for `~/.config/syspilot/config.env` (`SYSPILOT_COPILOT_CMD`, `COPILOT_LABEL`, `SYSPILOT_GOOSE_RECIPE`), allowing private custom copilot agents or terminal runners without modifying public git codebase.
+  - Removed hardcoded "Goose SRE" labels from tabs and headers in favor of neutral `SysPilot AI Copilot`.
+  - Packaging modernization: updated `packaging/PKGBUILD` to v1.1.0 with cargo release build and `syspilot-tray.service` user unit.
+
+### Fixed
+- **BUG-01 (Double Window on rapid clicks)**:
+  - Added 1.5s atomic debounce in Rust tray `activate()`.
+  - Added atomic `fcntl.flock` on `~/.local/state/syspilot/.gui.lock` and early `QLocalServer` binding in `gui/syspilot_gui.py` before heavy Qt widget hierarchy creation.
+- **BUG-02 (Amber vs Green Desync Lag)**:
+  - Synchronized `effective_status` between Python and Rust, eliminating lag between tray status and GUI dashboard components.
+  - Reduced cold-start autotriage delay from 1000ms to 100ms.
+- **Decoupling from embedded engine copy**:
+  - Removed obsolete embedded copy of `bin/sys-health.sh` in favor of external canonical engine integration.
+
+---
+
+## [1.0.7] - 2026-10-16
+
+### Fixed
+- **PATCH-008 — SysPilot / sys-health Parity (Dual-Tier Orphan Telemetry & Severity Harmonization)**:
+  - Eliminated false `PRE_FLIGHT_ATTENTION` (🟡) flight readiness degradation when benign orphan packages exist. In alignment with `sys-health.sh`, orphan presence is now strictly informational (`INFO ℹ`) and preserves `FLIGHT_READY` (🟢).
+  - Implemented shared 3-tier classification in `core/triage.py` (`ORPHAN_SENSITIVE_PATTERNS`, `_orphan_sensitive_tag()`) matching `classify_orphan_tier()` in `sys-health.sh`:
+    - **Tier 1 (Strict Unreferenced)**: candidates eligible for automatic pruning.
+    - **Tier 2 (Optional for Apps)**: reverse optional dependencies.
+    - **Tier 3 (Heuristically Sensitive)**: packages flagged as desktop, compositor, display manager, kernel, boot, graphics, or audio (e.g. `kwin-x11`).
+  - Differentiated GUI display in `gui/syspilot_gui.py`:
+    - When Tier 1 packages are detected: displays `INFO ℹ ({count} strict orphan(s) eligible for pruning)` with amber `🗑 PRUNE ORPHANS`.
+    - When only Tier 2 or Tier 3 packages exist: displays `INFO ℹ (0 strict unreferenced • {count} candidates in review)` with cyan `🗑 REVIEW CANDIDATES`.
+    - Only pacman query failures or database execution errors degrade readiness to `WARN ⚠`.
+  - Aligned CLI scorecard (`syspilot -s`) to report informational cyan status for unrequired candidates rather than yellow warnings.
+  - Implemented atomic state persistence (`.status.json.tmp.<pid>` -> `os.replace`) to prevent race conditions during concurrent triage reads.
+
 ## [1.0.6] - 2026-10-09
 
 ### Added

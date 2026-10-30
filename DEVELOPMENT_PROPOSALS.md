@@ -227,6 +227,7 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
   Current broad exception handling makes an unavailable user manager or D-Bus session indistinguishable from “zero failed user units.” Furthermore, `systemctl --user reset-failed` only clears retained systemd state and a blanket action may erase failure evidence for unrelated services.
 - **Proponowane Rozwiązanie:**
   Add explicit per-manager probe status (`available`, `unavailable`, `timeout`, and diagnostic text) so the GUI never presents an unavailable user-manager probe as a clean check. For real non-app failures, provide Inspect commands before a confirmation-gated `systemctl --user reset-failed <selected-unit...>` action. Never use `sudo` for the user-manager action; reject or safely re-exec elevated CLI invocations in the original user’s runtime context. A destructive all-unit reset, if provided, must require explicit `--all --yes`.
+  *(Uwaga architektoniczna SRE: Ścisła synergia z `sys-health.sh` PATCH-035 / Pakiet 1 w zakresie precyzyjnego journalctl i reset-failed).*
 
 ---
 
@@ -245,4 +246,110 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 - **Proponowane Rozwiązanie:**
   Deploy a deterministic, zero-token CLI repair and setup helper (`bin/syspilot-faf-repair`) accessible directly via `syspilot --faf-repair`. The utility validates prerequisites (`bwrap`, 32-bit Vulkan ICDs), synchronizes components via `update.sh perform`, dynamically discovers Steam libraries across multi-mount setups via `libraryfolders.vdf`, syncs `Game.prefs` with backup preservation, generates dynamic `.desktop` launchers for both XDG menu and Desktop pointing to `$HOME/faf-linux/run`, and refreshes desktop database caches.
 
+---
 
+### PATCH-008: [IMPLEMENTED] SysPilot / sys-health Parity — Dual-Tier Orphan Telemetry & Severity Harmonization
+- **Status:** `[IMPLEMENTED]` *(Shipped in v1.0.7)*
+- **Data zgłoszenia:** 2026-10-16
+- **Źródło:** SRE Architectural Audit (Sol Subagent `20261016_5`) — `kwin-x11` package discrepancy between `sys-health.sh` (INFO/ALL_CLEAR) and SysPilot (WARN/PRE_FLIGHT_ATTENTION).
+- **Komponenty:**
+  - `core/triage.py` (`check_orphan_packages()`, `run_triage()`, `ORPHAN_SENSITIVE_PATTERNS`)
+  - `gui/syspilot_gui.py` (Orphan row rendering, button text & classes)
+  - `bin/syspilot` (Scorecard `-s` orphan reporting)
+  - `CHANGELOG.md` & `packaging/PKGBUILD` (bump to v1.0.7)
+- **Kontekst i Uzasadnienie:**
+  Following upstream KDE Plasma 6.8 deprecation of standalone X11 sessions, `kwin-x11` became unrequired. While `sys-health.sh` categorized it as an informational advisory (`INFO ℹ`) and marked it Tier 3 (heuristically sensitive), SysPilot's triage wrapper unconditionally elevated any orphan package to `PRE_FLIGHT_ATTENTION` (🟡) with a `WARN ⚠` label. This created an inconsistency where a healthy system was falsely flagged as degraded, and clicking "PRUNE ORPHANS (1)" opened a dialog offering 0 strict candidate removals.
+- **Wdrożone Rozwiązanie:**
+  1. Synchronized the 3-tier orphan classification model (`Tier 1`: strict unreferenced, `Tier 2`: optional for apps, `Tier 3`: sensitive desktop/boot/graphics/audio components) into `core/triage.py`.
+  2. Harmonized severity: orphan presence is now strictly informational (`INFO ℹ`) and does not degrade `Overall Status` from `FLIGHT_READY` (🟢).
+  3. Added fail-visible checking: only pacman execution errors or timeouts trigger `WARN ⚠` and elevate flight attention.
+  4. Updated GUI and CLI to distinguish between Tier 1 prune candidates (`PRUNE ORPHANS`) and Tier 2/3 review candidates (`REVIEW CANDIDATES`).
+  5. Enforced atomic write persistence for `status.json`.
+
+
+
+---
+
+### PATCH-009: [IMPLEMENTED] Ultra-Lightweight 24/7 Rust Tray Sentinel, Native D-Bus (`zbus 5.19`), Single-Instance Lock & Zero-Lag IPC
+- **Status:** `[IMPLEMENTED]` *(Shipped in v1.1.0)*
+- **Data zgłoszenia:** 2026-10-30
+- **Źródło:** SRE Architectural Audit (Master Plan v2.1) — Elimination of high CPU/RAM overhead, double-window spawn bug, and Amber/Green status desynchronization lag.
+- **Komponenty:**
+  - `rust-tray/Cargo.toml` (`zbus 5.19`, `ksni 0.3`, `tokio`, `libc 0.2`)
+  - `rust-tray/src/sentinels.rs` (non-blocking kernel reboot, pacman lockfile, `libc::statvfs` disk probes)
+  - `rust-tray/src/updater.rs` (async `checkupdates` with `/tmp` isolated DB, AUR, standalone updates, GameMode freeze)
+  - `rust-tray/src/gamemode.rs` (native session D-Bus calls via `zbus`, 0 fork/exec)
+  - `rust-tray/src/tray.rs` (5-item flattened context menu, multi-line tooltip, 1.5s activate debounce)
+  - `rust-tray/src/tests.rs` (10 hermetic unit tests with TempTestDir)
+  - `gui/syspilot_gui.py` (`fcntl.flock` on `.gui.lock`, early `QLocalServer` binding, 100ms startup triage)
+- **Kontekst i Uzasadnienie:**
+  1. Spawning `busctl` every 3 seconds to check GameMode caused ~28,800 fork/exec cycles per day.
+  2. Double-clicking the tray icon often spawned two concurrent GUI processes due to ~400ms Qt widget initialization before socket listening.
+  3. Status in the tray desynchronized with the GUI dashboard due to inconsistent `effective_status` semantics and an artificial 1000ms delay.
+- **Wdrożone Rozwiązanie:**
+  - Full native D-Bus integration in Rust via `zbus 5.19` directly on user session bus.
+  - Rust Sentinel runs continuously as `syspilot-tray.service` using only **~1.2 MB RAM and 0.0% CPU**.
+  - Single-instance enforcement via atomic `fcntl.flock` and 1.5s tray debounce.
+  - Aligned status semantics ensuring instantaneous triage refresh.
+
+---
+
+### PATCH-010: [IMPLEMENTED] Dynamic Hardware Platform & GPU Row, Universal Decoupled AI Copilot & External Engine Decoupling
+- **Status:** `[IMPLEMENTED]` *(Shipped in v1.1.0)*
+- **Data zgłoszenia:** 2026-10-30
+- **Źródło:** User Request & SRE Architectural Governance — Removal of rig-bias, universal hardware detection, decoupled copilot configuration, and clean segregation of private identities.
+- **Komponenty:**
+  - `gui/syspilot_gui.py` (`Hardware Platform & GPU` row under *System Health & Hygiene*, `get_hardware_summary()`)
+  - `core/copilot_config.py` (`get_user_copilot_config()`, dynamic `is_copilot_ready()`, `get_active_model_details()`)
+  - `bin/syspilot` (`SYSPILOT_COPILOT_CMD` CLI runner support, removed embedded `bin/sys-health.sh`)
+  - `packaging/PKGBUILD` (version bump to 1.1.0, cargo release build, `syspilot-tray.service`)
+  - `copilot/skills/sys-pilot-admin/SKILL.md` (clean public SRE skill without private rig leaks)
+  - `copilot/quirks/maxwell_nvidia.md` (universalized DP 1.2 MST daisy-chain bandwidth documentation)
+- **Kontekst i Uzasadnienie:**
+  1. The GUI lacked a dedicated hardware status row, making it impossible to see GPU/CPU state when hardware warnings were flagged.
+  2. The Copilot button was tightly coupled to hardcoded tool names, preventing users from connecting custom agents or private runners without modifying git-tracked files.
+  3. Embedded engine copies in `bin/sys-health.sh` created maintenance drift against canonical external tools.
+- **Wdrożone Rozwiązanie:**
+  - Implemented dynamic hardware detection probing `/proc/cpuinfo` and `nvidia-smi`/`lspci` in <11ms without hardcoding.
+  - Introduced configuration resolver for `~/.config/syspilot/config.env` (`SYSPILOT_COPILOT_CMD`, `COPILOT_LABEL`, `SYSPILOT_GOOSE_RECIPE`).
+  - Purged private rig identifiers from public repository code while supporting private overrides locally.
+  - Fully decoupled `sys-health` as an external canonical tool.
+
+---
+
+## Clerical Inbox
+
+This bounded section records untriaged observations from active testing. Entries here
+are not approved patches and do not authorize source changes.
+
+<!-- CLERICAL-INBOX:BEGIN -->
+<!-- Entries are appended immediately above CLERICAL-INBOX:END by project_inbox.py. -->
+
+- [x] [ISSUE-20261018T140524916820-A227] [2026-10-18] Brak wyboru agenta przy Ask AI copilot
+  > RESOLVED in PATCH-010 via ~/.config/syspilot/config.env (SYSPILOT_COPILOT_CMD / COPILOT_LABEL).
+  <!-- observation-sha256:3f073ee998c8c12510762dea19b5cee3e1c824a6692764ae715e9ac009106def -->
+
+
+- [ ] [ISSUE-20261018T154614949255-DDE9] [2026-10-18] Brak statusu mirrorlist na dashboardzie i ostrzeżenia o primary DEAD w Guarded System Update
+  > Dashboard sysPilot nie pokazuje statusu Mirrorlist, podczas gdy sys-health raportuje ostrzeżenie 'WAN ⚠ (Arch: 4d, primary DEAD, 5 srv │ Distro: 4d, 28)'. Uruchomienie opcji 'Run Guarded System Update' w sysPilot nie wyświetla informacji ani ostrzeżenia o martwym mirrorze głównym ('primary DEAD').
+  > Expected: Prezentacja stanu i ostrzeżeń mirrorlist na Dashboardzie sysPilot oraz uwzględnienie ostrzeżenia o stanie 'primary DEAD' przy uruchamianiu Guarded System Update.
+  > SRE Triage / Arch: Powiązano architektonicznie z `sys-health.sh` PATCH-044 (Pakiet 1). Silnik wyeksportuje ustrukturyzowane pola `arch_primary_alive` i `arch_age_days` do `summary.json`, a SysPilot skonsumuje je bezpośrednio w `core/triage.py` bez duplikowania zapytań sieciowych.
+  <!-- observation-sha256:b24329c166fe8a25a32762a8285eebce22bd2891b9f987b751696e2a6f7cf8ce -->
+
+
+- [x] [ISSUE-20261019T172602824270-4222] [2026-10-19] Ikona tarczy w systray pozostaje zielona \(All Clear\) pomimo wykrycia oczekujacych aktualizacji
+  > RESOLVED in PATCH-009 via updater.rs (checkupdates) and effective_status harmonization.
+  <!-- observation-sha256:19e474dd9e85b100e232344a9a1daa2881a1a5eceffa954fd2032a53d4c04d47 -->
+
+
+- [x] [ISSUE-20261028T102401996549-A984] [2026-10-28] Brak karty i statusu GPU/Hardware na dashboardzie SysPilot przy ostrzeżeniach w trayu
+  > RESOLVED in PATCH-010 via Hardware Platform & GPU row in GUI.
+  <!-- observation-sha256:7e9e5d6a5f7013b8f5a4b8ba3cc3f577cbb53d6db2dafa6a674dc047528a97e2 -->
+
+<!-- CLERICAL-INBOX:END -->
+
+## Rejected Decisions Index
+
+<!-- REJECTED-DECISIONS:BEGIN -->
+- None recorded as of 2026-10-18.
+<!-- REJECTED-DECISIONS:END -->

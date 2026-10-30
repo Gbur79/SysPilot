@@ -1,7 +1,7 @@
 # ✈️ SysPilot
 
-> **The Token-Lean SRE Desktop Copilot for Arch Linux & Derivatives**  
-> *Deterministic local diagnostics • Zero token waste • Automated gaming & system rescue.*
+> **The Token-Lean SRE Desktop Copilot & Sentinel for Arch Linux & Derivatives**  
+> *Ultra-lightweight 24/7 Rust Sentinel (~1.2 MB RAM) • Decoupled on-demand GUI • Zero token waste • Native D-Bus.*
 
 ---
 
@@ -10,13 +10,16 @@
 
 ## 🌟 Overview
 
-**SysPilot** bridges the gap between passive Linux command-line diagnostics and everyday users. Instead of waiting for the system to break or manually running scripts in the terminal, **SysPilot** runs quietly in the system tray, monitors overall flight readiness, automatically inhibits itself during gaming sessions, and embeds an autonomous **AI Copilot** powered by [Goose](https://github.com/block/goose) and **Google Gemini Flash**.
+**SysPilot** bridges the gap between passive Linux command-line diagnostics and everyday desktop operations. Instead of waiting for the system to break or running heavy scripts, **SysPilot** employs a decoupled two-tier architecture:
 
-Unlike generic AI assistants that hallucinate or blindly execute destructive commands, SysPilot pairs the execution capabilities of the **Goose CLI** with the specialized **`sys-pilot-admin` SRE skill** (built upon the battle-tested `eos-admin` Linux engineering architecture).
+1. **Ultra-Lightweight 24/7 Rust Sentinel (`syspilot-tray`):** Runs continuously in the background consuming only **~1.2 MB RAM and 0.0% CPU**. Communicates directly with the system and user session bus via native D-Bus (`zbus 5.19`, zero `busctl` fork/exec), tracks pending kernel reboots, pacman database locks, disk capacity, and queries pending updates with automatic GameMode freeze.
+2. **On-Demand Graphical Dashboard (`syspilot --gui`):** Rich PyQt6 desktop dashboard with single-instance enforcement (`fcntl.flock` + `QLocalServer`), dynamic Hardware Platform & GPU telemetry, 1-click guarded system upgrades, orphan cleanup, mirror ranking, and an interactive **AI Copilot** console.
+
+Unlike generic AI assistants that hallucinate or blindly execute destructive shell commands, SysPilot pairs an execution runner with the specialized **`copilot-admin` SRE skill** (built upon battle-tested token-lean Linux systems engineering).
 
 ---
 
-## 💡 The Token-Lean Philosophy
+## 💡 The Token-Lean & Decoupled Philosophy
 
 Most AI agents on Linux waste tens of thousands of tokens by indiscriminately dumping raw system logs (`dmesg`, `journalctl`), asking random questions, and trying out obsolete Ubuntu fixes.
 
@@ -39,61 +42,56 @@ Most AI agents on Linux waste tens of thousands of tokens by indiscriminately du
                       Only when complex reasoning is required
                                           ▼
                   ┌───────────────────────────────────────────────┐
-                  │     STEP 2: Goose AI Copilot (Gemini Flash)   │
+                  │     STEP 2: SysPilot AI Copilot               │
                   │    (Surgical context: ~400 - 900 tokens)      │
                   │    Model receives pre-filtered root causes    │
                   │       Cost: $0.0001 | Latency: ~1.5s          │
                   └───────────────────────────────────────────────┘
 ```
 
-By having the local bash/Python engine perform 100% of the heavy lifting for free, the AI Copilot receives only the exact surgical slice of telemetry needed to resolve the fault.
+By having the local Rust sentinel and Python triage engine perform 100% of the heavy lifting for free, the AI Copilot receives only the exact surgical slice of telemetry needed to resolve the fault.
 
 ---
 
 ## 🛡️ Core Features
 
-- **Zero-Sudo Boot Triage (<1s execution):**
-  - Evaluates pending repository updates (`checkupdates`) and AUR packages (`yay`/`paru`) without root privileges and without locking `/var/lib/pacman/db.lck`.
+- **Ultralight 24/7 Rust Sentinel (`rust-tray`):**
+  - Native StatusNotifierItem (SNI) implementation (`ksni 0.3`) for KDE Plasma Wayland and X11 desktops.
+  - Native D-Bus client (`zbus 5.19`) for zero-fork GameMode queries.
+  - Immediate detection of un-rebooted kernel upgrades by monitoring `/usr/lib/modules/<version>`.
+  - Non-blocking disk space queries using `libc::statvfs` directly without invoking external shell binaries.
+  - Intelligent pacman lock monitor: distinguishes active package manager operations from orphaned `/var/lib/pacman/db.lck` files.
+- **Asynchronous Package Update Intelligence:**
+  - Evaluates pending official repository updates (`checkupdates` isolated in `/tmp`) and AUR packages (`yay`/`paru`).
   - Distinguishes **Core System Updates** (kernel, systemd, glibc, dracut, grub, mesa, nvidia) from regular packages.
-  - Queries active and failed `systemd` units (system and user sessions).
-  - Detects `.pacnew` configuration conflicts and un-rebooted kernel upgrades.
-- **Standalone & Third-Party Apps Update Triage:**
-  - Audits standalone and user-level applications: AUR packages, Flatpak runtimes, UV/Python, Goose CLI, Pipx, and Steam.
-  - **Automated Goose Updates:** Monitors the Goose AI binary; whenever an upstream update is detected, a dynamic **`[⚡ Update Goose AI Agent]`** button appears directly on the dashboard.
+  - Auto-heals stale lockfiles in temporary checkupdate databases.
+  - Suspends all background update and disk checks during active gaming sessions (GameMode Freeze).
+- **Decoupled Single-Instance Dashboard (`syspilot_gui.py`):**
+  - Atomic startup lock (`fcntl.flock`) and early `QLocalServer` binding eliminate duplicate windows upon rapid double-clicks.
+  - Dynamic **Hardware Platform & GPU** telemetry row detecting CPU architecture, GPU model, and active driver stack without hardcoded assumptions.
+  - Responsive status synchronization: zero lag between tray amber warnings and dashboard components.
+- **Universal & Configurable AI Copilot:**
+  - Seamlessly configured via `~/.config/syspilot/config.env` (`SYSPILOT_COPILOT_CMD`, `SYSPILOT_GOOSE_RECIPE`, `COPILOT_LABEL`).
+  - Supports private agent profiles or native terminal runners without modifying public codebase.
+  - 30-second layman graphical onboarding wizard for Google Gemini Flash, OpenAI, Claude, or local Ollama.
 - **Dedicated System Maintenance Suite:**
-  - 1) **Orphan Package Triage & Prune:** Interactive 3-tier orphan purger that preserves optional dependencies (`optdepends`).
-  - 2) **Refresh & Rank Regional Mirrors:** Benchmarks and ranks fastest regional mirrors with an atomic fallback safety gate.
-  - 3) **Clean (Safe Maintenance):** Safe pacman package cache trimming (retains latest 2), journal vacuuming, and temporary run cleanup.
+  - 1) **Orphan Package Triage & Prune:** Interactive 3-tier orphan purger preserving optional dependencies (`optdepends`).
+  - 2) **Refresh & Rank Regional Mirrors:** Benchmarks and ranks fastest regional mirrors with atomic fallback safety.
+  - 3) **Safe Maintenance:** Trims pacman cache (retains last 2), vacuums journal logs, and cleans temporary artifacts.
   - 4) **Deep Clean:** Purges user Trash, browser caches, thumbnail caches, and legacy diagnostic runs.
-- **Transparent SRE Skill & Persona Architecture:**
-  - Dedicated **SRE Skill & Persona** tab explaining the dualism between Goose (the terminal runner) and `sys-pilot-admin` (the SRE brain).
-  - **Editable User Custom Directives:** Users can persist custom hardware quirks, audio setups, or package preferences that the Copilot strictly follows in every session.
-  - **Playbook Arsenal Viewer:** Inspect the exact step-by-step engineering procedures the AI Copilot follows before executing fixes.
-- **Layman-Friendly AI Copilot Onboarding (30 Seconds Setup):**
-  - Zero terminal hassle: on first run, a clean graphical setup wizard guides users to connect their preferred AI engine.
-  - Recommends **Google Gemini Flash** (ultra-fast, generous free tier on Google AI Studio, no credit card required).
-  - Seamlessly configures Goose CLI profiles, API key secrets (`0600` permissions), and registers the `sys-pilot-admin` SRE skill automatically.
-- **Smart GameMode Inhibit (Zero FPS Stutter):**
-  - Queries Feral GameMode (`gamemoded` / D-Bus) and active game processes.
-  - Automatically suspends all background scans and desktop notifications during gaming sessions.
-- **Modern PyQt6 System Tray & Dashboard:**
-  - Status Indicators:
-    - 🟢 **Flight Ready:** System clean, stable, primed.
-    - 🟡 **Pre-Flight Attention:** Core updates or `.pacnew` files pending.
-    - 🔴 **Action Required:** Failed services or critically low disk space.
-    - 🎮 **Gaming Mode:** Diagnostics paused.
-  - One-click triggers for **Guarded System Upgrades**, **Safe Maintenance**, and **Full Health Audits**.
+- **Deterministic 1-Click FAF (Forged Alliance Forever) Setup (`syspilot --faf-repair`):**
+  - Verifies 32-bit Vulkan ICDs, syncs `Game.prefs` across Steam libraries, and generates dynamic launcher wrappers.
 
 ---
 
 ## 🖥️ Graphical Dashboard Layout
 
-The SysPilot graphical interface is organized into 5 clean, focused tabs:
+The SysPilot graphical interface is organized into 5 focused tabs:
 
-1. **✈ Dashboard:** Lean operational overview. Shows Official Updates, Standalone & 3rd-Party App Updates (with 1-click Goose updater), Root Disk Usage, and GameMode status.
+1. **✈ Dashboard:** Lean operational overview. Shows Official Updates, Standalone & 3rd-Party App Updates, System Health & Hygiene (Reboot, Systemd, Baloo & Journal, Orphans, .pacnew, Disk, Gaming, and Hardware Platform & GPU).
 2. **🛠 System Maintenance:** One-click safe maintenance tools (Orphan package triage, Mirror ranking, Safe Cache Trimming, Deep Clean, and `.pacnew` reconciler).
-3. **🤖 AI Copilot (Goose SRE):** Embedded AI troubleshooting console with 1-click playbook buttons (FAF Setup, Proton launch fix, PipeWire audio repair, `.pacnew` diffing) and the 30-second onboarding wizard.
-4. **🧠 SRE Skill & Persona:** Full transparency view. Inspect pre-gathered 0-token telemetry, customize persistent user directives for your rig, and browse loaded playbooks.
+3. **🤖 AI Copilot:** Embedded AI troubleshooting console with 1-click playbook buttons (FAF Setup, Proton launch fix, PipeWire audio repair, `.pacnew` diffing) and the 30-second onboarding wizard.
+4. **🧠 SRE Skill & Persona:** Full transparency view. Inspect pre-gathered 0-token telemetry, customize persistent user directives, and browse loaded playbooks.
 5. **⚙ Settings & Autostart:** Configure autostart on user login and select default AI reasoning models.
 
 ---
@@ -169,24 +167,37 @@ sysPilot/
 ├── bin/
 │   ├── syspilot                 # Unified master CLI & GUI runner
 │   ├── syspilot-faf-repair      # Deterministic FAF runner & shortcut repair tool
-│   ├── syspilot-sentinel        # Background monitoring daemon
-│   └── sys-health.sh            # Hardened SRE health & diagnostic engine
+│   └── syspilot-sentinel        # CLI background monitoring daemon
+├── rust-tray/                   # High-performance 24/7 Rust StatusNotifierItem Tray Sentinel
+│   ├── Cargo.toml               # Native zbus 5.19 & ksni 0.3 dependencies
+│   ├── ARCHITECTURE.md          # Full architectural breakdown & SRE contracts
+│   └── src/
+│       ├── main.rs              # Event loop & timers
+│       ├── sentinels.rs         # Reboot, pacman lock, libc statvfs probes
+│       ├── updater.rs           # Async checkupdates, AUR, and software updates
+│       ├── gamemode.rs          # Native zbus D-Bus GameMode proxy
+│       ├── tray.rs              # Ergonomic 5-action SNI menu & multi-line tooltip
+│       └── tests.rs             # Hermetic unit tests (cargo test --locked)
 ├── core/
 │   ├── triage.py                # High-speed (<1s) zero-sudo telemetry collector
-│   └── copilot_config.py        # Goose configuration & skill management engine
+│   └── copilot_config.py        # Copilot configuration & ~/.config/syspilot/config.env resolver
 ├── gui/
-│   └── syspilot_gui.py          # Modern PyQt6 Tray & Dashboard application
+│   └── syspilot_gui.py          # Decoupled PyQt6 Dashboard (single-instance flock)
 ├── copilot/
-│   ├── recipe.yaml              # Goose SRE recipe definition
+│   ├── recipe.yaml              # Public AI SRE recipe definition
 │   ├── skills/
 │   │   └── sys-pilot-admin/     # Token-Lean Copilot system instructions (SKILL.md)
 │   ├── playbooks/               # Battle-tested recipes (FAF, Proton, Audio, Pacnew)
-│   └── quirks/                  # Hardware & driver quirks
+│   └── quirks/                  # Generic hardware & architecture quirks
+├── dev-tools/
+│   ├── build-and-install.sh     # One-step test, compile & install helper
+│   └── verify-rust.sh           # SRE hermetic verification script
 ├── autostart/
 │   └── syspilot.desktop         # XDG autostart entry
 ├── packaging/
-│   └── PKGBUILD                 # Arch Linux / AUR package specification
+│   └── PKGBUILD                 # Arch Linux / AUR package specification (v1.1.0)
 └── systemd/
+    ├── syspilot-tray.service    # User systemd service for 24/7 Rust Sentinel
     ├── syspilot-sentinel.service# Optional systemd user service
     └── syspilot-sentinel.timer  # Periodic 3-hour evaluation timer
 ```

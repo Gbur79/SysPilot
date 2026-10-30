@@ -1,16 +1,17 @@
 [Unit]
-Description=SysPilot System Health Sentinel
-Documentation=https://github.com/SysPilot/SysPilot
+Description=SysPilot system health sentinel
+Documentation=https://github.com/Gbur79/SysPilot
 After=graphical-session.target
+ConditionFileIsExecutable=%h/.local/bin/syspilot-sentinel
 
 [Service]
 Type=oneshot
-ExecStart=%h/Projects/sysPilot/bin/syspilot-sentinel --once
-StandardOutput=journal
-StandardError=journal
+ExecStart=%h/.local/bin/syspilot-sentinel --once
+TimeoutStartSec=2min
 Nice=19
 IOSchedulingClass=idle
 CPUSchedulingPolicy=idle
-
-[Install]
-WantedBy=default.target
+UMask=0077
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal

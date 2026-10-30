@@ -23,11 +23,30 @@ PLAYBOOKS_DIR = os.path.join(PROJECT_ROOT, "copilot", "playbooks")
 
 USER_CONFIG_DIR = os.path.expanduser("~/.config/syspilot")
 USER_DIRECTIVES_FILE = os.path.join(USER_CONFIG_DIR, "user_directives.md")
+CONFIG_ENV_FILE = os.path.join(USER_CONFIG_DIR, "config.env")
 
 DIRECTIVES_REGEX = re.compile(
     r'<!-- USER_CUSTOM_DIRECTIVES_START -->(.*?)<!-- USER_CUSTOM_DIRECTIVES_END -->',
     re.DOTALL
 )
+
+
+def get_user_copilot_config() -> Dict[str, str]:
+    """Parse ~/.config/syspilot/config.env for local user overrides."""
+    conf: Dict[str, str] = {}
+    if os.path.isfile(CONFIG_ENV_FILE):
+        try:
+            with open(CONFIG_ENV_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        conf[k.strip()] = v.strip().strip('"').strip("'")
+        except Exception:
+            pass
+    return conf
 
 
 def find_goose_binary() -> Optional[str]:
@@ -106,7 +125,14 @@ def get_configured_providers() -> Dict[str, bool]:
 
 
 def is_copilot_ready() -> Tuple[bool, str]:
-    """Verify if Goose is installed and at least one provider is configured."""
+    """Verify if Copilot is ready (custom runner or configured Goose setup)."""
+    user_conf = get_user_copilot_config()
+    custom_cmd = user_conf.get("SYSPILOT_COPILOT_CMD") or user_conf.get("COPILOT_CMD")
+    if custom_cmd:
+        base_bin = custom_cmd.split()[0]
+        if shutil.which(base_bin) or os.path.isfile(os.path.expanduser(base_bin)):
+            return True, f"Custom Copilot active: {custom_cmd}"
+
     if not is_goose_installed():
         return False, "Goose CLI is not installed."
     
@@ -120,14 +146,29 @@ def is_copilot_ready() -> Tuple[bool, str]:
 
 def get_active_model_details() -> Dict[str, Any]:
     """
-    Retrieve currently active LLM provider and model from Goose configuration (~/.config/goose/config.yaml).
-    Returns a dictionary with keys:
-      - provider: str (e.g. 'google', 'openai', 'anthropic', 'ollama')
-      - provider_display: str (e.g. 'Google Gemini', 'OpenAI', 'Anthropic Claude', 'Ollama')
-      - model: str (e.g. 'gemini-3.8-flash', 'gpt-5.6-sol')
-      - full_label: str (e.g. 'gemini-3.8-flash (Google Gemini)')
-      - thinking_effort: str (e.g. 'high', 'medium', 'low')
+    Retrieve currently active LLM provider and model from user config or Goose.
     """
+    user_conf = get_user_copilot_config()
+    custom_label = user_conf.get("COPILOT_LABEL")
+    custom_cmd = user_conf.get("SYSPILOT_COPILOT_CMD") or user_conf.get("COPILOT_CMD")
+    if custom_label:
+        return {
+            "provider": "custom",
+            "provider_display": "Custom Runner",
+            "model": custom_label,
+            "full_label": custom_label,
+            "thinking_effort": "external",
+        }
+    if custom_cmd:
+        cmd_name = os.path.basename(custom_cmd.split()[0])
+        return {
+            "provider": "custom",
+            "provider_display": "Custom Copilot",
+            "model": cmd_name,
+            "full_label": f"{cmd_name} (AI Copilot)",
+            "thinking_effort": "external",
+        }
+
     provider = "google"
     model = "gemini-3.8-flash"
     thinking = "default"

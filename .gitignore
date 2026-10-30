@@ -10,3 +10,14 @@ ENV/
 dist/
 build/
 .cache/
+*.bak*
+*.tmp
+*~
+.DS_Store
+*.swp
+*.orig
+.development-proposals.lock
+.pytest_cache/
+test-suite-root*
+target/
+rust-tray/target/

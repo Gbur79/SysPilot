@@ -1,0 +1,33 @@
+# Backups and legacy snapshots
+*.bak*
+*.bak_*
+*.bak-*
+sys-health.sh.bak*
+
+# Media and screenshots
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+
+# Cache, temp roots and test artifacts
+.local/
+*.log
+*.tmp
+*~
+.DS_Store
+*.swp
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+.cache/
+test-suite-root*

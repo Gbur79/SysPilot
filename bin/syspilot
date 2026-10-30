@@ -1,272 +1,293 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# SysPilot — Token-Lean Autonomous SRE Desktop Copilot
-# Universal system health sentinel, tray manager & AI Copilot for Arch Linux
-# ==============================================================================
+# SysPilot thin router — engine-independent, cache-first, terminal & GUI native.
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 077
 
-set -eo pipefail
+readonly USER_HOME="${HOME:?HOME is not set}"
+readonly STATE_HOME="${XDG_STATE_HOME:-$USER_HOME/.local/state}"
+readonly STATUS_FILE="$STATE_HOME/system-health/summary.json"
+readonly CONFIG_FILE="${XDG_CONFIG_HOME:-$USER_HOME/.config}/syspilot/config.env"
+readonly SCRIPT_SOURCE="$(readlink -f -- "${BASH_SOURCE[0]}")"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)"
+readonly PROJECT_ROOT="$(dirname -- "$SCRIPT_DIR")"
+readonly DEFAULT_DATA_ROOT="/usr/share/syspilot"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-if [[ ! -d "$PROJECT_ROOT/core" && -d "/usr/lib/syspilot" ]]; then
-    PROJECT_ROOT="/usr/lib/syspilot"
+# Source optional user config if present
+if [[ -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
 fi
 
-# Color definitions
-BOLD="\033[1m"
-GREEN="\033[32m"
-YELLOW="\033[33m"
-RED="\033[31m"
-CYAN="\033[36m"
-MAGENTA="\033[35m"
-RESET="\033[0m"
+readonly MAX_STATUS_AGE="${SYSPILOT_MAX_STATUS_AGE:-21600}"
 
-show_help() {
-    cat << EOF
-${BOLD}SysPilot — Token-Lean Autonomous SRE Desktop Copilot${RESET}
-Universal health sentinel, system tray daemon & AI Copilot for Arch Linux & derivatives.
+err()  { printf 'syspilot: %s\n' "$*" >&2; }
+die()  { err "$*"; exit 1; }
+have() { command -v -- "$1" >/dev/null 2>&1; }
 
-${BOLD}Usage:${RESET}
-  syspilot [COMMAND | OPTIONS]
+usage() {
+    cat <<'EOF'
+Usage: syspilot [OPTION]
+  --gui                       Launch the SysPilot Desktop Dashboard
+  -s, --status                Read and format cached sys-health summary
+  -j, --json                  Print cached canonical sys-health JSON
+  -a, --audit                 Explicit foreground audit
+  -u, --upgrade               Explicit guarded upgrade
+  --software                  Explicit software audit
+  -o, --orphans               Explicit orphan review
+  --mirrors                   Explicit mirror workflow
+  -m, --maintenance           Explicit maintenance
+  -d, --deep-clean            Explicit deep-clean workflow
+  -g, --gaming                Explicit gaming readiness audit
+  --copilot QUESTION          Start terminal-native Goose SRE session
+  --copilot-shell             Open an interactive Goose SRE session
+  --tray                      Start the StatusNotifierItem tray
+  --enable-autostart          Enable packaged systemd user service
+  --disable-autostart         Disable packaged systemd user service
+  -h, --help                  Show help
 
-${BOLD}GUI & Tray Operations:${RESET}
-  syspilot                Launch the graphical dashboard & tray sentinel
-  syspilot --tray         Launch minimized to system tray (used for autostart)
-
-${BOLD}CLI Fast-Paths (0-Token Local Telemetry):${RESET}
-  -s, --status            Print formatted terminal flight readiness scorecard
-  -j, --json              Run fast zero-root triage and output JSON
-  -a, --audit             Run comprehensive sys-health audit & report
-  -u, --upgrade           Run guarded system upgrade
-  -m, --maintenance       Run safe system maintenance & cache cleaning
-  -g, --gaming            Run gaming readiness & Proton/Vulkan audit
-  --faf-repair, --faf-setup Setup or repair Forged Alliance Forever (FAF) & runner
-
-${BOLD}AI Copilot & SRE Persona (Goose Integration):${RESET}
-  --copilot "QUESTION"    Ask SysPilot Copilot to diagnose/fix an issue
-  --copilot-shell         Launch interactive Copilot session in terminal
-  --skill                 Print active SRE skill directives, guardrails & playbooks
-
-${BOLD}Daemon & Autostart:${RESET}
-  --sentinel              Run background sentinel loop (monitoring & notification)
-  --enable-autostart      Create XDG autostart entry (~/.config/autostart/syspilot.desktop)
-  --disable-autostart     Remove XDG autostart entry
-
-  -h, --help              Show this help message
+Environment / Configuration (~/.config/syspilot/config.env):
+  SYSPILOT_SYS_HEALTH         Development/test engine override
+  SYSPILOT_TERMINAL           Preferred supported terminal executable
+  SYSPILOT_COPILOT_CMD        Custom copilot executable override
+  SYSPILOT_GOOSE_RECIPE       Optional Goose recipe path override
+  SYSPILOT_MAX_STATUS_AGE     Cache freshness limit in seconds (default 21600)
 EOF
 }
 
-print_terminal_status() {
-    # Run triage and parse json
-    local json_out
-    json_out="$("$PROJECT_ROOT/core/triage.py")"
-
-    local status reasons up_tot up_core up_reg up_aur disk_pct disk_avail p_count gm o_count opt_count reboot_pend
-    status="$(echo "$json_out" | jq -r '.status // "UNKNOWN"')"
-    gm="$(echo "$json_out" | jq -r '.gaming_mode // false')"
-    up_tot="$(echo "$json_out" | jq -r '.updates.total // 0')"
-    up_core="$(echo "$json_out" | jq -r '.updates.core_count // 0')"
-    up_reg="$(echo "$json_out" | jq -r '.updates.regular_count // 0')"
-    up_aur="$(echo "$json_out" | jq -r '.updates.aur_count // 0')"
-    disk_pct="$(echo "$json_out" | jq -r '.disk.root.used_pct // 0')"
-    disk_avail="$(echo "$json_out" | jq -r '.disk.root.avail_gb // 0')"
-    p_count="$(echo "$json_out" | jq -r '.pacnew.count // 0')"
-    o_count="$(echo "$json_out" | jq -r '.orphans.count // 0')"
-    opt_count="$(echo "$json_out" | jq -r '.orphans.optional_count // 0')"
-    reboot_pend="$(echo "$json_out" | jq -r '.reboot_pending // false')"
-
-    local sa_tot sa_aur sa_fp
-    sa_tot="$(echo "$json_out" | jq -r '.standalone_software.total_updates // 0')"
-    sa_aur="$(echo "$json_out" | jq -r '.standalone_software.aur_pending // 0')"
-    sa_fp="$(echo "$json_out" | jq -r '.standalone_software.flatpak_pending // 0')"
-
-    echo ""
-    echo -e "${BOLD}${CYAN}✈ SysPilot — System Flight Readiness Scorecard${RESET}"
-    echo -e "${BOLD}────────────────────────────────────────────────────────${RESET}"
-    
-    if [[ "$status" == "FLIGHT_READY" ]]; then
-        echo -e "Overall Status:   ${BOLD}${GREEN}✔ FLIGHT READY${RESET}"
-    elif [[ "$status" == "PRE_FLIGHT_ATTENTION" ]]; then
-        echo -e "Overall Status:   ${BOLD}${YELLOW}ℹ PRE-FLIGHT ATTENTION${RESET}"
-    elif [[ "$status" == "ACTION_REQUIRED" ]]; then
-        echo -e "Overall Status:   ${BOLD}${RED}✖ ACTION REQUIRED${RESET}"
+resolve_engine() {
+    local candidate resolved
+    if [[ -n ${SYSPILOT_SYS_HEALTH:-} ]]; then
+        candidate=$SYSPILOT_SYS_HEALTH
     else
-        echo -e "Overall Status:   ${BOLD}${MAGENTA}? $status${RESET}"
+        candidate=$(command -v sys-health 2>/dev/null || true)
     fi
-
-    if [[ "$gm" == "true" ]]; then
-        echo -e "Gaming Mode:      ${BOLD}${CYAN}🎮 ACTIVE (GameMode detected - diagnostics inhibited)${RESET}"
-    else
-        echo -e "Gaming Mode:      Inactive (Standard desktop operation)"
-    fi
-
-    echo -e "Repo Updates:     ${up_tot} total (${BOLD}${YELLOW}${up_core} core packages${RESET}, ${up_reg} regular)"
-    echo -e "Standalone Apps:  ${sa_tot} pending (${sa_aur} AUR, ${sa_fp} Flatpak, runtimes up to date)"
-    if (( o_count > 0 )); then
-        echo -e "Orphan Packages:  ${BOLD}${YELLOW}⚠️ ${o_count} unrequired dependencies${RESET} (Prune via: syspilot -o)"
-    elif (( opt_count > 0 )); then
-        echo -e "Orphan Packages:  ${CYAN}ℹ 0 strict orphans (${opt_count} optional dependency candidate: syspilot -o)${RESET}"
-    else
-        echo -e "Orphan Packages:  ${GREEN}✔ Clean (0 unrequired)${RESET}"
-    fi
-    if [[ "$reboot_pend" == "true" ]]; then
-        echo -e "Reboot Status:    ${BOLD}${YELLOW}⚠️ REBOOT PENDING (Running kernel replaced on disk)${RESET}"
-    fi
-    echo -e "Root Storage (/): ${disk_pct}% used (${disk_avail} GB free)"
-    echo -e "Config Conflicts: ${p_count} .pacnew files pending review"
-    
-    # Check failed services
-    local sys_failed usr_failed
-    sys_failed="$(echo "$json_out" | jq -r '.failed_services.system[]?' 2>/dev/null || true)"
-    usr_failed="$(echo "$json_out" | jq -r '.failed_services.user[]?' 2>/dev/null || true)"
-    if [[ -n "$sys_failed" || -n "$usr_failed" ]]; then
-        echo -e "Failed Units:     ${BOLD}${RED}System: [${sys_failed}] User: [${usr_failed}]${RESET}"
-    else
-        echo -e "Systemd Units:    ${GREEN}✔ All active units operational${RESET}"
-    fi
-
-    echo -e "${BOLD}────────────────────────────────────────────────────────${RESET}"
-    echo -e "Launch GUI: ${CYAN}syspilot${RESET} | Copilot: ${CYAN}syspilot --copilot \"issue\"${RESET}"
-    echo ""
+    [[ -n $candidate && -x $candidate ]] || \
+        die "sys-health is not installed; install the canonical engine package"
+    resolved=$(readlink -f -- "$candidate") || die "cannot resolve sys-health"
+    case $resolved in
+        */sysPilot/bin/sys-health.sh|*/syspilot/bin/sys-health.sh)
+            die "refusing embedded sys-health copy: $resolved" ;;
+    esac
+    printf '%s\n' "$resolved"
 }
 
-# Parse options
-case "${1:-}" in
-    -h|--help)
-        show_help
+validate_status() {
+    [[ -f $STATUS_FILE && ! -L $STATUS_FILE && -r $STATUS_FILE ]] || \
+        die "no readable canonical summary; run: syspilot --audit"
+    have jq || die "jq is required"
+    jq -e '
+      (.schema_version | tostring | startswith("2.")) and
+      (.status | type == "string") and
+      (.timestamp | type == "string")
+    ' "$STATUS_FILE" >/dev/null || die "invalid or incompatible summary schema"
+}
+
+status_age() {
+    local now mtime
+    now=$(date +%s)
+    mtime=$(stat -c %Y -- "$STATUS_FILE")
+    printf '%s\n' "$((now - mtime))"
+}
+
+compact_health_context() {
+    local now mtime age
+    [[ -f $STATUS_FILE && ! -L $STATUS_FILE && -r $STATUS_FILE ]] || return 1
+    have jq || return 1
+    now=$(date +%s) || return 1
+    mtime=$(stat -c %Y -- "$STATUS_FILE") || return 1
+    (( mtime <= now )) || return 1
+    age=$((now - mtime))
+    jq -er --argjson age "$age" '
+      select((.schema_version | tostring | startswith("2."))) |
+      "schema=" + (.schema_version | tostring) +
+      ";status=" + .status +
+      ";observed=" + .timestamp +
+      ";age_s=" + ($age | tostring) +
+      ";errors=" + ((.counts.errors // 0) | floor | tostring) +
+      ";warnings=" + ((.counts.warnings // 0) | floor | tostring)
+    ' "$STATUS_FILE" 2>/dev/null
+}
+
+print_json() {
+    validate_status
+    cat -- "$STATUS_FILE"
+    printf '\n'
+    (( $(status_age) <= MAX_STATUS_AGE )) || return 3
+}
+
+print_status() {
+    local age rc=0
+    validate_status
+    age=$(status_age)
+    (( age <= MAX_STATUS_AGE )) || rc=3
+    jq -r --argjson age "$age" --argjson limit "$MAX_STATUS_AGE" '
+      "SysPilot — cached canonical health summary",
+      "Status:       \(.status)",
+      "Observed:     \(.timestamp)",
+      "Cache age:    \($age)s" + (if $age > $limit then " (STALE)" else "" end),
+      "Errors:       \(.counts.errors // 0)",
+      "Warnings:     \(.counts.warnings // 0)",
+      "Kernel:       \(.environment.kernel // "unknown")",
+      "Game profile: " +
+        (if .gaming.detected == true then "detected" else "not reported" end)
+    ' "$STATUS_FILE"
+    if (( rc == 3 )); then
+        err "cached data is stale; an audit will run only when explicitly requested"
+        return 3
+    fi
+    case $(jq -r '.status' "$STATUS_FILE") in
+        ALL_CLEAR|FLIGHT_READY) return 0 ;;
+        ACTION_REQUIRED)       return 1 ;;
+        *)                     return 2 ;;
+    esac
+}
+
+terminal_exec() {
+    local requested=${SYSPILOT_TERMINAL:-} terminal="" name="" candidate
+    if [[ -t 0 && -t 1 ]]; then
+        exec "$@"
+    fi
+    if [[ -n $requested ]]; then
+        [[ $requested != *[[:space:]]* ]] || \
+            die "SYSPILOT_TERMINAL must be one executable, not shell syntax"
+        [[ -x $requested ]] || have "$requested" || die "requested terminal not found"
+        terminal=$requested
+        name=$(basename -- "$requested")
+    elif have xdg-terminal-exec; then
+        exec xdg-terminal-exec -- "$@"
+    else
+        for candidate in konsole ghostty kitty alacritty gnome-terminal foot; do
+            if have "$candidate"; then
+                name=$candidate
+                terminal=$(command -v -- "$candidate")
+                break
+            fi
+        done
+    fi
+    case ${name:-} in
+        konsole)        exec "${terminal:-konsole}" --nofork -e "$@" ;;
+        ghostty)        exec "${terminal:-ghostty}" -e "$@" ;;
+        kitty)          exec "${terminal:-kitty}" "$@" ;;
+        alacritty)      exec "${terminal:-alacritty}" -e "$@" ;;
+        gnome-terminal) exec "${terminal:-gnome-terminal}" -- "$@" ;;
+        foot)           exec "${terminal:-foot}" "$@" ;;
+        *) die "no supported terminal found; set SYSPILOT_TERMINAL" ;;
+    esac
+}
+
+copilot() {
+    local prompt= caller_pwd="$PWD" recipe="" health=""
+    local -a cmd
+    printf -v prompt '%s ' "$@"
+    prompt=${prompt% }
+    [[ -n $prompt ]] || die "--copilot requires a question"
+
+    if [[ -n ${SYSPILOT_COPILOT_CMD:-} ]]; then
+        terminal_exec $SYSPILOT_COPILOT_CMD "$@"
+        return
+    fi
+
+    have goose || die "Goose CLI is not installed"
+
+    # Recipe Resolution:
+    # 1. User config override: SYSPILOT_GOOSE_RECIPE
+    # 2. Local project packaging: packaging/goose/recipes/copilot-admin.yaml
+    # 3. System installed: /usr/share/syspilot/goose/recipes/copilot-admin.yaml
+    if [[ -n ${SYSPILOT_GOOSE_RECIPE:-} && -f $SYSPILOT_GOOSE_RECIPE ]]; then
+        recipe=$SYSPILOT_GOOSE_RECIPE
+    elif [[ -f "$PROJECT_ROOT/packaging/goose/recipes/copilot-admin.yaml" ]]; then
+        recipe="$PROJECT_ROOT/packaging/goose/recipes/copilot-admin.yaml"
+    elif [[ -f "$DEFAULT_DATA_ROOT/goose/recipes/copilot-admin.yaml" ]]; then
+        recipe="$DEFAULT_DATA_ROOT/goose/recipes/copilot-admin.yaml"
+    fi
+
+    health=$(compact_health_context || printf '%s' 'cache=unavailable')
+
+    if [[ -n $recipe && -f $recipe ]]; then
+        cmd=(env
+             GOOSE_MODE=approve
+             SECURITY_PROMPT_ENABLED=true
+             GOOSE_DISABLE_SESSION_NAMING=true
+             GOOSE_CLI_SHOW_COST=true
+             goose run --recipe "$recipe"
+             --params "user_query=$prompt"
+             --params "health_context=$health"
+             --params "working_directory=$caller_pwd"
+             --interactive --name syspilot-sre --max-turns 15)
+    else
+        cmd=(env
+             GOOSE_DISABLE_SESSION_NAMING=true
+             GOOSE_CLI_SHOW_COST=true
+             goose run --text
+             "Cached health: $health. User request: $prompt"
+             --interactive --name syspilot-sre --max-turns 15)
+    fi
+    terminal_exec "${cmd[@]}"
+}
+
+launch_gui() {
+    local gui_script=""
+    if [[ -f "$PROJECT_ROOT/gui/syspilot_gui.py" ]]; then
+        gui_script="$PROJECT_ROOT/gui/syspilot_gui.py"
+    elif [[ -f "/usr/lib/syspilot/gui/syspilot_gui.py" ]]; then
+        gui_script="/usr/lib/syspilot/gui/syspilot_gui.py"
+    fi
+
+    if [[ -n $gui_script && -f $gui_script ]]; then
+        # Launch detached single-instance GUI without terminal
+        nohup python3 "$gui_script" >/dev/null 2>&1 &
         exit 0
-        ;;
-    -s|--status)
-        print_terminal_status
-        exit 0
-        ;;
-    -j|--json)
-        shift
-        python3 "$PROJECT_ROOT/core/triage.py" "$@"
-        exit 0
-        ;;
-    -a|--audit)
-        shift
-        "$PROJECT_ROOT/bin/sys-health.sh" --audit "$@"
-        exit $?
-        ;;
-    -u|--upgrade)
-        shift
-        "$PROJECT_ROOT/bin/sys-health.sh" --upgrade "$@"
-        exit $?
-        ;;
-    --software)
-        shift
-        "$PROJECT_ROOT/bin/sys-health.sh" --software "$@"
-        exit $?
-        ;;
-    -o|--orphans)
-        shift
-        "$PROJECT_ROOT/bin/sys-health.sh" --orphans "$@"
-        exit $?
-        ;;
-    --mirrors)
-        shift
-        "$PROJECT_ROOT/bin/sys-health.sh" --mirrors "$@"
-        exit $?
-        ;;
-    -m|--maintenance)
-        shift
-        "$PROJECT_ROOT/bin/sys-health.sh" --maintenance "$@"
-        exit $?
-        ;;
-    -d|--deep-clean)
-        shift
-        "$PROJECT_ROOT/bin/sys-health.sh" --deep-clean "$@"
-        exit $?
-        ;;
-    -g|--gaming)
-        shift
-        "$PROJECT_ROOT/bin/sys-health.sh" --gaming "$@"
-        exit $?
-        ;;
-    --faf-repair|--faf-setup)
-        shift
-        "$PROJECT_ROOT/bin/syspilot-faf-repair" "$@"
-        exit $?
-        ;;
+    else
+        die "SysPilot GUI component not found"
+    fi
+}
+
+forward_engine() {
+    local engine
+    engine=$(resolve_engine)
+    exec "$engine" "$@"
+}
+
+user_unit() {
+    local verb=$1
+    have systemctl || die "systemctl is required"
+    systemctl --user cat syspilot-tray.service >/dev/null 2>&1 || \
+        die "packaged syspilot-tray.service is not installed"
+    exec systemctl --user "$verb" --now syspilot-tray.service
+}
+
+case ${1:-} in
+    -h|--help)          usage ;;
+    --gui)              launch_gui ;;
+    -s|--status)        print_status ;;
+    -j|--json)          print_json ;;
+    -a|--audit)         shift; forward_engine --audit "$@" ;;
+    -u|--upgrade)       shift; forward_engine --upgrade "$@" ;;
+    --software)         shift; forward_engine --software "$@" ;;
+    -o|--orphans)       shift; forward_engine --orphans "$@" ;;
+    --mirrors)          shift; forward_engine --mirrors "$@" ;;
+    -m|--maintenance)   shift; forward_engine --maintenance "$@" ;;
+    -d|--deep-clean)    shift; forward_engine --deep-clean "$@" ;;
+    -g|--gaming)        shift; forward_engine --gaming "$@" ;;
     --copilot)
         shift
-        if [[ -z "$*" ]]; then
-            echo "Error: Please provide a prompt or question for SysPilot Copilot."
-            exit 1
-        fi
-        echo -e "${CYAN}🤖 Invoking SysPilot Copilot (Token-Lean SRE)...${RESET}"
-        goose run --recipe "$PROJECT_ROOT/copilot/recipe.yaml" --params "user_query=$*" -q
-        exit $?
+        (($#)) || die "--copilot requires a question"
+        copilot "$@"
         ;;
     --copilot-shell)
-        echo -e "${CYAN}🤖 Starting interactive SysPilot Copilot session...${RESET}"
-        goose run --recipe "$PROJECT_ROOT/copilot/recipe.yaml" -s
-        exit $?
+        copilot "Begin an interactive system SRE session. Do not run diagnostics until asked."
         ;;
-    --skill)
-        python3 -c "
-import sys, os
-sys.path.insert(0, '$PROJECT_ROOT')
-from core.copilot_config import get_skill_info
-
-info = get_skill_info()
-print('')
-print('\033[1m\033[35m🧠 SysPilot Copilot SRE Skill & Persona (\033[36m' + info['name'] + '\033[35m)\033[0m')
-print('\033[1m────────────────────────────────────────────────────────\033[0m')
-print(f'Model Target:     {info[\"model\"]}')
-print(f'Skill Location:   {info[\"skill_path\"]}')
-print(f'Goose Linked:     {\"✔ Yes\" if info[\"is_linked\"] else \"✖ No\"}')
-print('')
-print('\033[1m📖 Battle-Tested Playbooks Loaded:\033[0m')
-for pb in info['playbooks']:
-    print(f'  • {pb[\"title\"]} ({pb[\"filename\"]})')
-print('')
-print('\033[1m⚙ Active User Custom Directives:\033[0m')
-print(info['custom_directives'] if info['custom_directives'] else '  (None configured)')
-print('\033[1m────────────────────────────────────────────────────────\033[0m')
-print('')
-"
-        exit 0
+    --tray|"")
+        if have syspilot-tray; then
+            exec syspilot-tray
+        elif [[ -f "$PROJECT_ROOT/gui/syspilot_gui.py" ]]; then
+            exec python3 "$PROJECT_ROOT/gui/syspilot_gui.py" --tray
+        else
+            die "SysPilot tray component is not installed"
+        fi
         ;;
-    --sentinel)
-        shift
-        python3 "$PROJECT_ROOT/bin/syspilot-sentinel" "$@"
-        exit $?
-        ;;
-    --enable-autostart)
-        mkdir -p ~/.config/autostart
-        cat << EOF > ~/.config/autostart/syspilot.desktop
-[Desktop Entry]
-Type=Application
-Name=SysPilot
-Comment=Autonomous Token-Lean SRE Copilot for Arch Linux
-Exec=$PROJECT_ROOT/bin/syspilot --tray
-Icon=utilities-system-monitor
-Terminal=false
-Categories=System;Monitor;
-X-GNOME-Autostart-enabled=true
-EOF
-        echo -e "${GREEN}✔ Autostart enabled at ~/.config/autostart/syspilot.desktop${RESET}"
-        exit 0
-        ;;
-    --disable-autostart)
-        rm -f ~/.config/autostart/syspilot.desktop
-        echo -e "${YELLOW}✔ Autostart disabled (entry removed)${RESET}"
-        exit 0
-        ;;
-    --tray)
-        python3 "$PROJECT_ROOT/gui/syspilot_gui.py" --tray
-        exit 0
-        ;;
-    "")
-        python3 "$PROJECT_ROOT/gui/syspilot_gui.py"
-        exit 0
-        ;;
-    *)
-        echo "Unknown option: $1"
-        show_help
-        exit 1
-        ;;
+    --enable-autostart)  user_unit enable ;;
+    --disable-autostart) user_unit disable ;;
+    *) die "unknown option: $1 (use --help)" ;;
 esac

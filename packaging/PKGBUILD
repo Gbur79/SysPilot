@@ -1,9 +1,9 @@
 # Maintainer: Karol Gbur
 pkgname=syspilot
-pkgver=1.0.6
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="Token-Lean Autonomous SRE Desktop Copilot & Health Sentinel for Arch Linux"
-arch=('any')
+arch=('x86_64')
 url="https://github.com/Gbur79/SysPilot"
 license=('Apache-2.0')
 depends=(
@@ -13,6 +13,9 @@ depends=(
     'pacman-contrib'
     'jq'
     'libnotify'
+)
+makedepends=(
+    'cargo'
 )
 optdepends=(
     'goose-cli: for autonomous AI-powered error diagnostics and automated fixes'
@@ -24,24 +27,34 @@ optdepends=(
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 
+build() {
+    cd "$srcdir/$pkgname-$pkgver/rust-tray"
+    cargo build --release --locked
+}
+
 package() {
     cd "$srcdir/$pkgname-$pkgver"
 
     # Install main executables
     install -dm755 "$pkgdir/usr/lib/$pkgname"
     cp -r core gui copilot assets "$pkgdir/usr/lib/$pkgname/"
-    install -Dm755 bin/sys-health.sh "$pkgdir/usr/lib/$pkgname/bin/sys-health.sh"
     install -Dm755 bin/syspilot-faf-repair "$pkgdir/usr/lib/$pkgname/bin/syspilot-faf-repair"
     install -Dm755 bin/syspilot-sentinel "$pkgdir/usr/lib/$pkgname/bin/syspilot-sentinel"
     install -Dm755 bin/syspilot "$pkgdir/usr/bin/syspilot"
+    install -Dm755 rust-tray/target/release/syspilot-tray "$pkgdir/usr/bin/syspilot-tray"
 
     # Install desktop entry
     install -Dm644 autostart/syspilot.desktop "$pkgdir/etc/xdg/autostart/syspilot.desktop"
     install -Dm644 autostart/syspilot.desktop "$pkgdir/usr/share/applications/syspilot.desktop"
 
     # Install systemd user services
+    install -Dm644 systemd/syspilot-tray.service "$pkgdir/usr/lib/systemd/user/syspilot-tray.service"
     install -Dm644 systemd/syspilot-sentinel.service "$pkgdir/usr/lib/systemd/user/syspilot-sentinel.service"
     install -Dm644 systemd/syspilot-sentinel.timer "$pkgdir/usr/lib/systemd/user/syspilot-sentinel.timer"
+
+    # Install goose public recipe and skill
+    install -Dm644 packaging/goose/recipes/copilot-admin.yaml "$pkgdir/usr/share/$pkgname/goose/recipes/copilot-admin.yaml"
+    install -Dm644 packaging/goose/skills/copilot-admin/SKILL.md "$pkgdir/usr/share/$pkgname/goose/skills/copilot-admin/SKILL.md"
 
     # Install documentation and license
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"

@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 from datetime import datetime
+from fnmatch import fnmatchcase
 from typing import Dict, Any, List, Set
 
 # Core system packages regex that warrant elevated upgrade precautions
@@ -207,36 +208,260 @@ def check_reboot_pending() -> bool:
     return False
 
 
-def check_orphan_packages() -> Dict[str, Any]:
-    """Query pacman for unrequired orphan dependency packages (strict -Qtdq and optional -Qdttq)."""
-    strict_orphans = []
-    optional_candidates = []
-    if shutil.which("pacman"):
-        try:
-            # 1. Strict orphans (neither required nor optionally required)
-            res1 = subprocess.run(
-                ["pacman", "-Qtdq"],
-                capture_output=True, text=True, timeout=3.0
-            )
-            if res1.returncode == 0 and res1.stdout.strip():
-                strict_orphans = [p.strip() for p in res1.stdout.strip().splitlines() if p.strip()]
+# Must remain synchronized with sys-health.sh classify_orphan_tier().
+# Tier 3 is removal sensitivity, not health severity.
+ORPHAN_SENSITIVE_PATTERNS = (
+    (
+        "kernel / bootloader",
+        (
+            "linux*", "*-headers", "grub*", "systemd*", "dracut*",
+            "mkinitcpio*", "booster*", "limine*", "refind*",
+            "efibootmgr*", "syslinux*",
+        ),
+    ),
+    (
+        "driver / firmware / graphics",
+        (
+            "*firmware*", "*-ucode", "*-dkms", "nvidia*", "mesa*",
+            "vulkan*", "xf86-video*", "intel-media-driver", "libva*",
+            "libvdpau*", "xorg-server*", "xorg-xwayland*",
+        ),
+    ),
+    (
+        "audio subsystem",
+        ("pipewire*", "wireplumber*", "alsa-*", "pulseaudio*", "jack*"),
+    ),
+    (
+        "development toolchain",
+        (
+            "base-devel", "rust", "cargo", "go", "gcc*", "clang*",
+            "llvm*", "make", "cmake", "patch", "git", "fakeroot",
+            "binutils",
+        ),
+    ),
+    (
+        "desktop / compositor / display manager",
+        (
+            "wayland*", "hyprland*", "kwin*", "plasma-*", "sway*",
+            "mutter*", "weston*", "sddm*", "gdm*", "lightdm*",
+        ),
+    ),
+    (
+        "storage / filesystem / crypto",
+        (
+            "btrfs-progs*", "dosfstools", "e2fsprogs", "xfsprogs*",
+            "zfs*", "cryptsetup*", "lvm2*", "mdadm*", "device-mapper*",
+        ),
+    ),
+    (
+        "core security / auth / network",
+        (
+            "polkit*", "shadow", "sudo", "pam", "networkmanager*",
+            "iwd*", "wpa_supplicant*",
+        ),
+    ),
+    ("multilib / 32-bit runtime", ("lib32-*",)),
+)
 
-            # 2. Extended candidate dependencies (-Qdttq)
-            res2 = subprocess.run(
-                ["pacman", "-Qdttq"],
-                capture_output=True, text=True, timeout=3.0
-            )
-            if res2.returncode == 0 and res2.stdout.strip():
-                all_candidates = [p.strip() for p in res2.stdout.strip().splitlines() if p.strip()]
-                optional_candidates = [p for p in all_candidates if p not in strict_orphans]
-        except Exception:
-            pass
+
+def _orphan_sensitive_tag(package: str):
+    """Return the shared Tier-3 sensitivity tag, or None."""
+    normalized = package.strip().lower()
+    for tag, patterns in ORPHAN_SENSITIVE_PATTERNS:
+        if any(fnmatchcase(normalized, pattern) for pattern in patterns):
+            return tag
+    return None
+
+
+def _query_pacman_package_names(
+    pacman_path: str, query_flag: str, timeout: float = 3.0
+) -> Dict[str, Any]:
+    """Run a read-only pacman query while distinguishing empty from failed."""
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+
+    try:
+        res = subprocess.run(
+            [pacman_path, query_flag],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=env,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "packages": [],
+            "error": f"{query_flag} timed out after {timeout:.1f}s",
+        }
+    except OSError as exc:
+        return {
+            "ok": False,
+            "packages": [],
+            "error": f"{query_flag} could not execute: {exc}",
+        }
+
+    packages = sorted({line.strip() for line in res.stdout.splitlines() if line.strip()})
+    stderr = " ".join(res.stderr.split())[:240]
+
+    if res.returncode == 0:
+        return {"ok": True, "packages": packages, "error": None}
+
+    # pacman query filters commonly return 1 when there are no matches.
+    # Accept that only when there is no output and no diagnostic text.
+    if res.returncode == 1 and not packages and not stderr:
+        return {"ok": True, "packages": [], "error": None}
+
+    detail = stderr or "no diagnostic text"
+    return {
+        "ok": False,
+        "packages": [],
+        "error": f"{query_flag} exited {res.returncode}: {detail}",
+    }
+
+
+def check_orphan_packages() -> Dict[str, Any]:
+    """
+    Report orphan telemetry without treating orphan presence as a health fault.
+
+    Compatibility:
+      count/packages retain the strict pacman -Qdtq meaning.
+      optional_count/optional_packages retain the -Qdttq minus -Qdtq meaning.
+
+    Tier model shared with sys-health.sh:
+      Tier 1: strict and not heuristically sensitive.
+      Tier 2: optional-only and not heuristically sensitive.
+      Tier 3: heuristically sensitive, regardless of reference class.
+    """
+    pacman_path = shutil.which("pacman")
+    if not pacman_path:
+        return {
+            "checked": False,
+            "query_status": "ERROR",
+            "severity": "WARN",
+            "affects_flight_status": True,
+            "tiering_complete": False,
+            "count": 0,
+            "packages": [],
+            "optional_count": 0,
+            "optional_packages": [],
+            "candidate_count": 0,
+            "tier1_count": 0,
+            "tier1_packages": [],
+            "tier2_count": 0,
+            "tier2_packages": [],
+            "tier3_count": 0,
+            "tier3_packages": [],
+            "tier3_tags": {},
+            "unclassified_packages": [],
+            "query_errors": {"strict": "pacman executable not found"},
+            "message": "Orphan query unavailable: pacman executable not found",
+        }
+
+    strict_query = _query_pacman_package_names(pacman_path, "-Qdtq")
+    extended_query = _query_pacman_package_names(pacman_path, "-Qdttq")
+
+    strict_ok = bool(strict_query["ok"])
+    extended_ok = bool(extended_query["ok"])
+    strict_set = set(strict_query["packages"]) if strict_ok else set()
+    extended_set = set(extended_query["packages"]) if extended_ok else set()
+
+    # A stable -Qdttq result must include every -Qdtq result. Preserve the
+    # union and expose degradation if a concurrent transaction breaks that rule.
+    snapshots_consistent = not (
+        strict_ok and extended_ok and not strict_set.issubset(extended_set)
+    )
+    candidate_set = strict_set | extended_set
+
+    optional_set = (
+        extended_set - strict_set if strict_ok and extended_ok else set()
+    )
+
+    tier1 = []
+    tier2 = []
+    tier3 = []
+    tier3_tags = {}
+    unclassified = []
+
+    for package in sorted(candidate_set):
+        sensitive_tag = _orphan_sensitive_tag(package)
+        if sensitive_tag is not None:
+            tier3.append(package)
+            tier3_tags[package] = sensitive_tag
+        elif not strict_ok:
+            # Without the strict snapshot, an ordinary expanded candidate
+            # cannot safely be called Tier 1 or Tier 2.
+            unclassified.append(package)
+        elif package in strict_set:
+            tier1.append(package)
+        else:
+            tier2.append(package)
+
+    query_errors = {}
+    if not strict_ok:
+        query_errors["strict"] = strict_query["error"]
+    if not extended_ok:
+        query_errors["extended"] = extended_query["error"]
+    if not snapshots_consistent:
+        query_errors["consistency"] = (
+            "-Qdttq did not contain every -Qdtq package; "
+            "a concurrent package transaction may have occurred"
+        )
+
+    tiering_complete = strict_ok and extended_ok and snapshots_consistent
+    if not strict_ok:
+        query_status = "ERROR"
+        severity = "WARN"
+        affects_flight_status = True
+        message = "Strict orphan query failed; orphan telemetry is unavailable"
+    elif not tiering_complete:
+        query_status = "DEGRADED"
+        severity = "INFO" if strict_set else "PASS"
+        affects_flight_status = False
+        message = (
+            f"{len(strict_set)} strict orphan package(s); "
+            "expanded tier telemetry is incomplete"
+        )
+    elif strict_set:
+        query_status = "OK"
+        severity = "INFO"
+        affects_flight_status = False
+        message = (
+            f"{len(strict_set)} strict orphan package(s); review recommended"
+        )
+    else:
+        query_status = "OK"
+        severity = "PASS"
+        affects_flight_status = False
+        message = "No strict orphan packages detected"
 
     return {
-        "count": len(strict_orphans),
-        "packages": strict_orphans,
-        "optional_count": len(optional_candidates),
-        "optional_packages": optional_candidates
+        "checked": strict_ok,
+        "query_status": query_status,
+        "severity": severity,
+        "affects_flight_status": affects_flight_status,
+        "tiering_complete": tiering_complete,
+        # Backward-compatible strict orphan fields.
+        "count": len(strict_set),
+        "packages": sorted(strict_set),
+        # Backward-compatible optional-only candidate fields.
+        "optional_count": len(optional_set),
+        "optional_packages": sorted(optional_set),
+        # Explicit tier telemetry.
+        "candidate_count": len(candidate_set),
+        "tier1_count": len(tier1),
+        "tier1_packages": tier1,
+        "tier2_count": len(tier2),
+        "tier2_packages": tier2,
+        "tier3_count": len(tier3),
+        "tier3_packages": tier3,
+        "tier3_tags": tier3_tags,
+        "unclassified_packages": unclassified,
+        "query_errors": query_errors,
+        "message": message,
     }
 
 
@@ -321,12 +546,17 @@ def check_standalone_software(skip: bool = False) -> Dict[str, Any]:
     if skip:
         return default_summary
 
-    script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "bin", "sys-health.sh")
-    if not os.path.isfile(script_path):
+    engine_bin = shutil.which("sys-health")
+    if not engine_bin:
+        user_bin = os.path.expanduser("~/.local/bin/sys-health")
+        if os.path.isfile(user_bin) and os.access(user_bin, os.X_OK):
+            engine_bin = user_bin
+
+    if not engine_bin:
         return default_summary
 
     try:
-        res = subprocess.run([script_path, "--software", "--json"], capture_output=True, text=True, timeout=8.0)
+        res = subprocess.run([engine_bin, "--software", "--json"], capture_output=True, text=True, timeout=8.0)
         if res.returncode == 0 and res.stdout.strip():
             data = json.loads(res.stdout.strip())
             aur_p = data.get("aur", {}).get("pending_count", 0)
@@ -363,7 +593,8 @@ def get_sys_health_status() -> Dict[str, Any]:
                     "errors": data.get("counts", {}).get("errors", 0),
                     "warnings": data.get("counts", {}).get("warnings", 0),
                     "environment": data.get("environment", {}),
-                    "gaming": data.get("gaming", {})
+                    "gaming": data.get("gaming", {}),
+                    "checks": data.get("checks", {})
                 }
         except Exception:
             pass
@@ -411,6 +642,7 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
     # 🟢 FLIGHT_READY
     status = "FLIGHT_READY"
     status_reasons = []
+    informational_reasons = []
 
     has_failed_system = len(failed_units.get("system", [])) > 0
     has_failed_user = len(failed_units.get("user", [])) > 0
@@ -438,9 +670,6 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
         if reboot_pending:
             status = "PRE_FLIGHT_ATTENTION"
             status_reasons.append("Running kernel updated - system reboot pending")
-        if orphans.get("count", 0) > 0:
-            status = "PRE_FLIGHT_ATTENTION"
-            status_reasons.append(f"{orphans['count']} unrequired orphan package(s) detected")
         if len(pacnew) > 0:
             status = "PRE_FLIGHT_ATTENTION"
             status_reasons.append(f"{len(pacnew)} .pacnew configuration file(s) require review")
@@ -448,11 +677,31 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
             status = "PRE_FLIGHT_ATTENTION"
             status_reasons.append(f"Root disk usage elevated ({root_disk_used}%)")
 
+    # Orphan presence is an INFO maintenance advisory. Only inability to perform
+    # the strict query is WARN-equivalent and may degrade readiness.
+    if not orphans.get("checked", False):
+        if status != "ACTION_REQUIRED":
+            status = "PRE_FLIGHT_ATTENTION"
+        status_reasons.append(
+            "Unable to query strict orphan packages; package telemetry unavailable"
+        )
+    elif orphans.get("count", 0) > 0:
+        informational_reasons.append(
+            f"{orphans['count']} unrequired orphan package(s); review recommended"
+        )
+
+    if orphans.get("tier3_count", 0) > 0:
+        informational_reasons.append(
+            f"{orphans['tier3_count']} orphan candidate(s) are removal-sensitive; "
+            "review before removal"
+        )
+
     payload = {
         "schema_version": "1.0",
         "timestamp": datetime.now().astimezone().isoformat(),
         "status": status,
         "status_reasons": status_reasons,
+        "informational_reasons": informational_reasons,
         "gaming_mode": gamemode_on,
         "reboot_pending": reboot_pending,
         "failed_services": failed_units,
@@ -467,10 +716,15 @@ def run_triage(check_pkgs: bool = True) -> Dict[str, Any]:
         "sys_health": sys_health
     }
 
-    # Save to status file
+    # Save to status file atomically
     try:
-        with open(STATUS_FILE, "w", encoding="utf-8") as f:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        tmp_status = os.path.join(STATE_DIR, f".status.json.tmp.{os.getpid()}")
+        with open(tmp_status, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_status, STATUS_FILE)
     except Exception:
         pass
 

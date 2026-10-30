@@ -1,0 +1,14 @@
+[Unit]
+Description=SysPilot Zero-Waste Rust StatusNotifierItem Tray Sentinel
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/syspilot-tray
+Restart=on-failure
+RestartSec=5s
+Slice=app.slice
+
+[Install]
+WantedBy=graphical-session.target

@@ -25,3 +25,12 @@
 
 ### D. "Fliplock Jitter" in Xorg Logs:
 * In `/var/log/Xorg.0.log`, harmless messages such as `Failed to request fliplock` may appear. These represent display-pipe synchronization negotiation under KWin and can be safely ignored unless accompanied by hard GPU lockup errors (`NVRM: Xid`).
+
+### E. Automated Hardware Detection Helpers & Nouveau Injection:
+* Some automated distribution helper tools may map legacy Maxwell GPUs to Nouveau or attempt to inject open drivers into dracut/initramfs configs.
+* **SRE DIRECTIVE:** If running the proprietary `nvidia-580xx-dkms` branch, ensure open drivers (`nouveau`) are not forced into initramfs or dracut configurations, as doing so can prevent proprietary module initialization and lock clock speeds.
+
+### F. Display Topology & DP 1.2 MST Daisy-Chain (60 Hz Bandwidth Limits):
+* **MST Daisy-Chaining:** When driving dual 2560x1440 (1440p) displays daisy-chained over a single DisplayPort 1.2 link, the combined pixel bandwidth reaches the physical link limit (~17.28 Gbps).
+* **Refresh Rate Invariant:** At 1440p in DP 1.2 MST daisy-chain configurations, refresh rates must remain at 60 Hz. Attempting to force higher refresh rates (e.g. 144 Hz) exceeds link bandwidth and results in link drops or black screens.
+* **SRE DIRECTIVE:** In MST daisy-chain topologies, 60 Hz per display is standard and intentional; do not treat 60 Hz as an anomaly.

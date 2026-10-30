@@ -148,16 +148,15 @@ export component AppWindow inherits Window {
                     alignment: center;
 
                     Rectangle {
+                        height: 32px;
                         background: Theme.surface;
                         border-radius: Theme.radius-sm;
                         border-width: 1px;
                         border-color: Theme.border-subtle;
 
                         HorizontalLayout {
-                            padding-left: 10px;
-                            padding-right: 10px;
-                            padding-top: 6px;
-                            padding-bottom: 6px;
+                            padding-left: 12px;
+                            padding-right: 12px;
                             alignment: center;
 
                             Text {
@@ -165,6 +164,8 @@ export component AppWindow inherits Window {
                                 color: Theme.status-cyan;
                                 font-size: 11px;
                                 font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
                             }
                         }
                     }

@@ -12,6 +12,7 @@ export component MaintenanceCard inherits Rectangle {
     border-radius: Theme.radius-md;
     border-width: 1px;
     border-color: Theme.border-subtle;
+    min-height: 68px;
 
     HorizontalLayout {
         padding: 14px;
@@ -41,6 +42,7 @@ export component MaintenanceCard inherits Rectangle {
         VerticalLayout {
             alignment: center;
             ActionButton {
+                width: 175px;
                 text: root.action-text;
                 action-color: root.action-color;
                 clicked => { root.clicked(); }

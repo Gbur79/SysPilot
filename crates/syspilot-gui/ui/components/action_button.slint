@@ -12,6 +12,7 @@ export component ActionButton inherits Rectangle {
     border-color: primary ? Colors.transparent : action-color;
     border-width: primary ? 0px : 1px;
     border-radius: Theme.radius-sm;
+    height: 32px;
 
     touch := TouchArea {
         clicked => { root.clicked(); }
@@ -20,8 +21,6 @@ export component ActionButton inherits Rectangle {
     HorizontalLayout {
         padding-left: 14px;
         padding-right: 14px;
-        padding-top: 7px;
-        padding-bottom: 7px;
         alignment: center;
 
         Text {
@@ -29,6 +28,8 @@ export component ActionButton inherits Rectangle {
             color: root.primary ? #0b0f19 : root.action-color;
             font-size: 11px;
             font-weight: 700;
+            vertical-alignment: center;
+            horizontal-alignment: center;
         }
     }
 }

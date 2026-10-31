@@ -513,3 +513,45 @@ fn test_agy_flag_adaptation_hygiene() {
     assert_eq!(adapt_agy_cmd_noninteractive("agy --print"), "agy --print");
     assert_eq!(adapt_agy_cmd_noninteractive("agy --prompt"), "agy --prompt");
 }
+
+#[test]
+fn test_dynamic_kernel_and_os_fallback() {
+    let kernel = detect_kernel();
+    assert!(!kernel.is_empty());
+
+    let os = detect_os();
+    assert!(!os.is_empty());
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp_file = std::env::temp_dir().join(format!("syspilot-fallback-{nanos}/status.json"));
+    std::fs::create_dir_all(tmp_file.parent().unwrap()).unwrap();
+
+    let payload = StatusJson {
+        schema_version: "1.0".into(),
+        status: "ALL_CLEAR".into(),
+        status_reasons: vec![],
+        informational_reasons: vec![],
+        timestamp: Some("1700000000".into()),
+        gaming_mode: false,
+        reboot_pending: false,
+        updates: StatusUpdates::default(),
+        failed_services: None,
+        disk: None,
+        pacnew: None,
+        orphans: None,
+        sys_health: None,
+        security: None,
+        firmware: None,
+        firewall: None,
+    };
+    write_status_json_atomic(&tmp_file, &payload).unwrap();
+
+    let snapshot = read_system_snapshot(&tmp_file).unwrap();
+    assert_eq!(snapshot.kernel, kernel);
+    assert_eq!(snapshot.os, os);
+
+    let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
+}

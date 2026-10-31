@@ -4358,7 +4358,7 @@ dependencies = [
 
 [[package]]
 name = "syspilot-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "libc",
  "serde",
@@ -4368,7 +4368,7 @@ dependencies = [
 
 [[package]]
 name = "syspilot-gui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "libc",
  "slint",
@@ -4379,7 +4379,7 @@ dependencies = [
 
 [[package]]
 name = "syspilot-tray"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "ksni",
  "libc",

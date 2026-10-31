@@ -218,6 +218,67 @@ pub fn write_status_json_atomic(dest_path: &Path, payload: &StatusJson) -> std::
     Ok(())
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct SummaryCounts {
+    #[serde(default)]
+    errors: u32,
+    #[serde(default)]
+    warnings: u32,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SummaryJson {
+    #[serde(default)]
+    counts: Option<SummaryCounts>,
+    #[serde(default)]
+    environment: Option<SysHealthEnvironment>,
+    #[serde(default)]
+    gaming: Option<SysHealthGaming>,
+}
+
+pub fn load_sys_health() -> SysHealth {
+    let summary_path = state_base().join("system-health/summary.json");
+    let mut health = if summary_path.is_file() {
+        match std::fs::File::open(&summary_path) {
+            Ok(file) => {
+                let reader = std::io::BufReader::new(file);
+                match serde_json::from_reader::<_, SummaryJson>(reader) {
+                    Ok(summary) => {
+                        let (errors, warnings) = summary
+                            .counts
+                            .map(|c| (c.errors, c.warnings))
+                            .unwrap_or((0, 0));
+                        SysHealth {
+                            available: true,
+                            errors,
+                            warnings,
+                            environment: summary.environment,
+                            gaming: summary.gaming,
+                        }
+                    }
+                    Err(_) => SysHealth::default(),
+                }
+            }
+            Err(_) => SysHealth::default(),
+        }
+    } else {
+        SysHealth::default()
+    };
+
+    let mut env = health.environment.unwrap_or_default();
+
+    if env.kernel.as_deref().unwrap_or("").is_empty() || env.kernel.as_deref() == Some("unknown") {
+        env.kernel = Some(detect_kernel());
+    }
+
+    if env.os.as_deref().unwrap_or("").is_empty() {
+        env.os = Some(detect_os());
+    }
+
+    health.environment = Some(env);
+    health
+}
+
 pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let status_path = get_status_path();
     let cached = if status_path.is_file() {
@@ -294,7 +355,7 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
         disk: Some(disk),
         pacnew: Some(pacnew),
         orphans: Some(orphans),
-        sys_health: None,
+        sys_health: Some(load_sys_health()),
         security: Some(security),
         firmware: Some(firmware),
         firewall: Some(firewall),

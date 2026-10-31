@@ -111,6 +111,10 @@ async fn shutdown_signal() {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if !syspilot_core::acquire_single_instance_lock(".tray.lock") {
+        return Ok(());
+    }
+
     let status_path = get_status_path();
     let (mut snapshot, mut last_error) = match read_system_snapshot(&status_path) {
         Ok(snapshot) => (snapshot, None),
@@ -132,6 +136,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run initial background update check if not in gaming session
     let initial_updates = updater::run_full_update_check(gamemode_active).await;
+
+    // Trigger initial background triage unconditionally on startup (cold boot or restart)
+    // as long as not in an active gaming session, ensuring telemetry is immediately fresh.
+    if !gamemode_active {
+        tokio::task::spawn(async move {
+            let _ = syspilot_core::run_triage(false, false).await;
+        });
+    }
 
     let (exit_tx, mut exit_rx) = mpsc::channel(1);
     let tray = SysPilotTray::new(
@@ -172,11 +184,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut gamemode_timer = tokio::time::interval(Duration::from_secs(3));
     let mut sentinels_timer = tokio::time::interval(Duration::from_secs(10));
     let mut updater_timer = tokio::time::interval(Duration::from_secs(3600));
+    let mut triage_timer = tokio::time::interval(Duration::from_secs(900));
 
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     gamemode_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     sentinels_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     updater_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    triage_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
@@ -185,6 +199,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             _ = &mut shutdown => break,
             _ = exit_rx.recv() => break,
+            _ = triage_timer.tick() => {
+                if !gamemode_active {
+                    let _ = syspilot_core::run_triage(false, false).await;
+                }
+            }
             signal = fs_rx.recv() => match signal {
                 Some(FsSignal::Dirty) => {
                     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -226,6 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ = gamemode_timer.tick() => {
                 let active = gamemode::is_gamemode_active(dbus_conn.as_ref()).await;
                 if active != gamemode_active {
+                    let was_active = gamemode_active;
                     gamemode_active = active;
                     if handle
                         .update(move |tray| tray.gamemode_active = active)
@@ -233,6 +253,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .is_none()
                     {
                         break;
+                    }
+                    if was_active && !active {
+                        tokio::spawn(async move {
+                            let _ = syspilot_core::run_triage(false, false).await;
+                        });
                     }
                 }
             }
@@ -256,6 +281,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(updates) = updater::run_full_update_check(false).await {
                             let _ = handle_clone.update(move |tray| tray.updates = Some(updates)).await;
                         }
+                        let _ = syspilot_core::run_triage(false, false).await;
                     });
                 }
             }
@@ -267,6 +293,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .is_none()
                     {
                         break;
+                    }
+                    if !gamemode_active {
+                        let _ = syspilot_core::run_triage(false, false).await;
                     }
                 }
             }

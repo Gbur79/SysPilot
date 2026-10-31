@@ -437,6 +437,25 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-017: [IMPLEMENTED] SysPilot Rust Tray Deduplication (flock), Autonomous Background Triage & Dynamic Kernel Telemetry Ingestion
+- **Status:** `[IMPLEMENTED]` *(SRE Certified — Audit `BP-ARGON-20261031-INCIDENT-001`, Auditor Argon Pro)*
+- **Data zgłoszenia:** 2026-10-31
+- **Źródło:** Incident Triage (Duplicate tray icons, stale telemetry cache `age > 6h`, "Kernel unknown")
+- **Audyt SRE:**
+  - `BP-ARGON-20261031-INCIDENT-001` (Auditor Argon Pro): Zatwierdzenie blueprintu architektonicznego. Wdrożenie kernel-level `libc::flock` w `syspilot-tray` i `syspilot-gui`, dodanie `X-systemd-skip=true` do autostartu desktop, wdrożenie bezwarunkowego triage przy zimnym starcie i restarcie komputera oraz periodycznego timera 15 min w `syspilot-tray`, integracja odczytu `summary.json` z silnika `sys-health.sh` oraz natywnych fallbacków do `/proc/sys/kernel/osrelease` i `/etc/os-release`.
+- **Docelowe Komponenty:**
+  - `crates/syspilot-core/src/models.rs` (`detect_kernel()`, `detect_os()`, `acquire_single_instance_lock()`, resilient `read_system_snapshot()`)
+  - `crates/syspilot-core/src/triage.rs` (`load_sys_health()`, canonical `summary.json` ingestion)
+  - `crates/syspilot-tray/src/main.rs` (flock deduplication, startup triage, 15-minute background poller)
+  - `crates/syspilot-gui/src/main.rs` (shared flock deduplication)
+  - `autostart/syspilot.desktop` (`X-systemd-skip=true`)
+  - `Cargo.toml` (Bump version to `0.2.3`)
+- **Kontekst i Uzasadnienie:**
+  Po wycofaniu pythonowego `syspilot-sentinel` w Fazie 4, czysty Rust v2 nie posiadał demona odświeżającego telemetrię w tle (triage działał tylko na kliknięcie w GUI). Po wyłączeniu komputera na noc, poranny start wczytywał cache starszy niż 6 godzin, co wywoływało fałszywy alarm `DATA UNAVAILABLE: Telemetry cache stale (age 38344s)` i pomarańczowy trójkąt w tacce. Ponadto brak `flock` i równoległe istnienie usługi systemd oraz pliku autostartu XDG w KDE Plasma 6 skutkowało odpaleniem dwóch procesów tray i dwóch ikon. Trzecią wadą było hardkodowane `sys_health: None` w `triage.rs`, skutkujące etykietą "Kernel unknown".
+- **Weryfikacja:** `dev-tools/verify-rust.sh -q` ➔ 32/32 unit tests PASS (w tym nowy test `test_dynamic_kernel_and_os_fallback`), Clippy clean, fmt clean.
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

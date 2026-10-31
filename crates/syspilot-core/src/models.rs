@@ -203,13 +203,13 @@ pub struct SysHealth {
     pub gaming: Option<SysHealthGaming>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SysHealthEnvironment {
     pub os: Option<String>,
     pub kernel: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SysHealthGaming {
     pub detected: Option<bool>,
 }
@@ -295,6 +295,70 @@ impl SystemSnapshot {
     pub fn has_data_problem(&self) -> bool {
         self.source_error.is_some() || self.cache_stale
     }
+}
+
+pub fn detect_kernel() -> String {
+    if let Ok(content) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
+        let trimmed = content.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
+pub fn detect_os() -> String {
+    for path in ["/etc/os-release", "/usr/lib/os-release"] {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let mut name = None;
+            let mut pretty_name = None;
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if let Some(val) = trimmed.strip_prefix("PRETTY_NAME=") {
+                    pretty_name = Some(val.trim_matches('"').trim_matches('\'').to_string());
+                } else if let Some(val) = trimmed.strip_prefix("NAME=") {
+                    name = Some(val.trim_matches('"').trim_matches('\'').to_string());
+                }
+            }
+            if let Some(p) = pretty_name {
+                if !p.is_empty() {
+                    return p;
+                }
+            }
+            if let Some(n) = name {
+                if !n.is_empty() {
+                    return n;
+                }
+            }
+        }
+    }
+    "Linux".to_string()
+}
+
+pub fn acquire_single_instance_lock(lock_name: &str) -> bool {
+    use std::os::unix::io::AsRawFd;
+
+    let state_dir = state_base().join("syspilot");
+    let _ = std::fs::create_dir_all(&state_dir);
+    let lock_path = state_dir.join(lock_name);
+
+    let file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+    {
+        Ok(f) => f,
+        Err(_) => return true,
+    };
+
+    let res = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if res != 0 {
+        return false;
+    }
+
+    std::mem::forget(file);
+    true
 }
 
 pub fn state_base() -> PathBuf {
@@ -399,15 +463,21 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
                 .unwrap_or(false),
         )
     } else {
-        (0, 0, None, false)
+        (0, 0, health.environment, false)
     };
 
     let (os, kernel) = environment.map_or_else(
-        || ("Linux".into(), "unknown".into()),
+        || (detect_os(), detect_kernel()),
         |environment| {
             (
-                environment.os.unwrap_or_else(|| "Linux".into()),
-                environment.kernel.unwrap_or_else(|| "unknown".into()),
+                environment
+                    .os
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(detect_os),
+                environment
+                    .kernel
+                    .filter(|s| !s.is_empty() && s != "unknown")
+                    .unwrap_or_else(detect_kernel),
             )
         },
     );

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.1] - 2026-10-31
+
+### Fixed / SysPilot Tray Deduplication, Background Triage & Kernel Ingestion (`BP-ARGON-20261031-INCIDENT-001`)
+- **Single-Instance Advisory Locking (`crates/syspilot-tray`, `crates/syspilot-gui`, `crates/syspilot-core`)**:
+  - Implemented kernel-level single-instance lock via `libc::flock` (`~/.local/state/syspilot/.tray.lock`), preventing duplicate status icons when started under multiple autostart mechanisms.
+  - Re-exported shared `acquire_single_instance_lock()` from `syspilot-core` for unified mutex management across tray and GUI (`.gui.lock`).
+- **Autonomous Startup & 15-Minute Background Triage (`crates/syspilot-tray`)**:
+  - Implemented unconditional cold-startup / reboot background triage, ensuring telemetry is 100% fresh immediately upon login and eliminating false-positive stale cache warnings (`DATA DEGRADED ⚠` / `age > 6h`).
+  - Added periodic 15-minute background triage timer with automatic GameMode freeze and post-update / post-pacman unlock refresh.
+- **Canonical Telemetry Ingestion & Native OS/Kernel Discovery (`crates/syspilot-core`)**:
+  - Integrated `load_sys_health()` in `triage.rs` to ingest canonical `~/.local/state/system-health/summary.json` (Schema 2.0).
+  - Added zero-fork native fallbacks (`detect_kernel()` via `/proc/sys/kernel/osrelease`, `detect_os()` via `/etc/os-release`), permanently resolving "Kernel unknown" and generic "Linux" labels.
+- **XDG Autostart Generator Invariant (`autostart/syspilot.desktop`)**:
+  - Added `X-systemd-skip=true` to prevent `systemd-xdg-autostart-generator` from generating duplicate `app-syspilot@autostart.service` on KDE Plasma 6 Wayland and GNOME.
+- SRE verification: `dev-tools/verify-rust.sh -q` ➔ 32/32 unit tests PASS, Clippy clean, fmt clean. Certified by Auditor Argon Pro (`BP-ARGON-20261031-INCIDENT-001`).
+
 ## [2.0.0-alpha.1] - 2026-10-30
 
 ### Fixed / Slint Maintenance Action Grid & Typography Centering (`38de341`)

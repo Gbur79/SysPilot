@@ -9,3 +9,4 @@ Terminal=false
 Categories=System;Monitor;Utility;
 X-GNOME-Autostart-enabled=true
 StartupNotify=false
+X-systemd-skip=true

@@ -1,37 +1,9 @@
 slint::include_modules!();
 
 use slint::ComponentHandle;
-use std::os::unix::io::AsRawFd;
-use std::path::PathBuf;
 
 fn acquire_single_instance_lock() -> bool {
-    let state_dir = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-        .unwrap_or_else(|| PathBuf::from(".local/state"))
-        .join("syspilot");
-
-    let _ = std::fs::create_dir_all(&state_dir);
-    let lock_path = state_dir.join(".gui.lock");
-
-    let file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-    {
-        Ok(f) => f,
-        Err(_) => return true,
-    };
-
-    let res = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if res != 0 {
-        return false;
-    }
-
-    // Keep lock held for process lifetime
-    std::mem::forget(file);
-    true
+    syspilot_core::acquire_single_instance_lock(".gui.lock")
 }
 
 fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnapshot) {

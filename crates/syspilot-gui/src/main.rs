@@ -1,6 +1,8 @@
 slint::include_modules!();
 
 use slint::ComponentHandle;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn acquire_single_instance_lock() -> bool {
     syspilot_core::acquire_single_instance_lock(".gui.lock")
@@ -410,14 +412,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Live telemetry file watcher: poll status.json mtime every 1s
     let ui_weak_watcher = ui.as_weak();
+    let gui_running = Arc::new(AtomicBool::new(true));
+    let gui_running_watcher = Arc::clone(&gui_running);
+
     std::thread::spawn(move || {
         let status_path = syspilot_core::get_status_path();
         let mut last_mtime = std::fs::metadata(&status_path)
             .and_then(|m| m.modified())
             .ok();
-        loop {
+        while gui_running_watcher.load(Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_secs(1));
-            if ui_weak_watcher.upgrade().is_none() {
+            if !gui_running_watcher.load(Ordering::Relaxed) {
                 break;
             }
 
@@ -427,19 +432,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if current_mtime != last_mtime {
                 last_mtime = current_mtime;
                 let snapshot_res = syspilot_core::read_system_snapshot(&status_path);
-                let copy = ui_weak_watcher.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui_inst) = copy.upgrade() {
-                        match snapshot_res {
-                            Ok(snapshot) => update_ui_from_snapshot(&ui_inst, &snapshot),
-                            Err(err) => update_ui_from_error(&ui_inst, &err),
-                        }
-                    }
-                });
+                let dispatch_res =
+                    ui_weak_watcher.upgrade_in_event_loop(move |ui_inst| match snapshot_res {
+                        Ok(snapshot) => update_ui_from_snapshot(&ui_inst, &snapshot),
+                        Err(err) => update_ui_from_error(&ui_inst, &err),
+                    });
+                if dispatch_res.is_err() {
+                    break;
+                }
             }
         }
     });
 
-    ui.run()?;
+    let run_res = ui.run();
+    gui_running.store(false, Ordering::Relaxed);
+    run_res?;
     Ok(())
 }

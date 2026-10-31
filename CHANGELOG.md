@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.1] - 2026-10-31
 
+### Fixed / Live Telemetry Watcher Thread Lifetime & Event Loop Dispatch (`BP-ARGON-20261031-SYS-010-WATCHER`)
+- **Slint Worker Thread Affinity & Auto-Refresh (`crates/syspilot-gui/src/main.rs`)**:
+  - Replaced illegal worker-thread `ui_weak_watcher.upgrade()` check (which returned `None` within 1s due to Slint's thread-affinity constraint) with atomic `gui_running: Arc<AtomicBool>` lifecycle tracking.
+  - Switched telemetry updates to `ui_weak_watcher.upgrade_in_event_loop(...)`, safely upgrading the component reference on the UI main thread and tearing down the worker thread gracefully upon event loop termination.
+  - Permanently fixed stale GUI dashboard post-upgrade: window immediately syncs to `FLIGHT READY ✔` / 0 pending packages upon external `status.json` write.
+
 ### Fixed / SysPilot Tray Deduplication, Background Triage & Kernel Ingestion (`BP-ARGON-20261031-INCIDENT-001`)
 - **Single-Instance Advisory Locking (`crates/syspilot-tray`, `crates/syspilot-gui`, `crates/syspilot-core`)**:
   - Implemented kernel-level single-instance lock via `libc::flock` (`~/.local/state/syspilot/.tray.lock`), preventing duplicate status icons when started under multiple autostart mechanisms.

@@ -457,6 +457,22 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-018: [IMPLEMENTED] SysPilot GUI Live Telemetry Watcher Thread Lifetime & Event Loop Dispatch
+- **Status:** `[IMPLEMENTED]` *(SRE Certified — Audit `BP-ARGON-20261031-SYS-010-WATCHER`, Auditor Argon Pro)*
+- **Data zgłoszenia:** 2026-10-31
+- **Źródło:** Bug Report / Live Workstation Triage (Dashboard nie odświeża się automatycznie po zakończeniu `RUN GUARDED UPGRADE`)
+- **Audyt SRE:**
+  - `BP-ARGON-20261031-SYS-010-WATCHER` (Auditor Argon Pro): Zatwierdzenie blueprintu architektonicznego. Wymiana nieprawidłowego wywołania `ui_weak_watcher.upgrade()` w wątku roboczym tła (zwracającego `None` z powodu ograniczenia thread-affinity Slinta) na atomową flagę cyklu życia okna `gui_running: Arc<AtomicBool>` oraz bezpieczną dyspozycję UI przez `ui_weak_watcher.upgrade_in_event_loop(...)`.
+- **Docelowe Komponenty:**
+  - `crates/syspilot-gui/src/main.rs` (1Hz live watcher thread lifecycle, `upgrade_in_event_loop`, graceful thread shutdown on window close)
+  - `CHANGELOG.md` (wpis v2.0.1)
+  - `packaging/PKGBUILD` (synchronizacja `pkgver=2.0.1`)
+- **Kontekst i Uzasadnienie:**
+  Po uruchomieniu aktualizacji jądra i sterowników przez opcję "RUN GUARDED UPGRADE", proces aktualizacji w terminalu zakończył się sukcesem, a `syspilot-tray` poprawnie zaktualizował plik stanu `status.json` do 0 oczekujących aktualizacji. Mimo to otwarte okno GUI pozostawało zamrożone na starym stanie sprzed aktualizacji. Diagnoza wykazała, że wątek tła monitorujący `status.json` w `syspilot-gui` kończył działanie (`break`) już w 1. sekundzie po otwarciu okna z powodu ewaluacji `ui_weak_watcher.upgrade().is_none()`. W Slint 1.18 metoda `Weak::upgrade()` zwraca `None`, jeśli nie jest wywołana na wątku tworzącym okno.
+- **Weryfikacja:** `dev-tools/verify-rust.sh -q` ➔ 32/32 unit tests PASS, Clippy clean, fmt clean. Produkcyjna instalacja `~/.local/bin/syspilot-gui` zweryfikowana.
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

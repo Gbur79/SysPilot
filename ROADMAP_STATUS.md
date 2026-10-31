@@ -2,8 +2,8 @@
 
 **Właściciel Projektu:** Karol (Dublin, Ireland)  
 **Nadzór Architektoniczny:** SRE Auditor (Auditor Argon Pro) & SysPilot SRE Team  
-**Ostatnia aktualizacja:** 2026-10-30T09:57:00Z  
-**Status projektu:** 🟢 **FAZA 1, FAZA 2 I FAZA 3 ZAKOŃCZONE ✔ (TESTY I INSTALACJA ZATWIERDZONE)**  
+**Ostatnia aktualizacja:** 2026-10-31T19:07:00Z  
+**Status projektu:** 🟢 **FAZA 1, FAZA 2, FAZA 3 I FAZA 4 ZAKOŃCZONE ✔ (TESTY I INSTALACJA ZATWIERDZONE)**  
 **Lokalizacja kanoniczna w repozytorium:** `Projects/sysPilot/ROADMAP_STATUS.md`
 
 ---
@@ -68,9 +68,12 @@ Przekształcenie `SysPilot` w zintegrowany, lekki i niezawodny pakiet dla Arch L
 
 ---
 
-### 🟡 FAZA 4: Certyfikacja Końcowa i Live Sanity Check (W KOLEJCE)
-- [ ] Test integracyjny na pulpicie użytkownika: kliknięcie ikony zasobnika i weryfikacja menu oraz okna głównego.
-- [ ] Zatwierdzenie stanu końcowego.
+### 🟢 FAZA 4: Certyfikacja Końcowa, Live Watcher & Stabilizacja (ZAKOŃCZONE ✔)
+- [x] **Live Telemetry Watcher & Auto-Refresh:**
+  - [x] Monitorowanie czasu modyfikacji `status.json` w `syspilot-gui` (1 Hz).
+  - [x] Usunięcie błędu thread-affinity Slinta (`BP-ARGON-20261031-SYS-010-WATCHER`) poprzez `upgrade_in_event_loop` i `Arc<AtomicBool>`.
+  - [x] Automatyczna synchronizacja otwartego okna do stanu `FLIGHT READY ✔` natychmiast po ukończeniu guarded upgrade w terminalu.
+- [x] **Certyfikacja i testy:** 32/32 testów PASS, Clippy clean, wydanie v2.0.1 skompilowane i zainstalowane w `~/.local/bin/`.
 
 ---
 

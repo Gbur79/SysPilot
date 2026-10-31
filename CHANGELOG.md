@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Proactive UEFI Secure Boot Certificate Quirk Classifier (`crates/syspilot-core/src/firmware.rs`)**:
   - Proactively classified UEFI Secure Boot certificates (`uefi_kek`, `uefi_dbx`, `uefi_db`, `uefi_pk`) as bypassed harmless quirks whenever Secure Boot is disabled (`!secure_boot_active`), without requiring an initial NVRAM write failure (`UpdateState == 3`).
   - Permanently resolved recurring false-positive `PRE-FLIGHT ATTENTION ⚠` and `1 firmware update(s) available via LVFS [UPDATE ⚠]` warnings for Microsoft KEK CA on motherboards with NVRAM write constraints (e.g. Haswell Z97).
+- **Live Package Triage & Auto-Refreshing GUI Dashboard (`crates/syspilot-tray`, `crates/syspilot-gui`)**:
+  - Fixed frozen update counters in `status.json` by invoking live package triage (`check_pkgs: true`) upon daemon startup, pacman unlock events (`pacman_unlocked`), and the 1-hour periodic updater tick, while preserving fast (<50ms) low-I/O triage during resting 15-minute cycles.
+  - Added non-blocking background filesystem watcher in `syspilot-gui` polling `status.json` mtime at 1 Hz, automatically updating the open desktop dashboard in real time upon upgrade completion without manual refresh.
 - **Canonical Telemetry Ingestion & Native OS/Kernel Discovery (`crates/syspilot-core`)**:
   - Integrated `load_sys_health()` in `triage.rs` to ingest canonical `~/.local/state/system-health/summary.json` (Schema 2.0).
   - Added zero-fork native fallbacks (`detect_kernel()` via `/proc/sys/kernel/osrelease`, `detect_os()` via `/etc/os-release`), permanently resolving "Kernel unknown" and generic "Linux" labels.

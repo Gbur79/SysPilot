@@ -141,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // as long as not in an active gaming session, ensuring telemetry is immediately fresh.
     if !gamemode_active {
         tokio::task::spawn(async move {
-            let _ = syspilot_core::run_triage(false, false).await;
+            let _ = syspilot_core::run_triage(true, false).await;
         });
     }
 
@@ -278,10 +278,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if pacman_unlocked && !gamemode_active {
                     let handle_clone = handle.clone();
                     tokio::spawn(async move {
+                        let _ = syspilot_core::run_triage(true, false).await;
                         if let Some(updates) = updater::run_full_update_check(false).await {
                             let _ = handle_clone.update(move |tray| tray.updates = Some(updates)).await;
                         }
-                        let _ = syspilot_core::run_triage(false, false).await;
                     });
                 }
             }
@@ -295,7 +295,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         break;
                     }
                     if !gamemode_active {
-                        let _ = syspilot_core::run_triage(false, false).await;
+                        let _ = syspilot_core::run_triage(true, false).await;
                     }
                 }
             }

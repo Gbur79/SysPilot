@@ -408,6 +408,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         trigger_copilot_query(ui_weak_playbook.clone(), query.to_string());
     });
 
+    // Live telemetry file watcher: poll status.json mtime every 1s
+    let ui_weak_watcher = ui.as_weak();
+    std::thread::spawn(move || {
+        let status_path = syspilot_core::get_status_path();
+        let mut last_mtime = std::fs::metadata(&status_path)
+            .and_then(|m| m.modified())
+            .ok();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if ui_weak_watcher.upgrade().is_none() {
+                break;
+            }
+
+            let current_mtime = std::fs::metadata(&status_path)
+                .and_then(|m| m.modified())
+                .ok();
+            if current_mtime != last_mtime {
+                last_mtime = current_mtime;
+                let snapshot_res = syspilot_core::read_system_snapshot(&status_path);
+                let copy = ui_weak_watcher.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui_inst) = copy.upgrade() {
+                        match snapshot_res {
+                            Ok(snapshot) => update_ui_from_snapshot(&ui_inst, &snapshot),
+                            Err(err) => update_ui_from_error(&ui_inst, &err),
+                        }
+                    }
+                });
+            }
+        }
+    });
+
     ui.run()?;
     Ok(())
 }

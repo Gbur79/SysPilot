@@ -15,7 +15,7 @@
 **SysPilot** bridges the gap between passive Linux command-line diagnostics and everyday desktop operations. Instead of waiting for the system to break or running heavy scripts, **SysPilot** employs a decoupled two-tier architecture:
 
 1. **Ultra-Lightweight 24/7 Rust Sentinel (`syspilot-tray`):** Runs continuously in the background consuming only **~3.2 MB RAM and 0.0% CPU**. Communicates directly with the system and user session bus via native D-Bus (`zbus 5.19`, zero `busctl` fork/exec), tracks pending kernel reboots, pacman database locks, disk capacity, and queries pending updates with automatic GameMode freeze.
-2. **On-Demand Graphical Dashboard (`syspilot --gui`):** Rich PyQt6 desktop dashboard with single-instance enforcement (`fcntl.flock` + `QLocalServer`), dynamic Hardware Platform & GPU telemetry, 1-click guarded system upgrades, orphan cleanup, mirror ranking, and an interactive **AI Copilot** console.
+2. **On-Demand Graphical Dashboard (`syspilot --gui`):** Native Slint 1.18 desktop dashboard with kernel-level single-instance enforcement (`libc::flock`), dynamic Hardware Platform & GPU telemetry, 1-click guarded system upgrades, orphan cleanup, mirror ranking, and an interactive **AI Copilot** console.
 
 Unlike generic AI assistants that hallucinate or blindly execute destructive shell commands, SysPilot pairs an execution runner with the specialized **`copilot-admin` SRE skill** (built upon battle-tested token-lean Linux systems engineering).
 
@@ -101,13 +101,49 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
 
 ## 🖥️ Graphical Dashboard Layout
 
-The SysPilot graphical interface is organized into 5 focused tabs:
+The SysPilot native Slint GUI is organized into 3 streamlined, high-density tabs:
 
-1. **✈ Dashboard:** Lean operational overview. Shows Official Updates (with Security Advisories & CVE risk scoring, Pre-caching, Guarded Upgrades), Standalone & 3rd-Party App Updates (AUR, Flatpak, UV, Goose, Hardware Firmware via `fwupd`), and System Health & Hygiene (Host Firewall Shield, Reboot, Systemd units, Baloo & Journal, Orphans, .pacnew, Disk storage, Gaming readiness, and Hardware Platform & GPU).
-2. **🛠 System Maintenance:** One-click safe maintenance tools (Orphan package triage, Mirror ranking, Safe Cache Trimming, Deep Clean, and `.pacnew` reconciler).
-3. **🤖 AI Copilot:** Embedded AI troubleshooting console with 1-click playbook buttons (FAF Setup, Proton launch fix, PipeWire audio repair, `.pacnew` diffing) and the 30-second onboarding wizard.
-4. **🧠 SRE Skill & Persona:** Full transparency view. Inspect pre-gathered 0-token telemetry, customize persistent user directives, and browse loaded playbooks.
-5. **⚙ Settings & Autostart:** Configure autostart on user login and select default AI reasoning models.
+1. **✈ Dashboard:** Real-time operational cockpit categorized into 3 synchronized telemetry cards:
+   - **System Health & Hygiene:** Kernel & modules sync, root storage (`/`), host firewall shield, failed systemd units, and dynamic Hardware Platform & GPU telemetry.
+   - **System Updates:** Core system packages (kernel/drivers), official repository updates, AUR packages, and security advisories (CVE tracking).
+   - **Third-Party & Peripherals:** Hardware firmware (LVFS / `fwupd`) and orphan package detection, paired with quick action triggers (`RUN GUARDED UPGRADE`, `DIAGNOSTIC AUDIT`, `PRUNE ORPHANS`).
+2. **🛠 System Maintenance:** 7 atomic, battle-tested maintenance cards:
+   - 1) **Orphan Package Triage & Prune:** Interactive 3-tier orphan purger preserving optional dependencies (`optdepends`).
+   - 2) **Refresh & Rank Regional Mirrors:** Benchmarks and ranks fastest regional mirrors with atomic backup.
+   - 3) **Safe Maintenance & Cache Trimming:** Trims pacman cache (retains last 2), vacuums journal logs (>14 days), and cleans old run logs.
+   - 4) **Deep Clean:** Purges user Trash, browser caches, and thumbnail caches.
+   - 5) **Security Advisories (CVE Triage):** Deep CVE inspection powered by `arch-audit`.
+   - 6) **Hardware Firmware Upgrade (LVFS):** Upgrades firmware for NVMe, UEFI, and attached peripherals via `fwupdmgr`.
+   - 7) **Pre-Cache Packages:** Interactively pre-downloads large packages ahead of maintenance without locking pacman.
+3. **🤖 AI Copilot:** Embedded SRE diagnostic console featuring:
+   - 1-click battle-tested playbooks: **FAF Client Repair**, **Steam / Proton Fix**, **Reconcile .pacnew**, and **PipeWire Audio Fix**.
+   - Pluggable multi-agent CLI adapter: Seamlessly routes queries to Google Antigravity CLI (`agy`), Goose, or custom local runners.
+   - Live interactive diagnostic console and terminal launcher.
+
+---
+
+## 🔨 Installation & Building from Source
+
+### Prerequisites
+On Arch Linux / EndeavourOS:
+```bash
+sudo pacman -S --needed base-devel rust cargo fontconfig freetype2
+```
+
+### Build & Deploy
+```bash
+git clone https://github.com/Gbur79/SysPilot.git
+cd SysPilot
+
+# Build release binaries with locked dependencies
+cargo build --release --locked
+
+# Copy binaries to your local bin directory
+cp target/release/syspilot-tray target/release/syspilot-gui ~/.local/bin/
+
+# Alternatively, use the automated installer to compile and restart the service:
+./dev-tools/build-and-install.sh
+```
 
 ---
 
@@ -171,7 +207,7 @@ syspilot --skill
 ```bash
 syspilot --enable-autostart
 ```
-*(Or toggle the autostart checkbox in the SysPilot Settings tab).*
+*(Manages `~/.config/autostart/syspilot.desktop` pointing to `syspilot --tray`).*
 
 ---
 
@@ -185,7 +221,7 @@ sysPilot/
 │   └── syspilot-faf-repair      # Deterministic FAF runner & shortcut repair tool
 ├── crates/
 │   ├── syspilot-core/           # Headless triage engine, CVE, LVFS, firewall, terminal & copilot runners
-│   ├── syspilot-tray/           # High-performance 24/7 Rust StatusNotifierItem Tray Sentinel (~1.2 MB RAM)
+│   ├── syspilot-tray/           # High-performance 24/7 Rust StatusNotifierItem Tray Sentinel (~3.2 MB RAM)
 │   └── syspilot-gui/            # Native Slint Desktop Cockpit (3-tab HUD, Maintenance Suite & AI Copilot)
 ├── copilot/
 │   ├── recipe.yaml              # Public AI SRE recipe definition

@@ -46,13 +46,13 @@ async fn test_security_check_skip_network() {
 fn test_parse_fwupd_devices_nvram_quirk_bypassed_when_secure_boot_disabled() {
     use serde_json::json;
 
+    // Both KEK CA with fresh pending state (UpdateState: 1, no error) and hardware device
     let raw = json!([
         {
-            "Name": "UEFI dbx",
-            "Plugin": "uefi_dbx",
+            "Name": "KEK CA",
+            "Plugin": "uefi_kek",
             "Protocol": "org.uefi.dbx",
-            "UpdateState": 3,
-            "UpdateError": "efivarsfs: Error writing to file descriptor: Invalid argument"
+            "UpdateState": 1
         },
         {
             "Name": "ADATA SX8200PNP SSD",
@@ -63,15 +63,15 @@ fn test_parse_fwupd_devices_nvram_quirk_bypassed_when_secure_boot_disabled() {
     ]);
 
     let devices = serde_json::from_value(raw).unwrap();
-    // Secure Boot is DISABLED (false)
+    // Secure Boot is DISABLED (false) -> KEK CA must be proactively bypassed
     let (updates_count, total_monitored, pending, quirks) = parse_fwupd_devices(devices, false);
 
     assert_eq!(total_monitored, 2);
     assert_eq!(updates_count, 1);
     assert_eq!(pending, vec!["ADATA SX8200PNP SSD"]);
     assert_eq!(quirks.len(), 1);
-    assert_eq!(quirks[0].name, "UEFI dbx");
-    assert_eq!(quirks[0].plugin, "uefi_dbx");
+    assert_eq!(quirks[0].name, "KEK CA");
+    assert_eq!(quirks[0].plugin, "uefi_kek");
     assert_eq!(quirks[0].reason, "NVRAM write limit (Secure Boot disabled)");
 }
 
@@ -81,11 +81,10 @@ fn test_parse_fwupd_devices_nvram_quirk_not_bypassed_when_secure_boot_enabled() 
 
     let raw = json!([
         {
-            "Name": "UEFI dbx",
-            "Plugin": "uefi_dbx",
+            "Name": "KEK CA",
+            "Plugin": "uefi_kek",
             "Protocol": "org.uefi.dbx",
-            "UpdateState": 3,
-            "UpdateError": "efivarsfs: Error writing to file descriptor: Invalid argument"
+            "UpdateState": 1
         }
     ]);
 
@@ -95,7 +94,7 @@ fn test_parse_fwupd_devices_nvram_quirk_not_bypassed_when_secure_boot_enabled() 
 
     assert_eq!(total_monitored, 1);
     assert_eq!(updates_count, 1);
-    assert_eq!(pending, vec!["UEFI dbx"]);
+    assert_eq!(pending, vec!["KEK CA"]);
     assert_eq!(quirks.len(), 0);
 }
 

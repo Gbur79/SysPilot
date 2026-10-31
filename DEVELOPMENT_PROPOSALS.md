@@ -446,6 +446,7 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 - **Docelowe Komponenty:**
   - `crates/syspilot-core/src/models.rs` (`detect_kernel()`, `detect_os()`, `acquire_single_instance_lock()`, resilient `read_system_snapshot()`)
   - `crates/syspilot-core/src/triage.rs` (`load_sys_health()`, canonical `summary.json` ingestion)
+  - `crates/syspilot-core/src/firmware.rs` (proactive Secure Boot certificate quirk classifier on disabled Secure Boot)
   - `crates/syspilot-tray/src/main.rs` (flock deduplication, startup triage, 15-minute background poller)
   - `crates/syspilot-gui/src/main.rs` (shared flock deduplication)
   - `autostart/syspilot.desktop` (`X-systemd-skip=true`)

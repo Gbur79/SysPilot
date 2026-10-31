@@ -60,8 +60,6 @@ pub fn parse_fwupd_devices(
             .into_iter()
             .map(|p| p.to_ascii_lowercase())
             .collect();
-        let update_err = d.update_error.unwrap_or_default().to_ascii_lowercase();
-
         let is_sb_cert = matches!(
             plugin.as_str(),
             "uefi_kek" | "uefi_dbx" | "uefi_db" | "uefi_pk"
@@ -71,17 +69,7 @@ pub fn parse_fwupd_devices(
             || dev_name_lower.contains("dbx")
             || dev_name_lower.contains("uefi ca");
 
-        let has_nvram_error = d.update_state == Some(3)
-            || [
-                "efivarsfs",
-                "invalid argument",
-                "no space left",
-                "resource busy",
-            ]
-            .iter()
-            .any(|err| update_err.contains(err));
-
-        if is_sb_cert && has_nvram_error && !secure_boot_active {
+        if is_sb_cert && !secure_boot_active {
             bypassed.push(FirmwareQuirk {
                 name: dev_name,
                 plugin,

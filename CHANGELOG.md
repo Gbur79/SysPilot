@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [2.0.1] - 2026-10-31
+## [2.0.1] - 2026-11-01
+
+### Added & Hardened / SRE Audit Plan Completion (Sprints 1–6 Certified)
+- **Sprint 6: CLI Routing, Packaging & Distribution Cutover (`BP-ARGON-SPRINT-06-001`)**:
+  - Eliminated Shellcheck SC2155 return-code masking in `bin/syspilot` by decoupling variable declaration from subshell command substitution for `SCRIPT_SOURCE`, `SCRIPT_DIR`, and `PROJECT_ROOT`.
+  - Added standard `-v, --version` flag handling returning `syspilot 2.0.1` and updated `-h, --help` usage output.
+  - Hardened missing engine resilience in `bin/syspilot`: `validate_status()` verifies `have_engine()` dynamically and emits clear, actionable installation guidance if `summary.json` and `sys-health` are missing.
+  - Enforced refusal of circular embedded engine copies (`*/sysPilot/bin/sys-health.sh`).
+  - Added developer debug fallbacks in `bin/syspilot` probing `target/debug/syspilot-gui` and `target/debug/syspilot-tray`.
+  - Certified XDG autostart deduplication in `autostart/syspilot.desktop` (`X-systemd-skip=true`), preventing race conditions with `systemd/syspilot-tray.service`.
+  - Added desktop indexing keywords (`Keywords=system;health;sre;arch;monitor;copilot;cockpit;`) to `packaging/syspilot.desktop`.
+  - Hardened `dev-tools/build-and-install.sh` with a comprehensive `trap EXIT` cleaning all temporary files (`tmp`, `tmp_gui`, `tmp_cli`) and installing the complete triad (tray, GUI, CLI router).
+  - Implemented hermetic, headless test suite `dev-tools/test-cli.sh` with 11 isolated test cases (11/11 PASS) verifying CLI flags, exit codes (0, 1, 2, 3), stale cache warnings, engine forwarding, and packaging metadata.
+- **Sprint 5: Slint GUI Runtime & Threading Hardening (`BP-ARGON-SPRINT-05-001`)**:
+  - Enforced strict thread-affinity across `crates/syspilot-gui/src/main.rs`: completely eliminated illegal worker-thread `.upgrade()` invocations, standardizing all background cross-thread notifications on canonical `Weak::upgrade_in_event_loop()`.
+  - Eliminated Tokio runtime unhandled panic vector (`.unwrap()` on `tokio::runtime::Builder`) in `on_refresh_clicked`, adding resilient error logging and graceful failure recovery.
+  - Implemented RAII Drop guard (`CopilotFlightGuard`) guaranteeing `COPILOT_IN_FLIGHT` reset and emergency UI status recovery upon worker thread unwind or inference panic.
+  - Hardened Copilot query triggers with whitespace/empty string pre-validation, preventing lockups and wasted LLM token queries.
+  - Implemented lock-free monotonic CAS debounce guard (`can_spawn_task()`, 750ms window) preventing duplicate terminal windows upon rapid double-clicking of action buttons.
+  - Introduced atomic `REFRESH_IN_FLIGHT` flag with `RefreshFlightGuard` deduplicating telemetry refresh triggers.
+  - Enforced Slint UI layout invariants (`vertical-stretch: 0`) in `action_button.slint` and the Dashboard bottom action bar in `appwindow.slint`.
+  - Expanded `crates/syspilot-gui/tests/watcher_smoke.rs` to 4 test suites (covering 8-thread concurrent hammer debounce, RAII unwind recovery, snapshot mapping, and mtime watcher lifecycle). GUI tests increased from 1 to 7 (workspace total: 57/57 PASS).
 
 ### Fixed / Live Telemetry Watcher Thread Lifetime & Event Loop Dispatch (`BP-ARGON-20261031-SYS-010-WATCHER`)
 - **Slint Worker Thread Affinity & Auto-Refresh (`crates/syspilot-gui/src/main.rs`)**:

@@ -231,11 +231,12 @@ sysPilot/
 │   └── quirks/                  # Generic hardware & architecture quirks
 ├── dev-tools/
 │   ├── build-and-install.sh     # One-step test, compile & install helper
+│   ├── test-cli.sh              # SRE hermetic CLI & packaging test suite
 │   └── verify-rust.sh           # SRE hermetic verification script
 ├── autostart/
 │   └── syspilot.desktop         # XDG autostart entry for background tray sentinel
 ├── packaging/
-│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.0.0)
+│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.0.1)
 │   └── syspilot.desktop         # Application menu desktop launcher (Exec=syspilot --gui)
 └── systemd/
     └── syspilot-tray.service    # User systemd service for 24/7 Rust Sentinel

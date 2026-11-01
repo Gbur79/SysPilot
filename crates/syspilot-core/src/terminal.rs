@@ -11,6 +11,12 @@ const WRAPPER: &str =
     r#""$@"; rc=$?; printf '\n'; read -r -p 'Press Enter to close...' _; exit "$rc""#;
 static ACTIVE_TERMINALS: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Debug)]
+pub enum TrackedProcess {
+    Terminal(Child),
+    Detached(Child),
+}
+
 pub fn is_executable(path: &Path) -> bool {
     path.metadata()
         .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
@@ -57,7 +63,7 @@ pub fn resolve_syspilot() -> Option<PathBuf> {
 }
 
 #[allow(deprecated)]
-fn reserve_slot() -> bool {
+pub(crate) fn reserve_slot() -> bool {
     ACTIVE_TERMINALS
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
             (n < MAX_TERMINALS).then_some(n + 1)
@@ -65,33 +71,55 @@ fn reserve_slot() -> bool {
         .is_ok()
 }
 
-fn release_slot() {
-    ACTIVE_TERMINALS.fetch_sub(1, Ordering::AcqRel);
+#[allow(deprecated)]
+pub(crate) fn release_slot() {
+    let _ = ACTIVE_TERMINALS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+        Some(n.saturating_sub(1))
+    });
 }
 
-fn reaper() -> &'static mpsc::SyncSender<Child> {
-    static REAPER: OnceLock<mpsc::SyncSender<Child>> = OnceLock::new();
+#[cfg(test)]
+pub fn active_terminals_count() -> usize {
+    ACTIVE_TERMINALS.load(Ordering::Acquire)
+}
+
+pub(crate) fn reaper() -> &'static mpsc::SyncSender<TrackedProcess> {
+    static REAPER: OnceLock<mpsc::SyncSender<TrackedProcess>> = OnceLock::new();
     REAPER.get_or_init(|| {
-        let (tx, rx) = mpsc::sync_channel::<Child>(MAX_TERMINALS);
+        let (tx, rx) = mpsc::sync_channel::<TrackedProcess>(64);
         let _ = thread::Builder::new()
             .name("syspilot-child-reaper".into())
             .spawn(move || {
-                let mut children = Vec::new();
+                let mut children: Vec<TrackedProcess> = Vec::new();
                 loop {
-                    match rx.recv_timeout(Duration::from_millis(250)) {
-                        Ok(child) => children.push(child),
-                        Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(mpsc::RecvTimeoutError::Disconnected) if children.is_empty() => break,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => {}
+                    if children.is_empty() {
+                        match rx.recv() {
+                            Ok(proc) => children.push(proc),
+                            Err(_) => break,
+                        }
+                    } else {
+                        match rx.recv_timeout(Duration::from_millis(100)) {
+                            Ok(proc) => children.push(proc),
+                            Err(mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(mpsc::RecvTimeoutError::Disconnected) => {}
+                        }
                     }
-                    while let Ok(child) = rx.try_recv() {
-                        children.push(child);
+                    while let Ok(proc) = rx.try_recv() {
+                        children.push(proc);
                     }
-                    children.retain_mut(|child| match child.try_wait() {
-                        Ok(None) => true,
-                        _ => {
-                            release_slot();
-                            false
+                    children.retain_mut(|proc| {
+                        let is_terminal = matches!(proc, TrackedProcess::Terminal(_));
+                        let child = match proc {
+                            TrackedProcess::Terminal(c) | TrackedProcess::Detached(c) => c,
+                        };
+                        match child.try_wait() {
+                            Ok(None) => true,
+                            _ => {
+                                if is_terminal {
+                                    release_slot();
+                                }
+                                false
+                            }
                         }
                     });
                 }
@@ -135,6 +163,9 @@ pub fn build_terminal(
         "foot" => {
             command.arg(format!("--title={title}"));
         }
+        "wezterm" => {
+            command.args(["start", "--"]);
+        }
         "xterm" => {
             command.args(["-T", title, "-e"]);
         }
@@ -168,7 +199,7 @@ pub fn spawn_detached_gui(executable: &Path) -> Result<(), String> {
         .spawn()
     {
         Ok(child) => {
-            let _ = reaper().try_send(child);
+            let _ = reaper().try_send(TrackedProcess::Detached(child));
             Ok(())
         }
         Err(err) => Err(format!("Failed to launch SysPilot GUI: {err}")),
@@ -198,6 +229,7 @@ pub fn spawn_terminal_command(executable: &Path, args: &[&str], title: &str) -> 
             "alacritty",
             "gnome-terminal",
             "foot",
+            "wezterm",
             "xterm",
         ]
     } else {
@@ -208,6 +240,7 @@ pub fn spawn_terminal_command(executable: &Path, args: &[&str], title: &str) -> 
             "alacritty",
             "gnome-terminal",
             "foot",
+            "wezterm",
             "xterm",
         ]
     };
@@ -217,9 +250,12 @@ pub fn spawn_terminal_command(executable: &Path, args: &[&str], title: &str) -> 
             continue;
         };
         if let Ok(child) = build_terminal(name, &terminal, executable, args, title).spawn() {
-            if let Err(error) = reaper().try_send(child) {
+            if let Err(error) = reaper().try_send(TrackedProcess::Terminal(child)) {
                 let mut child = match error {
-                    mpsc::TrySendError::Full(c) | mpsc::TrySendError::Disconnected(c) => c,
+                    mpsc::TrySendError::Full(TrackedProcess::Terminal(c))
+                    | mpsc::TrySendError::Disconnected(TrackedProcess::Terminal(c))
+                    | mpsc::TrySendError::Full(TrackedProcess::Detached(c))
+                    | mpsc::TrySendError::Disconnected(TrackedProcess::Detached(c)) => c,
                 };
                 let _ = child.kill();
                 let _ = child.wait();
@@ -238,14 +274,10 @@ pub fn spawn_syspilot_task(args: &[&str], title: &str) -> Result<(), String> {
     if let Some(syspilot_bin) = resolve_syspilot() {
         spawn_terminal_command(&syspilot_bin, args, title)
     } else {
-        // Fallback: spawn bash invoking syspilot via PATH
         let bash = PathBuf::from("/usr/bin/bash");
-        let mut full_cmd = "syspilot".to_string();
-        for arg in args {
-            full_cmd.push(' ');
-            full_cmd.push_str(arg);
-        }
-        spawn_terminal_command(&bash, &["-c", &full_cmd], title)
+        let mut bash_args = vec!["-c", r#"exec syspilot "$@""#, "--"];
+        bash_args.extend_from_slice(args);
+        spawn_terminal_command(&bash, &bash_args, title)
     }
 }
 

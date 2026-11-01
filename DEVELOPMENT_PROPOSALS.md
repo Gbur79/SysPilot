@@ -473,6 +473,22 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-019: [IMPLEMENTED] Sprint 1: Process Concurrency, Reaper Battery Optimization & Underflow Immunity
+- **Status:** `[IMPLEMENTED]` *(SRE Certified — Audit `BP-ARGON-SPRINT-01-TERMINAL-001`, Auditor Argon Pro)*
+- **Data zgłoszenia:** 2026-11-01
+- **Źródło:** SysPilot SRE Audit Sprint 1 (`crates/syspilot-core/src/terminal.rs`)
+- **Audyt SRE:**
+  - `BP-ARGON-SPRINT-01-TERMINAL-001` (Auditor Argon Pro): Wykrycie i naprawa krytycznego błędu niedomiaru slotów (`ACTIVE_TERMINALS` underflow do `usize::MAX`) wywoływanego przez procesy `spawn_detached_gui`, eliminacja niepotrzebnych 345 600 wybudzeń CPU na dobę przez zastąpienie 250ms pollingu blokującym `rx.recv()`, zabezpieczenie `spawn_syspilot_task` przed shell word-splitting (`exec syspilot "$@"`), dodanie obsługi `wezterm` oraz 2 testów jednostkowych weryfikujących odporność slotów.
+- **Docelowe Komponenty:**
+  - `crates/syspilot-core/src/terminal.rs` (`TrackedProcess`, saturating `release_slot()`, zero-idle `reaper()`, safe bash fallback, wezterm support)
+  - `crates/syspilot-core/src/tests.rs` (`test_terminal_slot_bounds_and_underflow_immunity`, `test_detached_gui_reaper_isolation`)
+  - `CHANGELOG.md`
+- **Kontekst i Uzasadnienie:**
+  W trakcie audytu Sprint 1 zidentyfikowano ukrytą bombę z opóźnionym zapłonem: uruchomienie okna GUI z poziomu zasobnika i jego późniejsze zamknięcie wywoływało dekrementację licznika terminali mimo braku wcześniejszej rezerwacji slotu. W rezultacie licznik przekręcał się do `18446744073709551615`, trwale blokując otwieranie jakichkolwiek okien terminala z komunikatami SRE. Dodatkowo pętla żniwiarza niepotrzebnie wybudzała procesor co 250 ms, drenując baterię.
+- **Weryfikacja:** `dev-tools/verify-rust.sh -q` ➔ 35/35 unit tests PASS (core: 22, tray: 12, gui: 1), Clippy clean, fmt clean.
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

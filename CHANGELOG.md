@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Headless GUI Integration Test & Per-Crate Quality Gate (`dev-tools/verify-rust.sh`, `crates/syspilot-gui/tests/watcher_smoke.rs`)**:
   - Implemented headless integration fixture `test_watcher_mtime_lifecycle_and_shutdown` in `syspilot-gui`, verifying mtime watcher polling, state transitions, and atomic cooperative shutdown in <200ms without Wayland/X11 display dependencies.
   - Upgraded `verify-rust.sh` to enforce per-crate non-zero test accounting (`core: 20 | tray: 12 | gui: 1`), permanently preventing zero-test crates from silently passing CI.
+- **Sprint 1: Process Concurrency, Reaper Battery Optimization & Underflow Immunity (`crates/syspilot-core/src/terminal.rs`, `BP-ARGON-SPRINT-01-TERMINAL-001`)**:
+  - Re-architected `syspilot-child-reaper` with `TrackedProcess` enum separating terminal sessions from detached GUI processes, preventing fatal slot underflow to `usize::MAX`.
+  - Hardened `release_slot()` with saturating subtraction (`n.saturating_sub(1)`).
+  - Eliminated 345,600 daily idle CPU wakeups by replacing 250ms polling with blocking `rx.recv()` when child list is empty, allowing deep CPU C-states.
+  - Hardened `spawn_syspilot_task` with POSIX-safe argument array passing (`exec syspilot "$@"`), eliminating shell word-splitting.
+  - Added explicit WezTerm terminal emulator support (`wezterm start --`).
+  - Added hermetic unit tests `test_terminal_slot_bounds_and_underflow_immunity` and `test_detached_gui_reaper_isolation` (bringing test count to 35/35).
 
 ### Fixed / SysPilot Tray Deduplication, Background Triage & Kernel Ingestion (`BP-ARGON-20261031-INCIDENT-001`)
 - **Single-Instance Advisory Locking (`crates/syspilot-tray`, `crates/syspilot-gui`, `crates/syspilot-core`)**:

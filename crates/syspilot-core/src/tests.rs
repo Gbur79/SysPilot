@@ -554,3 +554,106 @@ fn test_dynamic_kernel_and_os_fallback() {
 
     let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
 }
+
+static TERMINAL_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn test_terminal_slot_bounds_and_underflow_immunity() {
+    let _guard = TERMINAL_TEST_MUTEX.lock().unwrap();
+    use crate::terminal::{active_terminals_count, release_slot, reserve_slot};
+
+    // Drain any leftover active terminal slots from earlier runs
+    while active_terminals_count() > 0 {
+        release_slot();
+    }
+
+    // Verify underflow immunity: saturating subtraction must stay at 0
+    assert_eq!(active_terminals_count(), 0);
+    release_slot();
+    release_slot();
+    assert_eq!(active_terminals_count(), 0);
+
+    // Reserve slots up to MAX_TERMINALS (8)
+    for _ in 0..8 {
+        assert!(reserve_slot(), "Reservation within limit must succeed");
+    }
+    assert_eq!(active_terminals_count(), 8);
+
+    // 9th reservation must be rejected
+    assert!(
+        !reserve_slot(),
+        "Reservation beyond MAX_TERMINALS must fail"
+    );
+    assert_eq!(active_terminals_count(), 8);
+
+    // Release all 8 slots
+    for _ in 0..8 {
+        release_slot();
+    }
+    assert_eq!(active_terminals_count(), 0);
+
+    // Underflow immunity check again
+    release_slot();
+    assert_eq!(active_terminals_count(), 0);
+}
+
+#[test]
+fn test_detached_gui_reaper_isolation() {
+    let _guard = TERMINAL_TEST_MUTEX.lock().unwrap();
+    use crate::terminal::{
+        TrackedProcess, active_terminals_count, reaper, release_slot, reserve_slot,
+    };
+    use std::process::Command;
+    use std::thread;
+    use std::time::Duration;
+
+    // Reset slot counter
+    while active_terminals_count() > 0 {
+        release_slot();
+    }
+
+    // Reserve 1 slot to verify it is NOT decremented by detached processes
+    assert!(reserve_slot());
+    assert_eq!(active_terminals_count(), 1);
+
+    // Spawn a detached process (using /usr/bin/true)
+    let detached_child = Command::new("/usr/bin/true")
+        .spawn()
+        .expect("Failed to spawn detached process");
+
+    reaper()
+        .try_send(TrackedProcess::Detached(detached_child))
+        .expect("Failed to send detached child to reaper");
+
+    // Allow reaper to reap the exited child
+    thread::sleep(Duration::from_millis(300));
+
+    // Active terminal slots must remain 1
+    assert_eq!(
+        active_terminals_count(),
+        1,
+        "Detached GUI process must not release terminal slots"
+    );
+
+    // Now spawn a terminal process (using /usr/bin/true)
+    let terminal_child = Command::new("/usr/bin/true")
+        .spawn()
+        .expect("Failed to spawn terminal process");
+
+    reaper()
+        .try_send(TrackedProcess::Terminal(terminal_child))
+        .expect("Failed to send terminal child to reaper");
+
+    // Poll until reaper reaps the child and releases the slot (up to 2 seconds)
+    let start = std::time::Instant::now();
+    while active_terminals_count() != 0 && start.elapsed() < Duration::from_secs(2) {
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    // Active terminal slots must now be decremented to 0
+    assert_eq!(
+        active_terminals_count(),
+        0,
+        "Terminal process exit must release terminal slot"
+    );
+}

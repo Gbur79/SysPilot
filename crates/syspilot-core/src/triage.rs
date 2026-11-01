@@ -390,6 +390,26 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
         files: pacnew_list,
     };
 
+    let app_update = if let Some(upstream_rel) = crate::release::check_upstream_release(false).await
+    {
+        let is_newer = crate::release::is_newer_version(
+            crate::release::CURRENT_VERSION,
+            &upstream_rel.tag_name,
+        );
+        Some(StatusAppUpdate {
+            update_available: is_newer,
+            current_version: crate::release::CURRENT_VERSION.to_string(),
+            latest_version: upstream_rel
+                .tag_name
+                .trim_start_matches(['v', 'V'])
+                .to_string(),
+            release_url: upstream_rel.html_url,
+            published_at: upstream_rel.published_at,
+        })
+    } else {
+        None
+    };
+
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs().to_string())
@@ -412,6 +432,7 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
         security: Some(security),
         firmware: Some(firmware),
         firewall: Some(firewall),
+        app_update,
     };
 
     let _ = write_status_json_atomic(&status_path, &payload);

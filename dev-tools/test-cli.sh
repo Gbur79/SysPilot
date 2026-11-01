@@ -27,7 +27,7 @@ mkdir -p "$HOME" "$XDG_STATE_HOME/system-health" "$XDG_CONFIG_HOME/syspilot" "$X
 unset SYSPILOT_SYS_HEALTH SYSPILOT_MAX_STATUS_AGE SYSPILOT_TERMINAL SYSPILOT_COPILOT_CMD SYSPILOT_GOOSE_RECIPE
 
 tests_passed=0
-total_tests=11
+total_tests=13
 current_test=""
 
 fail() {
@@ -68,9 +68,9 @@ pass_step
 # -----------------------------------------------------------------------------
 current_test="version_flags"
 out_v=$("$CLI" -v 2>&1) || fail "-v returned non-zero exit code"
-[[ "$out_v" == "syspilot 2.0.1" ]] || fail "-v returned '$out_v', expected 'syspilot 2.0.1'"
+[[ "$out_v" == "syspilot 2.0.2" ]] || fail "-v returned '$out_v', expected 'syspilot 2.0.2'"
 out_ver=$("$CLI" --version 2>&1) || fail "--version returned non-zero exit code"
-[[ "$out_ver" == "syspilot 2.0.1" ]] || fail "--version returned '$out_ver', expected 'syspilot 2.0.1'"
+[[ "$out_ver" == "syspilot 2.0.2" ]] || fail "--version returned '$out_ver', expected 'syspilot 2.0.2'"
 pass_step
 
 # -----------------------------------------------------------------------------
@@ -264,7 +264,7 @@ grep -q "Slice=app.slice" "$service_file" || fail "systemd service missing Slice
 pkgbuild="$project_root/packaging/PKGBUILD"
 [[ -f "$pkgbuild" ]] || fail "packaging/PKGBUILD not found"
 bash -n "$pkgbuild" 2>&1 || fail "bash -n packaging/PKGBUILD failed"
-grep -q "pkgver=2.0.1" "$pkgbuild" || fail "PKGBUILD pkgver mismatch"
+grep -q "pkgver=2.0.2" "$pkgbuild" || fail "PKGBUILD pkgver mismatch"
 
 # 11e. Shellcheck validation if available
 shellcheck_status="CLEAN"
@@ -275,6 +275,22 @@ if command -v shellcheck >/dev/null 2>&1; then
 else
     shellcheck_status="SKIP(not_installed)"
 fi
+pass_step
+
+# -----------------------------------------------------------------------------
+# Test 12: Upstream update check flag (--check-update) in help
+# -----------------------------------------------------------------------------
+current_test="check_update_flag_help"
+[[ "$out_h" =~ "--check-update" ]] || fail "-h missing --check-update flag"
+[[ "$out_h" =~ "Check upstream GitHub release for updates" ]] || fail "-h missing --check-update description"
+pass_step
+
+# -----------------------------------------------------------------------------
+# Test 13: Self-update flag (--self-update) in help
+# -----------------------------------------------------------------------------
+current_test="self_update_flag_help"
+[[ "$out_h" =~ "--self-update" ]] || fail "-h missing --self-update flag"
+[[ "$out_h" =~ "Perform safe self-update and atomic build" ]] || fail "-h missing --self-update description"
 pass_step
 
 # -----------------------------------------------------------------------------

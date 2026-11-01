@@ -183,9 +183,34 @@ fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnaps
     ui.set_orphans_status("PASS ✔".into());
     ui.set_orphans_color(slint::Color::from_rgb_u8(34, 197, 94));
     ui.set_orphans_details("System packages audited".into());
+
+    if snapshot.app_update_available {
+        ui.set_has_app_update(true);
+        ui.set_app_update_badge(format!("v{} AVAILABLE 🚀", snapshot.app_latest_version).into());
+        ui.set_self_update_title("8) 🚀 SysPilot Suite Self-Update (Update Available)".into());
+        ui.set_self_update_desc(
+            format!(
+                "Upstream v{} is available (current: v{}). Fast-forward git repository and rebuild atomically.",
+                snapshot.app_latest_version, snapshot.app_current_version
+            )
+            .into(),
+        );
+        ui.set_self_update_btn_text(
+            format!("Update to v{} 🚀", snapshot.app_latest_version).into(),
+        );
+    } else {
+        ui.set_has_app_update(false);
+        ui.set_app_update_badge("v2.0.2 LATEST ✔".into());
+        ui.set_self_update_title("8) 🚀 SysPilot Suite Self-Update & GitHub Sync".into());
+        ui.set_self_update_desc(
+            "Synchronizes the SysPilot suite with the latest upstream GitHub release and performs atomic rebuild.".into(),
+        );
+        ui.set_self_update_btn_text("Check & Update Suite".into());
+    }
 }
 
 fn update_ui_from_error(ui: &AppWindow, err: &str) {
+    ui.set_has_app_update(false);
     ui.set_has_error(true);
     ui.set_error_message(err.into());
     ui.set_overall_status("DATA_UNAVAILABLE".into());
@@ -523,6 +548,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         trigger_shell_task(
             "echo '⚡ Pre-caching pending package updates into pacman cache...'; if type -P checkupdates &>/dev/null; then checkupdates -d || sudo pacman -Sw --noconfirm; else sudo pacman -Sw --noconfirm; fi",
             "SysPilot Package Pre-Caching",
+        );
+    });
+
+    let ui_weak_update = ui.as_weak();
+    ui.on_run_self_update_clicked(move || {
+        trigger_task_with_post_triage(
+            ui_weak_update.clone(),
+            &["--self-update"],
+            "SysPilot Suite Self-Update",
         );
     });
 

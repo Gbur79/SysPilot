@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.2] - 2026-11-01
+
+### Added & Hardened / GitHub Release Sync & Self-Update Engine (`BP-ARGON-FEAT-SELFUPDATE-001`)
+- **Zero-Waste Release Engine (`crates/syspilot-core/src/release.rs`)**:
+  - Implemented upstream GitHub release tracking for `Gbur79/SysPilot` with 24-hour TTL caching (`github_release.json`) and sub-4s network timeout using curl.
+  - Added robust multi-component semantic version comparison (`parse_version_components`, `is_newer_version`) supporting 3-part (`2.0.2`) and 4-part release versions.
+  - Added installation origin auto-detection (`InstallOrigin`: `Pacman`, `GitClone`, `Standalone`) preventing ALPM database conflicts.
+- **Telemetry & Models Integration (`crates/syspilot-core/src/models.rs`, `crates/syspilot-core/src/triage.rs`)**:
+  - Added `StatusAppUpdate` to `StatusJson` and extended `SystemSnapshot` with `app_update_available`, `app_current_version`, `app_latest_version`, and `app_release_url`.
+  - Integrated upstream release checking into `run_triage()` background health evaluation.
+- **GUI Cockpit Self-Update Card & HUD Banner (`crates/syspilot-gui`)**:
+  - Added Top HUD update banner displaying purple notification badge (`v2.0.2 AVAILABLE 🚀`) when upstream release is detected.
+  - Added Maintenance Card #8 (`8) 🚀 SysPilot Suite Self-Update & GitHub Sync`) in the Maintenance tab allowing 1-click self-update with post-triage reload.
+- **CLI Router Self-Update & ALPM Dynamic Guard (`bin/syspilot`)**:
+  - Added `--check-update` and `--self-update` CLI commands with ALPM dynamic detection (`pacman -Qo`), atomic git fast-forward merges, and safe local binary recompilation via `build-and-install.sh`.
+  - Bumped suite version to `2.0.2` across `Cargo.toml`, `PKGBUILD`, `bin/syspilot`, and hermetic CLI test suites (`13/13 PASS`).
+
 ## [2.0.1] - 2026-11-01
 
 ### Added & Hardened / SRE Audit Plan Completion (Sprints 1–6 Certified)

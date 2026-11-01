@@ -137,6 +137,8 @@ pub struct StatusJson {
     pub firmware: Option<StatusFirmware>,
     #[serde(default)]
     pub firewall: Option<StatusFirewall>,
+    #[serde(default)]
+    pub app_update: Option<StatusAppUpdate>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -207,6 +209,20 @@ pub struct StatusFirewall {
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StatusAppUpdate {
+    #[serde(default)]
+    pub update_available: bool,
+    #[serde(default)]
+    pub current_version: String,
+    #[serde(default)]
+    pub latest_version: String,
+    #[serde(default)]
+    pub release_url: String,
+    #[serde(default)]
+    pub published_at: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SysHealthMirrors {
     #[serde(default)]
     pub arch_primary_alive: Option<bool>,
@@ -261,6 +277,10 @@ pub struct SystemSnapshot {
     pub security_high_risk: u32,
     pub firmware_updates: u32,
     pub firewall_active: bool,
+    pub app_update_available: bool,
+    pub app_current_version: String,
+    pub app_latest_version: String,
+    pub app_release_url: String,
 }
 
 impl Default for SystemSnapshot {
@@ -284,6 +304,10 @@ impl Default for SystemSnapshot {
             security_high_risk: 0,
             firmware_updates: 0,
             firewall_active: false,
+            app_update_available: false,
+            app_current_version: "2.0.2".into(),
+            app_latest_version: String::new(),
+            app_release_url: String::new(),
         }
     }
 }
@@ -554,6 +578,7 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
     let security = parsed.security.unwrap_or_default();
     let firmware = parsed.firmware.unwrap_or_default();
     let firewall = parsed.firewall.unwrap_or_default();
+    let app_update = parsed.app_update.unwrap_or_default();
 
     Ok(SystemSnapshot {
         status,
@@ -574,5 +599,13 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
         security_high_risk: security.high_risk_count,
         firmware_updates: firmware.updates_count,
         firewall_active: firewall.active,
+        app_update_available: app_update.update_available,
+        app_current_version: if app_update.current_version.is_empty() {
+            "2.0.2".into()
+        } else {
+            app_update.current_version
+        },
+        app_latest_version: app_update.latest_version,
+        app_release_url: app_update.release_url,
     })
 }

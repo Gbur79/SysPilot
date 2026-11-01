@@ -284,6 +284,7 @@ fn test_write_and_read_status_json_atomic() {
         security: None,
         firmware: None,
         firewall: None,
+        app_update: None,
     };
 
     write_status_json_atomic(&tmp_file, &payload).unwrap();
@@ -545,6 +546,7 @@ fn test_dynamic_kernel_and_os_fallback() {
         security: None,
         firmware: None,
         firewall: None,
+        app_update: None,
     };
     write_status_json_atomic(&tmp_file, &payload).unwrap();
 
@@ -1020,6 +1022,7 @@ fn test_concurrent_atomic_status_writes() {
                     security: None,
                     firmware: None,
                     firewall: None,
+                    app_update: None,
                 };
                 write_status_json_atomic(&p, &payload)
                     .expect("Concurrent atomic write must succeed");
@@ -1192,4 +1195,101 @@ fn test_services_failed_units_differentiation() {
     let deserialized: FailedServicesStatus =
         serde_json::from_str(r#"{"system":[], "user":[]}"#).unwrap();
     assert!(deserialized.user_manager_available); // Backward compatible default
+}
+
+#[test]
+fn test_semver_multi_component_comparison() {
+    use crate::release::{is_newer_version, parse_version_components};
+
+    assert_eq!(parse_version_components("2.0.2"), vec![2, 0, 2]);
+    assert_eq!(parse_version_components("v2.0.1.1"), vec![2, 0, 1, 1]);
+    assert_eq!(parse_version_components("V3.10.0-rc1"), vec![3, 10, 0]);
+
+    assert!(is_newer_version("2.0.1", "2.0.2"));
+    assert!(!is_newer_version("2.0.2", "2.0.2"));
+    assert!(!is_newer_version("2.0.3", "2.0.2"));
+    assert!(is_newer_version("2.0.1", "2.0.1.1"));
+    assert!(!is_newer_version("2.0.1.1", "2.0.1"));
+    assert!(is_newer_version("v2.0.1", "v2.0.2"));
+    assert!(!is_newer_version("v2.0.2", "2.0.2"));
+}
+
+#[test]
+fn test_parse_github_release_json_sample() {
+    use crate::release::GitHubRelease;
+
+    let sample = r#"{
+        "tag_name": "v2.0.2",
+        "name": "SysPilot v2.0.2 Release",
+        "html_url": "https://github.com/Gbur79/SysPilot/releases/tag/v2.0.2",
+        "published_at": "2026-11-01T12:00:00Z",
+        "body": "Zero-waste GitHub sync engine"
+    }"#;
+
+    let release: GitHubRelease = serde_json::from_str(sample).unwrap();
+    assert_eq!(release.tag_name, "v2.0.2");
+    assert_eq!(
+        release.html_url,
+        "https://github.com/Gbur79/SysPilot/releases/tag/v2.0.2"
+    );
+    assert_eq!(release.published_at, "2026-11-01T12:00:00Z");
+    assert_eq!(release.name.as_deref(), Some("SysPilot v2.0.2 Release"));
+}
+
+#[test]
+fn test_release_cache_ttl_logic() {
+    use crate::release::{
+        CachedReleaseInfo, GitHubRelease, RELEASE_CACHE_TTL_SECS, read_cached_release,
+        write_cached_release,
+    };
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp_path = std::env::temp_dir().join(format!("syspilot-cache-test-{nanos}/release.json"));
+
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // 1. Fresh cache: timestamp = now_secs - 100s (< 24h)
+    let fresh_info = CachedReleaseInfo {
+        timestamp: now_secs - 100,
+        release: GitHubRelease {
+            tag_name: "v2.0.2".into(),
+            html_url: "https://example.com/rel".into(),
+            published_at: "2026-11-01T00:00:00Z".into(),
+            name: Some("v2.0.2".into()),
+            body: None,
+        },
+    };
+    write_cached_release(&tmp_path, &fresh_info).unwrap();
+
+    let read_back = read_cached_release(&tmp_path).expect("Failed to read cached release");
+    assert_eq!(read_back.release.tag_name, "v2.0.2");
+    assert!(now_secs.saturating_sub(read_back.timestamp) < RELEASE_CACHE_TTL_SECS);
+
+    // 2. Expired cache: timestamp = now_secs - (RELEASE_CACHE_TTL_SECS + 500)
+    let expired_info = CachedReleaseInfo {
+        timestamp: now_secs.saturating_sub(RELEASE_CACHE_TTL_SECS + 500),
+        release: GitHubRelease {
+            tag_name: "v2.0.1".into(),
+            html_url: "https://example.com/old".into(),
+            published_at: "2026-10-01T00:00:00Z".into(),
+            name: Some("v2.0.1".into()),
+            body: None,
+        },
+    };
+    write_cached_release(&tmp_path, &expired_info).unwrap();
+
+    let read_expired = read_cached_release(&tmp_path).expect("Failed to read expired release");
+    assert_eq!(read_expired.release.tag_name, "v2.0.1");
+    assert!(now_secs.saturating_sub(read_expired.timestamp) >= RELEASE_CACHE_TTL_SECS);
+
+    // Cleanup
+    if let Some(parent) = tmp_path.parent() {
+        let _ = std::fs::remove_dir_all(parent);
+    }
 }

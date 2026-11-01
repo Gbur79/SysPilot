@@ -15,7 +15,7 @@ readonly SCRIPT_DIR
 PROJECT_ROOT=$(dirname -- "$SCRIPT_DIR")
 readonly PROJECT_ROOT
 readonly DEFAULT_DATA_ROOT="/usr/share/syspilot"
-readonly VERSION="2.0.1"
+readonly VERSION="2.0.2"
 
 # Source optional user config if present
 if [[ -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]]; then
@@ -42,6 +42,8 @@ Usage: syspilot [OPTION]
   --mirrors                   Explicit mirror workflow
   -m, --maintenance           Explicit maintenance
   -d, --deep-clean            Explicit deep-clean workflow
+  --check-update              Check upstream GitHub release for updates
+  --self-update               Perform safe self-update and atomic build
   -g, --gaming                Explicit gaming readiness audit
   --copilot QUESTION          Start terminal-native Goose SRE session
   --copilot-shell             Open an interactive Goose SRE session
@@ -323,6 +325,114 @@ user_unit() {
     exec systemctl --user "$verb" --now syspilot-tray.service
 }
 
+is_newer_version() {
+    local curr=$1 up=$2
+    curr=${curr#v}; curr=${curr#V}
+    up=${up#v}; up=${up#V}
+
+    local -a c_parts u_parts
+    IFS='.-_' read -ra c_parts <<< "$curr"
+    IFS='.-_' read -ra u_parts <<< "$up"
+
+    local max_len=${#c_parts[@]}
+    (( ${#u_parts[@]} > max_len )) && max_len=${#u_parts[@]}
+
+    local i c u
+    for (( i=0; i<max_len; i++ )); do
+        c=${c_parts[i]:-0}
+        u=${u_parts[i]:-0}
+        (( u > c )) && return 0
+        (( u < c )) && return 1
+    done
+    return 1
+}
+
+check_update() {
+    printf 'Checking latest SysPilot release on GitHub...\n'
+    local release_json=""
+    if have curl; then
+        release_json=$(curl -sS --fail --max-time 4 -H "User-Agent: SysPilot-Updater" "https://api.github.com/repos/Gbur79/SysPilot/releases/latest" 2>/dev/null || true)
+    fi
+
+    local upstream_tag=""
+    if [[ -n "$release_json" ]] && have jq; then
+        upstream_tag=$(echo "$release_json" | jq -r '.tag_name // empty' 2>/dev/null || true)
+    fi
+
+    if [[ -z "$upstream_tag" ]]; then
+        local cache_file="$STATE_HOME/syspilot/github_release.json"
+        if [[ -f "$cache_file" ]] && have jq; then
+            upstream_tag=$(jq -r '.release.tag_name // empty' "$cache_file" 2>/dev/null || true)
+        fi
+    fi
+
+    local upstream_clean="${upstream_tag#v}"
+
+    if [[ -n "$upstream_clean" ]]; then
+        printf 'Current version:  %s\n' "$VERSION"
+        printf 'Upstream version: %s\n' "$upstream_tag"
+        if is_newer_version "$VERSION" "$upstream_tag"; then
+            printf '\n🚀 Update available! Run: syspilot --self-update\n'
+        else
+            printf '\n✔ SysPilot is up to date.\n'
+        fi
+    else
+        printf 'Current version: %s (upstream release check unreachable or offline)\n' "$VERSION"
+    fi
+}
+
+self_update() {
+    printf '=== SysPilot Suite Self-Update & GitHub Sync ===\n'
+    # 1. ALPM Dynamic Detection (pacman -Qo)
+    if have pacman && pacman -Qo "$SCRIPT_SOURCE" >/dev/null 2>&1; then
+        local pkg_owner
+        pkg_owner=$(pacman -Qo "$SCRIPT_SOURCE" 2>/dev/null | awk '{print $NF}' || echo "syspilot")
+        printf 'SysPilot is installed via Arch Linux package management (%s).\n' "$pkg_owner"
+        printf 'Direct self-update is disabled to preserve ALPM database consistency.\n'
+        printf 'Please update using your AUR helper or package manager:\n'
+        printf '  yay -S %s  # or: paru -S %s\n' "$pkg_owner" "$pkg_owner"
+        return 0
+    fi
+
+    # 2. Git Clone Detection
+    if [[ -d "$PROJECT_ROOT/.git" ]]; then
+        printf 'SysPilot Git repository detected at: %s\n' "$PROJECT_ROOT"
+        cd "$PROJECT_ROOT"
+
+        printf 'Checking Git working tree cleanliness...\n'
+        if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+            die "Working tree has uncommitted or dirty modifications. Aborting self-update."
+        fi
+
+        printf 'Fetching upstream tags and updates...\n'
+        git fetch --tags origin || die "Failed to fetch from git origin"
+
+        printf 'Fast-forwarding to upstream branch...\n'
+        git pull --ff-only origin main 2>/dev/null || git pull --ff-only origin master 2>/dev/null || git pull --ff-only || die "Fast-forward merge failed. Local branch has diverged."
+
+        printf 'Rebuilding and installing SysPilot suite...\n'
+        if [[ -x "$PROJECT_ROOT/dev-tools/build-and-install.sh" ]]; then
+            "$PROJECT_ROOT/dev-tools/build-and-install.sh"
+        elif [[ -x "$PROJECT_ROOT/build-and-install.sh" ]]; then
+            "$PROJECT_ROOT/build-and-install.sh"
+        else
+            cargo build --release --locked -p syspilot-tray -p syspilot-gui
+            local dest_bin="${XDG_BIN_HOME:-$HOME/.local/bin}"
+            install -d -m 0755 "$dest_bin"
+            install -m 0755 "$PROJECT_ROOT/target/release/syspilot-tray" "$dest_bin/syspilot-tray"
+            install -m 0755 "$PROJECT_ROOT/target/release/syspilot-gui" "$dest_bin/syspilot-gui"
+            install -m 0755 "$PROJECT_ROOT/bin/syspilot" "$dest_bin/syspilot"
+        fi
+
+        printf '\n✔ SysPilot suite successfully updated to latest version!\n'
+        return 0
+    fi
+
+    # 3. Standalone binary fallback
+    printf 'SysPilot standalone binary detected (no git repository found).\n'
+    printf 'Visit https://github.com/Gbur79/SysPilot/releases to download the latest release.\n'
+}
+
 case ${1:-} in
     -h|--help)          usage ;;
     -v|--version)       printf 'syspilot %s\n' "$VERSION"; exit 0 ;;
@@ -336,6 +446,8 @@ case ${1:-} in
     --mirrors)          shift; forward_engine --mirrors "$@" ;;
     -m|--maintenance)   shift; forward_engine --maintenance "$@" ;;
     -d|--deep-clean)    shift; forward_engine --deep-clean "$@" ;;
+    --check-update)     check_update ;;
+    --self-update)      self_update ;;
     -g|--gaming)        shift; forward_engine --gaming "$@" ;;
     --copilot)
         shift

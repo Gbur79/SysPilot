@@ -30,6 +30,7 @@ export component AppWindow inherits Window {
     callback run_cve_clicked();
     callback run_firmware_clicked();
     callback run_precache_clicked();
+    callback run_self_update_clicked();
 
     // Callbacks - Copilot
     callback copilot_terminal_clicked();
@@ -98,6 +99,13 @@ export component AppWindow inherits Window {
     in property <string> copilot_console_text: "SysPilot Copilot ready. Enter your question below or click a 1-click playbook.";
     in property <bool> copilot_running: false;
 
+    // Self-Update & GitHub Sync Properties
+    in property <bool> has_app_update: false;
+    in property <string> app_update_badge: "v2.0.2 AVAILABLE 🚀";
+    in property <string> self_update_title: "8) 🚀 SysPilot Suite Self-Update & GitHub Sync";
+    in property <string> self_update_desc: "Synchronizes the SysPilot suite with the latest upstream GitHub release and performs atomic rebuild.";
+    in property <string> self_update_btn_text: "Check & Update Suite";
+
     VerticalLayout {
         padding: 16px;
         spacing: 12px;
@@ -133,6 +141,29 @@ export component AppWindow inherits Window {
                         StatusBadge {
                             text: root.overall_status_label;
                             badge-color: root.overall_status_color;
+                        }
+
+                        if (root.has_app_update) : Rectangle {
+                            height: 24px;
+                            vertical-stretch: 0;
+                            background: Theme.status-purple.transparentize(85%);
+                            border-color: Theme.status-purple.transparentize(50%);
+                            border-width: 1px;
+                            border-radius: Theme.radius-sm;
+
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                alignment: center;
+
+                                Text {
+                                    text: root.app_update_badge;
+                                    color: Theme.status-purple;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                            }
                         }
                     }
 
@@ -444,6 +475,14 @@ export component AppWindow inherits Window {
                     action-text: "Pre-Cache Packages";
                     action-color: Theme.status-cyan;
                     clicked => { root.run_precache_clicked(); }
+                }
+
+                MaintenanceCard {
+                    title: root.self_update_title;
+                    description: root.self_update_desc;
+                    action-text: root.self_update_btn_text;
+                    action-color: Theme.status-purple;
+                    clicked => { root.run_self_update_clicked(); }
                 }
             }
         }

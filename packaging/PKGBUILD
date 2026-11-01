@@ -56,7 +56,9 @@ package() {
 
     # Install copilot playbooks, quirks, and recipes
     install -dm755 "$pkgdir/usr/share/$pkgname"
-    cp -r copilot "$pkgdir/usr/share/$pkgname/"
+    if [[ -d copilot ]]; then
+        cp -r copilot "$pkgdir/usr/share/$pkgname/"
+    fi
     install -Dm644 packaging/goose/recipes/copilot-admin.yaml "$pkgdir/usr/share/$pkgname/goose/recipes/copilot-admin.yaml"
     install -Dm644 packaging/goose/skills/copilot-admin/SKILL.md "$pkgdir/usr/share/$pkgname/goose/skills/copilot-admin/SKILL.md"
 

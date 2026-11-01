@@ -8,10 +8,14 @@ readonly USER_HOME="${HOME:?HOME is not set}"
 readonly STATE_HOME="${XDG_STATE_HOME:-$USER_HOME/.local/state}"
 readonly STATUS_FILE="$STATE_HOME/system-health/summary.json"
 readonly CONFIG_FILE="${XDG_CONFIG_HOME:-$USER_HOME/.config}/syspilot/config.env"
-readonly SCRIPT_SOURCE="$(readlink -f -- "${BASH_SOURCE[0]}")"
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)"
-readonly PROJECT_ROOT="$(dirname -- "$SCRIPT_DIR")"
+SCRIPT_SOURCE=$(readlink -f -- "${BASH_SOURCE[0]}")
+readonly SCRIPT_SOURCE
+SCRIPT_DIR=$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)
+readonly SCRIPT_DIR
+PROJECT_ROOT=$(dirname -- "$SCRIPT_DIR")
+readonly PROJECT_ROOT
 readonly DEFAULT_DATA_ROOT="/usr/share/syspilot"
+readonly VERSION="2.0.1"
 
 # Source optional user config if present
 if [[ -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]]; then
@@ -45,6 +49,7 @@ Usage: syspilot [OPTION]
   --faf-repair, --faf-setup   Setup or repair Forged Alliance Forever runner
   --enable-autostart          Enable packaged systemd user service
   --disable-autostart         Disable packaged systemd user service
+  -v, --version               Print version information and exit
   -h, --help                  Show help
 
 Environment / Configuration (~/.config/syspilot/config.env):
@@ -54,6 +59,22 @@ Environment / Configuration (~/.config/syspilot/config.env):
   SYSPILOT_GOOSE_RECIPE       Optional Goose recipe path override
   SYSPILOT_MAX_STATUS_AGE     Cache freshness limit in seconds (default 21600)
 EOF
+}
+
+have_engine() {
+    local candidate resolved
+    if [[ -n ${SYSPILOT_SYS_HEALTH:-} ]]; then
+        candidate=$SYSPILOT_SYS_HEALTH
+    else
+        candidate=$(command -v sys-health 2>/dev/null || true)
+    fi
+    [[ -n $candidate && -x $candidate ]] || return 1
+    resolved=$(readlink -f -- "$candidate" 2>/dev/null) || return 1
+    case $resolved in
+        */sysPilot/bin/sys-health.sh|*/syspilot/bin/sys-health.sh)
+            return 1 ;;
+    esac
+    return 0
 }
 
 resolve_engine() {
@@ -74,14 +95,18 @@ resolve_engine() {
 }
 
 validate_status() {
-    [[ -f $STATUS_FILE && ! -L $STATUS_FILE && -r $STATUS_FILE ]] || \
+    if [[ ! -f $STATUS_FILE || -L $STATUS_FILE || ! -r $STATUS_FILE ]]; then
+        if ! have_engine; then
+            die "no readable canonical summary; sys-health is not installed. Install sys-health or configure SYSPILOT_SYS_HEALTH to generate telemetry."
+        fi
         die "no readable canonical summary; run: syspilot --audit"
+    fi
     have jq || die "jq is required"
     jq -e '
       (.schema_version | tostring | startswith("2.")) and
       (.status | type == "string") and
       (.timestamp | type == "string")
-    ' "$STATUS_FILE" >/dev/null || die "invalid or incompatible summary schema"
+    ' "$STATUS_FILE" >/dev/null 2>&1 || die "invalid or incompatible summary schema"
 }
 
 status_age() {
@@ -186,6 +211,7 @@ copilot() {
 
     if [[ -n ${SYSPILOT_COPILOT_CMD:-} ]]; then
         local -a custom_cmd
+        # shellcheck disable=SC2294
         eval "custom_cmd=($SYSPILOT_COPILOT_CMD)"
         local is_agy=0 has_mode=0 arg
         if [[ ${custom_cmd[0]:-} =~ (^|/)agy$ ]] || [[ $SYSPILOT_COPILOT_CMD =~ (^|[[:space:]/])agy([[:space:]]|$) ]]; then
@@ -255,6 +281,9 @@ launch_gui() {
     if [[ -x "$PROJECT_ROOT/target/release/syspilot-gui" ]]; then
         nohup "$PROJECT_ROOT/target/release/syspilot-gui" >/dev/null 2>&1 &
         exit 0
+    elif [[ -x "$PROJECT_ROOT/target/debug/syspilot-gui" ]]; then
+        nohup "$PROJECT_ROOT/target/debug/syspilot-gui" >/dev/null 2>&1 &
+        exit 0
     elif [[ -x "${XDG_BIN_HOME:-$HOME/.local/bin}/syspilot-gui" ]]; then
         nohup "${XDG_BIN_HOME:-$HOME/.local/bin}/syspilot-gui" >/dev/null 2>&1 &
         exit 0
@@ -296,6 +325,7 @@ user_unit() {
 
 case ${1:-} in
     -h|--help)          usage ;;
+    -v|--version)       printf 'syspilot %s\n' "$VERSION"; exit 0 ;;
     --gui)              launch_gui ;;
     -s|--status)        print_status ;;
     -j|--json)          print_json ;;
@@ -322,6 +352,8 @@ case ${1:-} in
     --tray|"")
         if [[ -x "$PROJECT_ROOT/target/release/syspilot-tray" ]]; then
             exec "$PROJECT_ROOT/target/release/syspilot-tray"
+        elif [[ -x "$PROJECT_ROOT/target/debug/syspilot-tray" ]]; then
+            exec "$PROJECT_ROOT/target/debug/syspilot-tray"
         elif [[ -x "${XDG_BIN_HOME:-$HOME/.local/bin}/syspilot-tray" ]]; then
             exec "${XDG_BIN_HOME:-$HOME/.local/bin}/syspilot-tray"
         elif have syspilot-tray; then

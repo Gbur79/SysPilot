@@ -87,7 +87,10 @@ if ! test_out=$(cargo test --locked 2>&1); then
     exit 1
 fi
 
-eval $(echo "$test_out" | awk '
+core_count=0
+tray_count=0
+gui_count=0
+eval "$(echo "$test_out" | awk '
 /Running/ {
     cur=""
     if ($0 ~ /syspilot_core/) cur="core"
@@ -104,7 +107,7 @@ eval $(echo "$test_out" | awk '
 }
 END {
     print "core_count=" core+0 "; tray_count=" tray+0 "; gui_count=" gui+0
-}')
+}')"
 
 total_tests=$((core_count + tray_count + gui_count))
 

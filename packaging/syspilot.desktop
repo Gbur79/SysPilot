@@ -7,4 +7,5 @@ Exec=syspilot --gui
 Icon=utilities-system-monitor
 Terminal=false
 Categories=System;Monitor;Utility;
+Keywords=system;health;sre;arch;monitor;copilot;cockpit;
 StartupNotify=true

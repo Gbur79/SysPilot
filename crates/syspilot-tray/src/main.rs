@@ -264,6 +264,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ = sentinels_timer.tick() => {
                 let current_sentinels = sentinels::collect_sentinels();
                 let pacman_unlocked = sentinels_state.pacman_locked && !current_sentinels.pacman_locked;
+                let pacman_db_changed = current_sentinels.pacman_db_mtime != sentinels_state.pacman_db_mtime;
+                let summary_changed = current_sentinels.summary_mtime != sentinels_state.summary_mtime;
                 if current_sentinels != sentinels_state {
                     sentinels_state = current_sentinels.clone();
                     let update_sentinels = current_sentinels.clone();
@@ -275,7 +277,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         break;
                     }
                 }
-                if pacman_unlocked && !gamemode_active {
+                if (pacman_unlocked || pacman_db_changed || summary_changed) && !gamemode_active {
                     let handle_clone = handle.clone();
                     tokio::spawn(async move {
                         let _ = syspilot_core::run_triage(true, false).await;

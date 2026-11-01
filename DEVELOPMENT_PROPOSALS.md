@@ -489,6 +489,25 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-020: [IMPLEMENTED] Deterministic Level-Triggered ALPM Persistence & Post-Upgrade Triage Callbacks
+- **Status:** `[IMPLEMENTED]` *(SRE Certified — Audit `EOS-SRE-ARCH-P1` / `INC-20261101-0851`, Auditor Argon Pro)*
+- **Data zgłoszenia:** 2026-11-01
+- **Źródło:** Live Workstation Incident (Krótka aktualizacja 4 pakietów trwająca 1s/5s została pominięta przez okresowy 10-sekundowy timer `syspilot-tray`)
+- **Audyt SRE:**
+  - `EOS-SRE-ARCH-P1` (Auditor Argon Pro): Likwidacja luki próbkowania Nyquista w monitorowaniu `db.lck`. Wprowadzenie śledzenia trwałego czasu modyfikacji bazy ALPM (`/var/lib/pacman/local`) oraz `summary.json`, wprowadzenie asynchronicznych callbacków wyjścia procesu w `syspilot-core::terminal` (`TrackedProcess::TerminalWithCallback`), natychmiastowa synchronizacja GUI po zamknięciu terminala upgrade oraz nasłuch zmian `summary.json` w wątku watchera GUI.
+- **Docelowe Komponenty:**
+  - `crates/syspilot-core/src/sentinels.rs` (`pacman_db_mtime`, `summary_mtime`, `get_pacman_db_mtime()`, `get_summary_mtime()`)
+  - `crates/syspilot-core/src/terminal.rs` (`TerminalWithCallback`, `spawn_terminal_command_with_callback`, `spawn_syspilot_task_with_callback`)
+  - `crates/syspilot-tray/src/main.rs` (detekcja `pacman_db_changed` i `summary_changed`)
+  - `crates/syspilot-gui/src/main.rs` (`trigger_task_with_post_triage`, podwójny watcher `status.json` i `summary.json`)
+  - `crates/syspilot-core/src/tests.rs` (`test_terminal_callback_executed_on_exit`)
+  - `CHANGELOG.md`
+- **Kontekst i Uzasadnienie:**
+  Zdarzenie z 08:51 ujawniło problem próbkowania impulsów: transakcja pacmana dla 4 małych pakietów trwała zaledwie 1 sekundę (5 sekund z mirror sync). Przy timerze 10 s plik `db.lck` pojawiał się i znikał pomiędzy tyknięciami zegara, przez co `pacman_unlocked` nigdy nie stawało się prawdą. Równocześnie `sys-health.sh` wygenerował `summary.json` o 08:51:40 ze statusem `ALL_CLEAR`, lecz żaden komponent nie reagował na ten plik. Nowa architektura czteropoziomowa opiera się na stanach trwałych (*level-triggered*), gwarantując natychmiastowe odświeżenie widoku i zniknięcie żółtego trójkąta.
+- **Weryfikacja:** `dev-tools/verify-rust.sh -q` ➔ 36/36 unit tests PASS (core: 23, tray: 12, gui: 1), Clippy clean, fmt clean. Test dymny na stacji roboczej: `status.json` zaktualizowany natychmiast do `FLIGHT_READY` (0 updates).
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

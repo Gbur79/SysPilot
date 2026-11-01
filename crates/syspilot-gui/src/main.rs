@@ -288,6 +288,32 @@ fn trigger_copilot_query(ui_weak: slint::Weak<AppWindow>, query: String) {
     });
 }
 
+fn trigger_task_with_post_triage(ui_weak: slint::Weak<AppWindow>, args: &[&str], title: &str) {
+    let _ = syspilot_core::spawn_syspilot_task_with_callback(args, title, move || {
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(err) => {
+                    eprintln!("SysPilot: failed to build runtime for post-triage: {err}");
+                    return;
+                }
+            };
+            rt.block_on(async {
+                let _ = syspilot_core::run_triage(true, false).await;
+                let status_path = syspilot_core::get_status_path();
+                let snapshot_res = syspilot_core::read_system_snapshot(&status_path);
+                let _ = ui_weak.upgrade_in_event_loop(move |ui_inst| match snapshot_res {
+                    Ok(snapshot) => update_ui_from_snapshot(&ui_inst, &snapshot),
+                    Err(err) => update_ui_from_error(&ui_inst, &err),
+                });
+            });
+        });
+    });
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !acquire_single_instance_lock() {
         eprintln!("SysPilot GUI is already running.");
@@ -333,35 +359,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
-    ui.on_upgrade_clicked(|| {
-        let _ = syspilot_core::spawn_syspilot_task(&["--upgrade"], "SysPilot Guarded Upgrade");
+    let ui_weak_upgrade = ui.as_weak();
+    ui.on_upgrade_clicked(move || {
+        trigger_task_with_post_triage(
+            ui_weak_upgrade.clone(),
+            &["--upgrade"],
+            "SysPilot Guarded Upgrade",
+        );
     });
 
-    ui.on_audit_clicked(|| {
-        let _ = syspilot_core::spawn_syspilot_task(&["--audit"], "SysPilot Diagnostic Audit");
+    let ui_weak_audit = ui.as_weak();
+    ui.on_audit_clicked(move || {
+        trigger_task_with_post_triage(
+            ui_weak_audit.clone(),
+            &["--audit"],
+            "SysPilot Diagnostic Audit",
+        );
     });
 
-    ui.on_prune_clicked(|| {
-        let _ =
-            syspilot_core::spawn_syspilot_task(&["--orphans"], "SysPilot Orphan Package Triage");
+    let ui_weak_prune = ui.as_weak();
+    ui.on_prune_clicked(move || {
+        trigger_task_with_post_triage(
+            ui_weak_prune.clone(),
+            &["--orphans"],
+            "SysPilot Orphan Package Triage",
+        );
     });
 
     // Connect Callbacks - Maintenance Suite
-    ui.on_run_orphans_clicked(|| {
-        let _ =
-            syspilot_core::spawn_syspilot_task(&["--orphans"], "SysPilot Orphan Package Triage");
+    let ui_weak_orphans = ui.as_weak();
+    ui.on_run_orphans_clicked(move || {
+        trigger_task_with_post_triage(
+            ui_weak_orphans.clone(),
+            &["--orphans"],
+            "SysPilot Orphan Package Triage",
+        );
     });
 
-    ui.on_run_mirrors_clicked(|| {
-        let _ = syspilot_core::spawn_syspilot_task(&["--mirrors"], "SysPilot Mirror Ranking");
+    let ui_weak_mirrors = ui.as_weak();
+    ui.on_run_mirrors_clicked(move || {
+        trigger_task_with_post_triage(
+            ui_weak_mirrors.clone(),
+            &["--mirrors"],
+            "SysPilot Mirror Ranking",
+        );
     });
 
-    ui.on_run_maintenance_clicked(|| {
-        let _ = syspilot_core::spawn_syspilot_task(&["--maintenance"], "SysPilot Safe Maintenance");
+    let ui_weak_maint = ui.as_weak();
+    ui.on_run_maintenance_clicked(move || {
+        trigger_task_with_post_triage(
+            ui_weak_maint.clone(),
+            &["--maintenance"],
+            "SysPilot Safe Maintenance",
+        );
     });
 
-    ui.on_run_deep_clean_clicked(|| {
-        let _ = syspilot_core::spawn_syspilot_task(&["--deep-clean"], "SysPilot Deep Clean");
+    let ui_weak_clean = ui.as_weak();
+    ui.on_run_deep_clean_clicked(move || {
+        trigger_task_with_post_triage(
+            ui_weak_clean.clone(),
+            &["--deep-clean"],
+            "SysPilot Deep Clean",
+        );
     });
 
     ui.on_run_cve_clicked(|| {
@@ -410,14 +469,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         trigger_copilot_query(ui_weak_playbook.clone(), query.to_string());
     });
 
-    // Live telemetry file watcher: poll status.json mtime every 1s
+    // Live telemetry file watcher: poll status.json and summary.json mtime every 1s
     let ui_weak_watcher = ui.as_weak();
     let gui_running = Arc::new(AtomicBool::new(true));
     let gui_running_watcher = Arc::clone(&gui_running);
 
     std::thread::spawn(move || {
         let status_path = syspilot_core::get_status_path();
-        let mut last_mtime = std::fs::metadata(&status_path)
+        let summary_path = syspilot_core::state_base().join("system-health/summary.json");
+        let mut last_status_mtime = std::fs::metadata(&status_path)
+            .and_then(|m| m.modified())
+            .ok();
+        let mut last_summary_mtime = std::fs::metadata(&summary_path)
             .and_then(|m| m.modified())
             .ok();
         while gui_running_watcher.load(Ordering::Relaxed) {
@@ -426,11 +489,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
 
-            let current_mtime = std::fs::metadata(&status_path)
+            let current_status_mtime = std::fs::metadata(&status_path)
                 .and_then(|m| m.modified())
                 .ok();
-            if current_mtime != last_mtime {
-                last_mtime = current_mtime;
+            let current_summary_mtime = std::fs::metadata(&summary_path)
+                .and_then(|m| m.modified())
+                .ok();
+            if current_status_mtime != last_status_mtime
+                || current_summary_mtime != last_summary_mtime
+            {
+                last_status_mtime = current_status_mtime;
+                last_summary_mtime = current_summary_mtime;
                 let snapshot_res = syspilot_core::read_system_snapshot(&status_path);
                 let dispatch_res =
                     ui_weak_watcher.upgrade_in_event_loop(move |ui_inst| match snapshot_res {

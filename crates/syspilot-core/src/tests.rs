@@ -657,3 +657,54 @@ fn test_detached_gui_reaper_isolation() {
         "Terminal process exit must release terminal slot"
     );
 }
+
+#[test]
+fn test_terminal_callback_executed_on_exit() {
+    let _guard = TERMINAL_TEST_MUTEX.lock().unwrap();
+    use crate::terminal::{
+        TrackedProcess, active_terminals_count, reaper, release_slot, reserve_slot,
+    };
+    use std::process::Command;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::Duration;
+
+    // Reset slots to clean state
+    while active_terminals_count() > 0 {
+        release_slot();
+    }
+
+    assert!(reserve_slot());
+    assert_eq!(active_terminals_count(), 1);
+
+    let callback_called = Arc::new(AtomicBool::new(false));
+    let callback_called_clone = Arc::clone(&callback_called);
+
+    let child = Command::new("/usr/bin/true")
+        .spawn()
+        .expect("Failed to spawn process");
+
+    let callback = Box::new(move || {
+        callback_called_clone.store(true, Ordering::SeqCst);
+    });
+
+    reaper()
+        .try_send(TrackedProcess::TerminalWithCallback(child, Some(callback)))
+        .expect("Failed to send terminal process with callback to reaper");
+
+    let start = std::time::Instant::now();
+    while !callback_called.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(3) {
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    assert!(
+        callback_called.load(Ordering::SeqCst),
+        "Callback must be executed when process exits"
+    );
+    assert_eq!(
+        active_terminals_count(),
+        0,
+        "Terminal slot must be released when process with callback exits"
+    );
+}

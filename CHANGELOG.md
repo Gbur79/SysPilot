@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Hardened `spawn_syspilot_task` with POSIX-safe argument array passing (`exec syspilot "$@"`), eliminating shell word-splitting.
   - Added explicit WezTerm terminal emulator support (`wezterm start --`).
   - Added hermetic unit tests `test_terminal_slot_bounds_and_underflow_immunity` and `test_detached_gui_reaper_isolation` (bringing test count to 35/35).
+- **Level-Triggered ALPM Persistence & Post-Upgrade Triage (`EOS-SRE-ARCH-P1`, INC-20261101-0851)**:
+  - Eliminated the Nyquist-Shannon sampling flaw in `syspilot-tray` where short pacman updates (<10s) were missed by `db.lck` pulse polling, by introducing persistent mtime tracking of `/var/lib/pacman/local` and `summary.json`.
+  - Added asynchronous exit callback mechanism (`TerminalWithCallback`) in `syspilot-core::terminal`, ensuring that when an upgrade or maintenance terminal is closed, triage and GUI sync are triggered immediately within <=100ms.
+  - Linked GUI 1-second watcher to detect external modifications to `summary.json`, eliminating the state persistence disconnect.
+  - Added hermetic unit test `test_terminal_callback_executed_on_exit` (36/36 tests PASS).
 
 ### Fixed / SysPilot Tray Deduplication, Background Triage & Kernel Ingestion (`BP-ARGON-20261031-INCIDENT-001`)
 - **Single-Instance Advisory Locking (`crates/syspilot-tray`, `crates/syspilot-gui`, `crates/syspilot-core`)**:

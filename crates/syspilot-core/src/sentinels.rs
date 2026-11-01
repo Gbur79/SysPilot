@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SentinelStatus {
@@ -9,6 +10,8 @@ pub struct SentinelStatus {
     pub root_used_pct: u8,
     pub root_avail_gb: f32,
     pub home_avail_gb: f32,
+    pub pacman_db_mtime: Option<SystemTime>,
+    pub summary_mtime: Option<SystemTime>,
 }
 
 pub fn check_reboot_pending() -> bool {
@@ -88,12 +91,26 @@ pub fn get_disk_stats(path: &str) -> Option<(u8, f32)> {
     Some((used_pct, avail_gb))
 }
 
+pub fn get_pacman_db_mtime() -> Option<SystemTime> {
+    fs::metadata("/var/lib/pacman/local")
+        .and_then(|m| m.modified())
+        .ok()
+}
+
+pub fn get_summary_mtime() -> Option<SystemTime> {
+    let summary_path = crate::models::state_base().join("system-health/summary.json");
+    fs::metadata(summary_path).and_then(|m| m.modified()).ok()
+}
+
 pub fn collect_sentinels() -> SentinelStatus {
     let reboot_pending = check_reboot_pending();
     let (pacman_locked, pacman_orphaned_lock) = check_pacman_lock();
 
     let (root_used_pct, root_avail_gb) = get_disk_stats("/").unwrap_or((0, 0.0));
     let (_, home_avail_gb) = get_disk_stats("/home").unwrap_or((root_used_pct, root_avail_gb));
+
+    let pacman_db_mtime = get_pacman_db_mtime();
+    let summary_mtime = get_summary_mtime();
 
     SentinelStatus {
         reboot_pending,
@@ -102,5 +119,7 @@ pub fn collect_sentinels() -> SentinelStatus {
         root_used_pct,
         root_avail_gb,
         home_avail_gb,
+        pacman_db_mtime,
+        summary_mtime,
     }
 }

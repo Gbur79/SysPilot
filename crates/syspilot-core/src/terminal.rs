@@ -11,10 +11,22 @@ const WRAPPER: &str =
     r#""$@"; rc=$?; printf '\n'; read -r -p 'Press Enter to close...' _; exit "$rc""#;
 static ACTIVE_TERMINALS: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Debug)]
 pub enum TrackedProcess {
     Terminal(Child),
     Detached(Child),
+    TerminalWithCallback(Child, Option<Box<dyn FnOnce() + Send + 'static>>),
+}
+
+impl std::fmt::Debug for TrackedProcess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Terminal(c) => f.debug_tuple("Terminal").field(c).finish(),
+            Self::Detached(c) => f.debug_tuple("Detached").field(c).finish(),
+            Self::TerminalWithCallback(c, _) => {
+                f.debug_tuple("TerminalWithCallback").field(c).finish()
+            }
+        }
+    }
 }
 
 pub fn is_executable(path: &Path) -> bool {
@@ -108,15 +120,21 @@ pub(crate) fn reaper() -> &'static mpsc::SyncSender<TrackedProcess> {
                         children.push(proc);
                     }
                     children.retain_mut(|proc| {
-                        let is_terminal = matches!(proc, TrackedProcess::Terminal(_));
-                        let child = match proc {
-                            TrackedProcess::Terminal(c) | TrackedProcess::Detached(c) => c,
+                        let (child, is_terminal) = match proc {
+                            TrackedProcess::Terminal(c) => (c, true),
+                            TrackedProcess::Detached(c) => (c, false),
+                            TrackedProcess::TerminalWithCallback(c, _) => (c, true),
                         };
                         match child.try_wait() {
                             Ok(None) => true,
                             _ => {
                                 if is_terminal {
                                     release_slot();
+                                }
+                                if let TrackedProcess::TerminalWithCallback(_, cb) = proc {
+                                    if let Some(callback) = cb.take() {
+                                        callback();
+                                    }
                                 }
                                 false
                             }
@@ -206,7 +224,12 @@ pub fn spawn_detached_gui(executable: &Path) -> Result<(), String> {
     }
 }
 
-pub fn spawn_terminal_command(executable: &Path, args: &[&str], title: &str) -> Result<(), String> {
+fn spawn_terminal_command_internal(
+    executable: &Path,
+    args: &[&str],
+    title: &str,
+    callback: Option<Box<dyn FnOnce() + Send + 'static>>,
+) -> Result<(), String> {
     if !is_executable(executable) {
         return Err(format!(
             "Executable is unavailable: {}",
@@ -250,12 +273,21 @@ pub fn spawn_terminal_command(executable: &Path, args: &[&str], title: &str) -> 
             continue;
         };
         if let Ok(child) = build_terminal(name, &terminal, executable, args, title).spawn() {
-            if let Err(error) = reaper().try_send(TrackedProcess::Terminal(child)) {
+            let proc = match callback {
+                Some(cb) => TrackedProcess::TerminalWithCallback(child, Some(cb)),
+                None => TrackedProcess::Terminal(child),
+            };
+            if let Err(error) = reaper().try_send(proc) {
                 let mut child = match error {
                     mpsc::TrySendError::Full(TrackedProcess::Terminal(c))
                     | mpsc::TrySendError::Disconnected(TrackedProcess::Terminal(c))
                     | mpsc::TrySendError::Full(TrackedProcess::Detached(c))
-                    | mpsc::TrySendError::Disconnected(TrackedProcess::Detached(c)) => c,
+                    | mpsc::TrySendError::Disconnected(TrackedProcess::Detached(c))
+                    | mpsc::TrySendError::Full(TrackedProcess::TerminalWithCallback(c, _))
+                    | mpsc::TrySendError::Disconnected(TrackedProcess::TerminalWithCallback(
+                        c,
+                        _,
+                    )) => c,
                 };
                 let _ = child.kill();
                 let _ = child.wait();
@@ -270,6 +302,22 @@ pub fn spawn_terminal_command(executable: &Path, args: &[&str], title: &str) -> 
     Err("no supported terminal emulator could be started".into())
 }
 
+pub fn spawn_terminal_command(executable: &Path, args: &[&str], title: &str) -> Result<(), String> {
+    spawn_terminal_command_internal(executable, args, title, None)
+}
+
+pub fn spawn_terminal_command_with_callback<F>(
+    executable: &Path,
+    args: &[&str],
+    title: &str,
+    callback: F,
+) -> Result<(), String>
+where
+    F: FnOnce() + Send + 'static,
+{
+    spawn_terminal_command_internal(executable, args, title, Some(Box::new(callback)))
+}
+
 pub fn spawn_syspilot_task(args: &[&str], title: &str) -> Result<(), String> {
     if let Some(syspilot_bin) = resolve_syspilot() {
         spawn_terminal_command(&syspilot_bin, args, title)
@@ -278,6 +326,24 @@ pub fn spawn_syspilot_task(args: &[&str], title: &str) -> Result<(), String> {
         let mut bash_args = vec!["-c", r#"exec syspilot "$@""#, "--"];
         bash_args.extend_from_slice(args);
         spawn_terminal_command(&bash, &bash_args, title)
+    }
+}
+
+pub fn spawn_syspilot_task_with_callback<F>(
+    args: &[&str],
+    title: &str,
+    callback: F,
+) -> Result<(), String>
+where
+    F: FnOnce() + Send + 'static,
+{
+    if let Some(syspilot_bin) = resolve_syspilot() {
+        spawn_terminal_command_with_callback(&syspilot_bin, args, title, callback)
+    } else {
+        let bash = PathBuf::from("/usr/bin/bash");
+        let mut bash_args = vec!["-c", r#"exec syspilot "$@""#, "--"];
+        bash_args.extend_from_slice(args);
+        spawn_terminal_command_with_callback(&bash, &bash_args, title, callback)
     }
 }
 

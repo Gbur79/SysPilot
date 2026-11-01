@@ -816,3 +816,106 @@ fn test_copilot_timeout_enforcement() {
         "Timeout must abort fast (elapsed: {elapsed:?})"
     );
 }
+
+#[tokio::test]
+async fn test_subprocess_timeout_enforcement_and_kill_on_drop() {
+    use crate::updater::run_command_with_timeout;
+    use std::time::Duration;
+    use tokio::process::Command;
+
+    let start = std::time::Instant::now();
+    let mut cmd = Command::new("/usr/bin/sleep");
+    cmd.arg("10");
+
+    let res = run_command_with_timeout(cmd, Duration::from_millis(150)).await;
+    let elapsed = start.elapsed();
+
+    assert!(res.is_err(), "Command must fail due to timeout");
+    let err = res.unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "Timeout must abort fast (elapsed: {elapsed:?})"
+    );
+}
+
+#[tokio::test]
+async fn test_updater_offline_mode_resilience() {
+    use crate::updater::{check_aur_updates, check_official_updates, check_standalone_updates};
+
+    unsafe {
+        std::env::set_var("SYSPILOT_BIN_CHECKUPDATES", "/nonexistent/checkupdates/bin");
+        std::env::set_var("SYSPILOT_BIN_YAY", "/nonexistent/yay/bin");
+        std::env::set_var("SYSPILOT_BIN_SYS_HEALTH", "/nonexistent/sys-health/bin");
+    }
+
+    let (core, regular, pkgs) = check_official_updates().await;
+    assert_eq!(core, 0);
+    assert_eq!(regular, 0);
+    assert!(pkgs.is_empty());
+
+    let aur = check_aur_updates().await;
+    assert_eq!(aur, 0);
+
+    let standalone = check_standalone_updates().await;
+    assert_eq!(standalone, 0);
+
+    unsafe {
+        std::env::remove_var("SYSPILOT_BIN_CHECKUPDATES");
+        std::env::remove_var("SYSPILOT_BIN_YAY");
+        std::env::remove_var("SYSPILOT_BIN_SYS_HEALTH");
+    }
+}
+
+#[test]
+fn test_pacman_lock_toctou_resilience() {
+    use crate::sentinels::check_pacman_lock_at;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp_dir = std::env::temp_dir().join(format!("syspilot-lock-test-{nanos}"));
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+    let lock_file = tmp_dir.join("db.lck");
+
+    // 1. No lockfile present -> (false, false)
+    assert_eq!(check_pacman_lock_at(&lock_file), (false, false));
+
+    // 2. Lockfile with dead PID (99999999) -> (true, true) (orphaned)
+    std::fs::write(&lock_file, "99999999\n").unwrap();
+    assert_eq!(check_pacman_lock_at(&lock_file), (true, true));
+
+    // 3. Clean up lockfile -> (false, false)
+    std::fs::remove_file(&lock_file).unwrap();
+    assert_eq!(check_pacman_lock_at(&lock_file), (false, false));
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+#[test]
+fn test_fwupd_nvram_quirk_insufficient_space() {
+    use crate::firmware::{FwupdDevice, parse_fwupd_devices};
+
+    let dev = FwupdDevice {
+        name: Some("System Firmware".into()),
+        plugin: Some("uefi_capsule".into()),
+        protocol: Some("org.uefi.capsule".into()),
+        protocols: None,
+        update_state: Some(3),
+        update_error: Some("Not enough NVRAM space to stage update".into()),
+    };
+
+    // Even with Secure Boot ACTIVE (true), NVRAM space limit must be recognized as a quirk
+    let (updates, monitored, pending, quirks) = parse_fwupd_devices(vec![dev], true);
+    assert_eq!(monitored, 1);
+    assert_eq!(updates, 0);
+    assert!(pending.is_empty());
+    assert_eq!(quirks.len(), 1);
+    assert_eq!(quirks[0].name, "System Firmware");
+    assert_eq!(
+        quirks[0].reason,
+        "NVRAM write limit (insufficient NVRAM storage)"
+    );
+}

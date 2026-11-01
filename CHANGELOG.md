@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added configurable 90s timeout (overridable via `SYSPILOT_COPILOT_TIMEOUT_SECS`) with `kill_on_drop(true)` and automatic child termination, permanently eliminating indefinite GUI freezes and permanent `COPILOT_IN_FLIGHT = true` lockups.
   - Added `spawn_shell_task_with_callback` in `terminal.rs` for full parity with `spawn_syspilot_task_with_callback` and `spawn_terminal_command_with_callback`.
   - Added hermetic multithreaded unit tests `test_killed_child_reaped_and_slot_freed` and `test_copilot_timeout_enforcement` in `tests.rs`, verifying 0 zombie processes and 100% slot reclamation upon abrupt child SIGKILL (workspace test suite: core 25/25, total 38/38).
+- **Sprint 2: Network & Pacman I/O Hardening (`BP-ARGON-SPRINT-02-001`)**:
+  - Implemented hard timeout enforcement in `updater.rs` via `run_command_with_timeout` (15s for `checkupdates`/`yay`, 10s for `sys-health`) with unconditional `cmd.stdin(Stdio::null())` and `cmd.kill_on_drop(true)`.
+  - Added proactive check against active processes in `check_official_updates` auto-heal routine to eliminate race conditions around `/tmp/checkup-db-<uid>/db.lck`.
+  - Enforced `cmd.kill_on_drop(true)` across `security.rs`, `firmware.rs`, and `orphans.rs`, guaranteeing zero orphaned child processes in the OS process table upon timeout expiration or cancellation.
+  - Eliminated TOCTOU race conditions in `sentinels.rs` (`check_pacman_lock_at`) by pairing ALPM PID parsing with post-scan lockfile re-verification, preventing false-positive orphaned lock alarms.
+  - Hardened firmware NVRAM quirk classifier in `firmware.rs` to recognize NVRAM space exhaustion errors and revocation list updates.
+  - Added hermetic unit test suite (`test_subprocess_timeout_enforcement_and_kill_on_drop`, `test_updater_offline_mode_resilience`, `test_pacman_lock_toctou_resilience`, `test_fwupd_nvram_quirk_insufficient_space`) expanding core test coverage to 29/29 PASS (workspace test suite: 42/42 PASS).
 
 ### Fixed / SysPilot Tray Deduplication, Background Triage & Kernel Ingestion (`BP-ARGON-20261031-INCIDENT-001`)
 - **Single-Instance Advisory Locking (`crates/syspilot-tray`, `crates/syspilot-gui`, `crates/syspilot-core`)**:

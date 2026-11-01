@@ -527,6 +527,28 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-022: [IMPLEMENTED] Sprint 2 100% Completion: Network & Pacman I/O Hardening
+- **Status:** `[IMPLEMENTED]` *(SRE Certified — Audit `BP-ARGON-SPRINT-02-001`, Auditor Argon Pro)*
+- **Data zgłoszenia:** 2026-11-01
+- **Źródło:** SysPilot SRE Audit Plan (`SRE_AUDIT_PLAN.md` Sprint 2 Completion)
+- **Audyt SRE:**
+  - `BP-ARGON-SPRINT-02-001` (Auditor Argon Pro): Likwidacja luki nieograniczonego oczekiwania na procesy I/O i sieć w `updater.rs`. Wprowadzenie `run_command_with_timeout` (15s dla `checkupdates`/`yay`, 10s dla `sys-health`) z `cmd.stdin(Stdio::null())` i `cmd.kill_on_drop(true)`. Rozszerzenie `kill_on_drop(true)` na `security.rs`, `firmware.rs` i `orphans.rs`. Likwidacja wyścigu TOCTOU wokół `db.lck` w `sentinels.rs` (`check_pacman_lock_at`) przez weryfikację PID i powtórne sprawdzenie istnienia pliku po skanowaniu `/proc`. Rozszerzenie klasyfikacji quirków firmware w `firmware.rs` o błędy braku miejsca w NVRAM i listy odwołań certyfikatów. Dodanie 4 hermetycznych testów jednostkowych (offline mode, timeout kill, TOCTOU lock, NVRAM quirk).
+- **Docelowe Komponenty:**
+  - `crates/syspilot-core/src/updater.rs` (`run_command_with_timeout`, `default_checkupdates_timeout`, `default_standalone_timeout`, `is_process_running`)
+  - `crates/syspilot-core/src/security.rs` (`cmd.kill_on_drop(true)`, `default_security_timeout`)
+  - `crates/syspilot-core/src/firmware.rs` (`cmd.kill_on_drop(true)`, `default_firmware_timeout`, NVRAM error quirks)
+  - `crates/syspilot-core/src/sentinels.rs` (`check_pacman_lock_at`, TOCTOU defense)
+  - `crates/syspilot-core/src/orphans.rs` (`cmd.kill_on_drop(true)`)
+  - `crates/syspilot-core/src/tests.rs` (`test_subprocess_timeout_enforcement_and_kill_on_drop`, `test_updater_offline_mode_resilience`, `test_pacman_lock_toctou_resilience`, `test_fwupd_nvram_quirk_insufficient_space`)
+  - `CHANGELOG.md`
+  - `AUDIT_MATRIX.md`
+  - `SRE_AUDIT_PLAN.md`
+- **Kontekst i Uzasadnienie:**
+  Zawieszenie połączenia sieciowego podczas sprawdzania aktualizacji oficjalnych repozytoriów lub AUR mogło trwale zablokować pętlę roboczą demona zasobnika lub wątki GUI. Ponadto, brak flagi `kill_on_drop(true)` powodował wycieki procesów potomnych w tabeli procesów Linuksa. Nowy moduł gwarantuje deterministyczne limity czasu, czyste ubijanie procesów i zero fałszywych alarmów o osieroconych blokadach pacmana.
+- **Weryfikacja:** `dev-tools/verify-rust.sh -q` ➔ 42/42 unit tests PASS (core: 29, tray: 12, gui: 1), Clippy clean, fmt clean.
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

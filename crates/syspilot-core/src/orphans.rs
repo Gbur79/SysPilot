@@ -142,14 +142,15 @@ pub async fn query_pacman_package_names(
     timeout_secs: u64,
 ) -> Result<Vec<String>, String> {
     let run_cmd = async {
-        Command::new(pacman_path)
-            .arg(query_flag)
+        let mut cmd = Command::new(pacman_path);
+        cmd.arg(query_flag)
             .env("LC_ALL", "C")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()
-            .await
+            .kill_on_drop(true);
+        let child = cmd.spawn()?;
+        child.wait_with_output().await
     };
 
     match timeout(Duration::from_secs(timeout_secs), run_cmd).await {

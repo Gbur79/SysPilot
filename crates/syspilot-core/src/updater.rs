@@ -1,8 +1,9 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
+use tokio::time::timeout;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UpdateSummary {
@@ -17,6 +18,47 @@ pub struct UpdateSummary {
 impl UpdateSummary {
     pub fn total(&self) -> u32 {
         self.core_count + self.regular_count + self.aur_count + self.standalone_count
+    }
+}
+
+pub fn default_checkupdates_timeout() -> Duration {
+    if let Ok(val) = std::env::var("SYSPILOT_UPDATE_TIMEOUT_SECS") {
+        if let Ok(secs) = val.trim().parse::<u64>() {
+            if secs > 0 {
+                return Duration::from_secs(secs);
+            }
+        }
+    }
+    Duration::from_secs(15)
+}
+
+pub fn default_standalone_timeout() -> Duration {
+    if let Ok(val) = std::env::var("SYSPILOT_STANDALONE_TIMEOUT_SECS") {
+        if let Ok(secs) = val.trim().parse::<u64>() {
+            if secs > 0 {
+                return Duration::from_secs(secs);
+            }
+        }
+    }
+    Duration::from_secs(10)
+}
+
+pub async fn run_command_with_timeout(
+    mut cmd: Command,
+    timeout_dur: Duration,
+) -> Result<std::process::Output, std::io::Error> {
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    let child = cmd.spawn()?;
+    match timeout(timeout_dur, child.wait_with_output()).await {
+        Ok(res) => res,
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("subprocess timed out after {}s", timeout_dur.as_secs()),
+        )),
     }
 }
 
@@ -40,6 +82,16 @@ pub fn is_core_package(name: &str) -> bool {
 }
 
 pub fn find_executable(name: &str) -> Option<PathBuf> {
+    let env_key = format!(
+        "SYSPILOT_BIN_{}",
+        name.to_ascii_uppercase().replace('-', "_")
+    );
+    if let Ok(path_str) = std::env::var(env_key) {
+        let p = PathBuf::from(path_str);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
     for dir in ["/usr/bin", "/usr/local/bin"] {
         let p = Path::new(dir).join(name);
         if p.is_file() {
@@ -55,18 +107,34 @@ pub fn find_executable(name: &str) -> Option<PathBuf> {
     None
 }
 
+pub fn is_process_running(proc_name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let name_str = file_name.to_string_lossy();
+        if !name_str.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let comm_path = entry.path().join("comm");
+        if let Ok(comm) = std::fs::read_to_string(comm_path) {
+            if comm.trim() == proc_name {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub async fn check_official_updates() -> (u32, u32, Vec<String>) {
     let Some(checkupdates) = find_executable("checkupdates") else {
         return (0, 0, Vec::new());
     };
 
-    let output = match Command::new(&checkupdates)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-    {
+    let timeout_dur = default_checkupdates_timeout();
+    let cmd = Command::new(&checkupdates);
+    let output = match run_command_with_timeout(cmd, timeout_dur).await {
         Ok(out) => out,
         Err(_) => return (0, 0, Vec::new()),
     };
@@ -77,9 +145,10 @@ pub async fn check_official_updates() -> (u32, u32, Vec<String>) {
         if stderr.contains("database is locked") {
             let uid = unsafe { libc::getuid() };
             let lock_path = PathBuf::from(format!("/tmp/checkup-db-{uid}/db.lck"));
-            if lock_path.exists() {
+            if lock_path.exists() && !is_process_running("checkupdates") {
                 let _ = std::fs::remove_file(lock_path);
-                if let Ok(retry) = Command::new(&checkupdates).output().await {
+                let retry_cmd = Command::new(&checkupdates);
+                if let Ok(retry) = run_command_with_timeout(retry_cmd, timeout_dur).await {
                     if retry.status.success() {
                         return parse_checkupdates_stdout(&retry.stdout);
                     }
@@ -124,14 +193,9 @@ pub async fn check_aur_updates() -> u32 {
         return 0;
     };
 
-    let output = match Command::new(helper)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .await
-    {
+    let mut cmd = Command::new(helper);
+    cmd.args(args);
+    let output = match run_command_with_timeout(cmd, default_checkupdates_timeout()).await {
         Ok(out) => out,
         Err(_) => return 0,
     };
@@ -175,14 +239,9 @@ pub async fn check_standalone_updates() -> u32 {
         return 0;
     };
 
-    let output = match Command::new(sys_health)
-        .args(["--software", "--json"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .await
-    {
+    let mut cmd = Command::new(sys_health);
+    cmd.args(["--software", "--json"]);
+    let output = match run_command_with_timeout(cmd, default_standalone_timeout()).await {
         Ok(out) => out,
         Err(_) => return 0,
     };

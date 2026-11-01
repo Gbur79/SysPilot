@@ -31,32 +31,60 @@ pub fn check_reboot_pending() -> bool {
 }
 
 pub fn check_pacman_lock() -> (bool, bool) {
-    let lock_path = Path::new("/var/lib/pacman/db.lck");
+    check_pacman_lock_at(Path::new("/var/lib/pacman/db.lck"))
+}
+
+pub fn check_pacman_lock_at(lock_path: &Path) -> (bool, bool) {
     if !lock_path.exists() {
         return (false, false);
     }
 
-    // Lockfile exists. Check if an ALPM package manager is actively running.
+    // 1. Fast-path: Check PID inside db.lck if written by ALPM
     let mut active = false;
-    if let Ok(entries) = fs::read_dir("/proc") {
-        for entry in entries.flatten() {
-            let file_name = entry.file_name();
-            let name_str = file_name.to_string_lossy();
-            if !name_str.chars().all(|c| c.is_ascii_digit()) {
-                continue;
-            }
-            let comm_path = entry.path().join("comm");
-            if let Ok(comm) = fs::read_to_string(comm_path) {
-                let comm = comm.trim();
-                if matches!(
-                    comm,
-                    "pacman" | "yay" | "paru" | "checkupdates" | "pamac-daemon"
-                ) {
-                    active = true;
-                    break;
+    if let Ok(content) = fs::read_to_string(lock_path) {
+        if let Ok(pid) = content.trim().parse::<i32>() {
+            if pid > 0 {
+                let comm_path = format!("/proc/{pid}/comm");
+                if let Ok(comm) = fs::read_to_string(comm_path) {
+                    if matches!(
+                        comm.trim(),
+                        "pacman" | "yay" | "paru" | "checkupdates" | "pamac-daemon"
+                    ) {
+                        active = true;
+                    }
                 }
             }
         }
+    }
+
+    // 2. Fallback scan if PID not found or process is wrapping ALPM
+    if !active {
+        if let Ok(entries) = fs::read_dir("/proc") {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let name_str = file_name.to_string_lossy();
+                if !name_str.chars().all(|c| c.is_ascii_digit()) {
+                    continue;
+                }
+                let comm_path = entry.path().join("comm");
+                if let Ok(comm) = fs::read_to_string(comm_path) {
+                    let comm = comm.trim();
+                    if matches!(
+                        comm,
+                        "pacman" | "yay" | "paru" | "checkupdates" | "pamac-daemon"
+                    ) {
+                        active = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. TOCTOU Defense: Verify lockfile still exists after /proc scan.
+    // If pacman unlinked db.lck while we were scanning, it is not an orphaned lock!
+    if !lock_path.exists() {
+        return (false, false);
     }
 
     // (is_locked, is_orphaned_lock)

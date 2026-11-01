@@ -14,6 +14,17 @@ struct ArchAuditItem {
     packages: Vec<String>,
 }
 
+pub fn default_security_timeout() -> Duration {
+    if let Ok(val) = std::env::var("SYSPILOT_SECURITY_TIMEOUT_MS") {
+        if let Ok(ms) = val.trim().parse::<u64>() {
+            if ms > 0 {
+                return Duration::from_millis(ms);
+            }
+        }
+    }
+    Duration::from_millis(3500)
+}
+
 pub fn parse_arch_audit_json(json_str: &str) -> Result<(u32, u32, Vec<String>), String> {
     let items: Vec<ArchAuditItem> =
         serde_json::from_str(json_str).map_err(|e| format!("invalid arch-audit JSON: {e}"))?;
@@ -64,16 +75,17 @@ pub async fn check_security_vulnerabilities(skip_network: bool) -> StatusSecurit
     };
 
     let run_cmd = async {
-        Command::new(audit_bin)
-            .args(["-u", "--json"])
+        let mut cmd = Command::new(audit_bin);
+        cmd.args(["-u", "--json"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()
-            .await
+            .kill_on_drop(true);
+        let child = cmd.spawn()?;
+        child.wait_with_output().await
     };
 
-    match timeout(Duration::from_millis(3000), run_cmd).await {
+    match timeout(default_security_timeout(), run_cmd).await {
         Ok(Ok(output)) => {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);

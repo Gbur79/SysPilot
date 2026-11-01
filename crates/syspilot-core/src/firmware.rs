@@ -7,6 +7,17 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+pub fn default_firmware_timeout() -> Duration {
+    if let Ok(val) = std::env::var("SYSPILOT_FIRMWARE_TIMEOUT_MS") {
+        if let Ok(ms) = val.trim().parse::<u64>() {
+            if ms > 0 {
+                return Duration::from_millis(ms);
+            }
+        }
+    }
+    Duration::from_millis(3500)
+}
+
 pub fn is_secure_boot_enabled() -> bool {
     let sb_var =
         Path::new("/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c");
@@ -60,6 +71,16 @@ pub fn parse_fwupd_devices(
             .into_iter()
             .map(|p| p.to_ascii_lowercase())
             .collect();
+        let err_lower = d
+            .update_error
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+
+        let has_nvram_error = err_lower.contains("nvram")
+            || err_lower.contains("no space left")
+            || err_lower.contains("insufficient space");
+
         let is_sb_cert = matches!(
             plugin.as_str(),
             "uefi_kek" | "uefi_dbx" | "uefi_db" | "uefi_pk"
@@ -67,13 +88,19 @@ pub fn parse_fwupd_devices(
             || protocols.iter().any(|p| p.starts_with("org.uefi.dbx"))
             || dev_name_lower.contains("kek")
             || dev_name_lower.contains("dbx")
-            || dev_name_lower.contains("uefi ca");
+            || dev_name_lower.contains("uefi ca")
+            || dev_name_lower.contains("revocation");
 
-        if is_sb_cert && !secure_boot_active {
+        if (is_sb_cert && !secure_boot_active) || has_nvram_error {
+            let reason = if has_nvram_error {
+                "NVRAM write limit (insufficient NVRAM storage)".into()
+            } else {
+                "NVRAM write limit (Secure Boot disabled)".into()
+            };
             bypassed.push(FirmwareQuirk {
                 name: dev_name,
                 plugin,
-                reason: "NVRAM write limit (Secure Boot disabled)".into(),
+                reason,
             });
         } else {
             pending_names.push(dev_name);
@@ -113,16 +140,17 @@ pub async fn check_firmware_updates(skip: bool) -> StatusFirmware {
     };
 
     let run_cmd = async {
-        Command::new(fwupd_bin)
-            .args(["get-updates", "--no-unreported-check", "--json"])
+        let mut cmd = Command::new(fwupd_bin);
+        cmd.args(["get-updates", "--no-unreported-check", "--json"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()
-            .await
+            .kill_on_drop(true);
+        let child = cmd.spawn()?;
+        child.wait_with_output().await
     };
 
-    match timeout(Duration::from_millis(3000), run_cmd).await {
+    match timeout(default_firmware_timeout(), run_cmd).await {
         Ok(Ok(output)) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();

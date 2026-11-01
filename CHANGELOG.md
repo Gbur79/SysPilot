@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Replaced illegal worker-thread `ui_weak_watcher.upgrade()` check (which returned `None` within 1s due to Slint's thread-affinity constraint) with atomic `gui_running: Arc<AtomicBool>` lifecycle tracking.
   - Switched telemetry updates to `ui_weak_watcher.upgrade_in_event_loop(...)`, safely upgrading the component reference on the UI main thread and tearing down the worker thread gracefully upon event loop termination.
   - Permanently fixed stale GUI dashboard post-upgrade: window immediately syncs to `FLIGHT READY ✔` / 0 pending packages upon external `status.json` write.
+- **Headless GUI Integration Test & Per-Crate Quality Gate (`dev-tools/verify-rust.sh`, `crates/syspilot-gui/tests/watcher_smoke.rs`)**:
+  - Implemented headless integration fixture `test_watcher_mtime_lifecycle_and_shutdown` in `syspilot-gui`, verifying mtime watcher polling, state transitions, and atomic cooperative shutdown in <200ms without Wayland/X11 display dependencies.
+  - Upgraded `verify-rust.sh` to enforce per-crate non-zero test accounting (`core: 20 | tray: 12 | gui: 1`), permanently preventing zero-test crates from silently passing CI.
 
 ### Fixed / SysPilot Tray Deduplication, Background Triage & Kernel Ingestion (`BP-ARGON-20261031-INCIDENT-001`)
 - **Single-Instance Advisory Locking (`crates/syspilot-tray`, `crates/syspilot-gui`, `crates/syspilot-core`)**:

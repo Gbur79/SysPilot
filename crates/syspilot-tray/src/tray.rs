@@ -62,6 +62,8 @@ impl SysPilotTray {
                     if let Err(error) = spawn_detached_gui(path) {
                         eprintln!("SysPilot: {error}");
                     }
+                } else {
+                    eprintln!("SysPilot: menu action failed: executable not found");
                 }
             }),
             ..Default::default()
@@ -85,6 +87,8 @@ impl SysPilotTray {
                     if let Err(error) = spawn_terminal_command(path, args, title) {
                         eprintln!("SysPilot: {error}");
                     }
+                } else {
+                    eprintln!("SysPilot: terminal action '{title}' failed: executable not found");
                 }
             }),
             ..Default::default()
@@ -138,6 +142,8 @@ impl Tray for SysPilotTray {
             } else {
                 self.last_gui_spawn = Some(Instant::now());
             }
+        } else {
+            eprintln!("SysPilot: activate failed: syspilot executable path not resolved");
         }
     }
 
@@ -264,7 +270,9 @@ impl Tray for SysPilotTray {
             StandardItem {
                 label: "Exit SysPilot".into(),
                 activate: Box::new(move |_| {
-                    let _ = exit_tx.try_send(());
+                    if exit_tx.try_send(()).is_err() {
+                        eprintln!("SysPilot: exit signal channel full or closed");
+                    }
                 }),
                 ..Default::default()
             }

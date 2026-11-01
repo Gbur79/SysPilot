@@ -571,6 +571,26 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-024: [IMPLEMENTED] Sprint 4 100% Completion: 24/7 Tray Sentinel & D-Bus Hardening
+- **Status:** `[IMPLEMENTED]` *(SRE Certified — Audit `BP-ARGON-SPRINT-04-001`, Auditor Argon Pro)*
+- **Data zgłoszenia:** 2026-11-01
+- **Źródło:** SysPilot SRE Audit Plan (`SRE_AUDIT_PLAN.md` Sprint 4 Completion)
+- **Audyt SRE:**
+  - `BP-ARGON-SPRINT-04-001` (Auditor Argon Pro): Odporność demona zasobnika na restarty sesyjnego D-Bus, zapobieganie wyciekom deskryptorów inotify, deduplikacja zadań triage w tle oraz nieblokujący shutdown. Wprowadzenie `GameModeWatcher` z buforowanym proxy i leniwą re-koneksją (500ms timeout) przy `is_closed()` lub błędzie I/O. Jawne wyrejestrowanie watcha (`unwatch`) przy `FsSignal::Fault` oraz asercja `parent.is_dir()`. Wdrożenie blokady atomowej `triage_in_flight: Arc<AtomicBool>` z RAII `TriageGuard`, eliminującej sztormy procesów i kolizje na `/tmp/checkup-db-<uid>/db.lck`. Przeniesienie wywołań triage z wątku głównego do nieblokującego `tokio::spawn`. Obudowanie `handle.shutdown()` 2-sekundowym timeoutem zapobiegającym zawieszaniu procesu podczas wylogowywania ze środowiska Plasma Wayland. Dodanie telemetrii błędów we wszystkich akcjach menu. Dodanie 4 testów jednostkowych headless (renderowanie błędów w menu, stany krytyczne sentineli, flaga atomowa deduplikacji, GameMode bez D-Bus).
+- **Docelowe Komponenty:**
+  - `crates/syspilot-tray/src/gamemode.rs` (`GameModeWatcher`, persistent proxy, lazy reconnect)
+  - `crates/syspilot-tray/src/main.rs` (`TriageGuard`, `try_acquire_triage_lock`, `try_spawn_triage`, `try_spawn_triage_and_updater`, inotify leak prevention, 2s shutdown timeout, observability logging)
+  - `crates/syspilot-tray/src/tray.rs` (error handling in `action_gui`, `action`, `activate`, `Exit SysPilot`)
+  - `crates/syspilot-tray/src/tests.rs` (`test_tray_menu_telemetry_error_rendering`, `test_tray_menu_critical_sentinel_states`, `test_triage_deduplication_atomic_flag`, `test_gamemode_resilience_without_dbus`)
+  - `CHANGELOG.md`
+  - `AUDIT_MATRIX.md`
+  - `SRE_AUDIT_PLAN.md`
+- **Kontekst i Uzasadnienie:**
+  Jednorazowe pozyskanie sesji D-Bus na starcie powodowało, że restart demona D-Bus lub chwilowe odcięcie socketu trwale wyłączało integrację z GameMode. Ponadto, brak wywołań `unwatch` przy błędach watchera prowadził do powolnego wycieku deskryptorów inotify w jądrze przy wielotygodniowym uptime. Równoległe tyknięcia timerów mogły uruchomić wiele procesów triage naraz, powodując kolizje blokad pacmana. Nowa architektura gwarantuje całkowitą autonomię demona 24/7.
+- **Weryfikacja:** `dev-tools/verify-rust.sh -q` ➔ 51/51 unit tests PASS (core: 34, tray: 16, gui: 1), Clippy clean, fmt clean.
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

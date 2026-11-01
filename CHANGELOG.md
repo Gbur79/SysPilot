@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added configurable 90s timeout (overridable via `SYSPILOT_COPILOT_TIMEOUT_SECS`) with `kill_on_drop(true)` and automatic child termination, permanently eliminating indefinite GUI freezes and permanent `COPILOT_IN_FLIGHT = true` lockups.
   - Added `spawn_shell_task_with_callback` in `terminal.rs` for full parity with `spawn_syspilot_task_with_callback` and `spawn_terminal_command_with_callback`.
   - Added hermetic multithreaded unit tests `test_killed_child_reaped_and_slot_freed` and `test_copilot_timeout_enforcement` in `tests.rs`, verifying 0 zombie processes and 100% slot reclamation upon abrupt child SIGKILL (workspace test suite: core 25/25, total 38/38).
+- **Sprint 4: 24/7 Tray Sentinel & D-Bus Hardening (`BP-ARGON-SPRINT-04-001`)**:
+  - Implemented persistent D-Bus session management and proxy caching in `gamemode.rs` via `GameModeWatcher`, introducing lazy auto-reconnection (500ms timeout) on D-Bus daemon restart or broken socket while distinguishing service absence from I/O socket faults.
+  - Hardened inotify filesystem watcher against descriptor leaks in `main.rs` by executing explicit `unwatch(parent)` on `FsSignal::Fault` and verifying `parent.is_dir()` before re-registering, plus explicit unwatch on exit.
+  - Implemented atomic deduplication lock `triage_in_flight: Arc<AtomicBool>` with RAII `TriageGuard`, preventing background triage task storms and lock contention on `/tmp/checkup-db-<uid>/db.lck`.
+  - Offloaded background triage invocations from the current-thread event loop into `tokio::spawn`, ensuring zero latency spikes for the tray menu and 3-second GameMode pollers.
+  - Hardened workstation logout and Wayland exit with 2-second timeout on `handle.shutdown()`, preventing tray hang during D-Bus daemon teardown.
+  - Enforced zero silent returns/breaks across event loops and menu actions in compliance with SRE Observability Gate 5.
+  - Added 4 headless unit tests (`test_tray_menu_telemetry_error_rendering`, `test_tray_menu_critical_sentinel_states`, `test_triage_deduplication_atomic_flag`, `test_gamemode_resilience_without_dbus`), expanding tray test suite to 16/16 PASS (workspace total: 51/51 PASS).
 - **Sprint 3: Telemetry & State Ingestion Hardening (`BP-ARGON-SPRINT-03-001`)**:
   - Implemented clock-skew and NTP step-back resilience in `models.rs` (`CLOCK_SKEW_TOLERANCE_SECS = 60`), preventing false-positive cache degradation alarms (`age > 6h` / `DATA DEGRADED ⚠`) when system time shifts backwards up to 60 seconds.
   - Hardened Serde state deserialization with fallback parsing (`read_system_snapshot_or_fallback`), guaranteeing zero panics on corrupted or truncated JSON telemetry.

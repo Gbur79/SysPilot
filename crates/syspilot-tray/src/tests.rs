@@ -318,3 +318,143 @@ fn test_security_cve_escalation_and_telemetry() {
     assert_eq!(tray.status(), ksni::Status::NeedsAttention);
     assert!(tray.tool_tip().title.contains("high-risk security CVE"));
 }
+
+#[test]
+fn test_tray_menu_telemetry_error_rendering() {
+    use ksni::Tray;
+
+    let (exit_tx, _exit_rx) = tokio::sync::mpsc::channel(1);
+    let snapshot = SystemSnapshot {
+        source_error: Some("Corrupt status JSON payload".into()),
+        ..Default::default()
+    };
+
+    let tray = crate::tray::SysPilotTray::new(
+        snapshot,
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        exit_tx,
+    );
+
+    let menu = tray.menu();
+    assert!(!menu.is_empty());
+    if let ksni::MenuItem::Standard(header) = &menu[0] {
+        assert!(header.label.contains("Telemetry unavailable"));
+        assert!(!header.enabled);
+    } else {
+        panic!("Expected standard item for menu header");
+    }
+
+    let tooltip = tray.tool_tip();
+    assert!(tooltip.title.contains("telemetry unavailable"));
+    assert_eq!(tray.status(), ksni::Status::NeedsAttention);
+    assert_eq!(tray.icon_name(), "dialog-warning");
+}
+
+#[test]
+fn test_tray_menu_critical_sentinel_states() {
+    use ksni::Tray;
+
+    let (exit_tx, _exit_rx) = tokio::sync::mpsc::channel(1);
+
+    // 1. Orphaned pacman lock state
+    let sentinels_lock = SentinelStatus {
+        pacman_orphaned_lock: true,
+        ..Default::default()
+    };
+    let tray_lock = crate::tray::SysPilotTray::new(
+        SystemSnapshot::default(),
+        sentinels_lock,
+        None,
+        false,
+        None,
+        exit_tx.clone(),
+    );
+    let menu_lock = tray_lock.menu();
+    if let ksni::MenuItem::Standard(header) = &menu_lock[0] {
+        assert!(
+            header
+                .label
+                .starts_with("CRITICAL — Pacman database locked")
+        );
+        assert!(!header.enabled);
+    } else {
+        panic!("Expected standard item for menu header");
+    }
+    assert_eq!(tray_lock.status(), ksni::Status::NeedsAttention);
+    assert_eq!(tray_lock.icon_name(), "dialog-error");
+
+    // 2. Reboot pending state
+    let sentinels_reboot = SentinelStatus {
+        reboot_pending: true,
+        ..Default::default()
+    };
+    let tray_reboot = crate::tray::SysPilotTray::new(
+        SystemSnapshot::default(),
+        sentinels_reboot,
+        None,
+        false,
+        None,
+        exit_tx,
+    );
+    let menu_reboot = tray_reboot.menu();
+    if let ksni::MenuItem::Standard(header) = &menu_reboot[0] {
+        assert!(header.label.starts_with("REBOOT REQUIRED"));
+        assert!(!header.enabled);
+    } else {
+        panic!("Expected standard item for menu header");
+    }
+    assert_eq!(tray_reboot.status(), ksni::Status::NeedsAttention);
+    assert_eq!(tray_reboot.icon_name(), "dialog-warning");
+}
+
+#[test]
+fn test_triage_deduplication_atomic_flag() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let flag = Arc::new(AtomicBool::new(false));
+
+    // First acquisition must succeed
+    let guard1 = crate::try_acquire_triage_lock(&flag);
+    assert!(guard1.is_some());
+    assert!(flag.load(Ordering::Acquire));
+
+    // Second concurrent acquisition while guard1 is held must fail (deduplicated)
+    let guard2 = crate::try_acquire_triage_lock(&flag);
+    assert!(guard2.is_none());
+    assert!(flag.load(Ordering::Acquire));
+
+    // Dropping guard1 releases the flag via RAII
+    drop(guard1);
+    assert!(!flag.load(Ordering::Acquire));
+
+    // Subsequent acquisition succeeds
+    let guard3 = crate::try_acquire_triage_lock(&flag);
+    assert!(guard3.is_some());
+    assert!(flag.load(Ordering::Acquire));
+    drop(guard3);
+    assert!(!flag.load(Ordering::Acquire));
+}
+
+#[test]
+fn test_gamemode_resilience_without_dbus() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        // Standalone query with None connection returns false without panic
+        let active = crate::gamemode::is_gamemode_active(None).await;
+        assert!(!active);
+
+        // Persistent watcher initializes and handles absent D-Bus cleanly
+        let mut watcher = crate::gamemode::GameModeWatcher::new();
+        let is_active = watcher.is_active().await;
+        // On test/headless CI environments, this must be false and non-panicking
+        assert!(!is_active);
+    });
+}

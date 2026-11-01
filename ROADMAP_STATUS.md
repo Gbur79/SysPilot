@@ -77,6 +77,36 @@ Przekształcenie `SysPilot` w zintegrowany, lekki i niezawodny pakiet dla Arch L
 
 ---
 
+### 🟡 FAZA 5: Proaktywny Audyt Architektoniczny SRE (6-Sprint SRE Audit Plan)
+*Kanoniczny dokument planu audytu:* [SRE_AUDIT_PLAN.md](./SRE_AUDIT_PLAN.md)  
+*Status ogólny fazy:* **W TRAKCIE (Sprint 1 zaliczony, Sprint 2 oczekuje na realizację)**
+
+- [x] **Sprint 1: Procesy & Subprocess Reaper (`terminal.rs`):**
+  - [x] Slot underflow immunity (`fetch_update` + `saturating_sub` w `ACTIVE_TERMINALS`).
+  - [x] Zero-idle CPU wakeups w reaperze (blokowanie na kanale `rx.recv()` zamiast gorącego sleepa).
+  - [x] Level-triggered ALPM change detection (`pacman_db_mtime`, `summary_mtime` w `sentinels.rs`).
+  - [x] 3 nowe testy jednostkowe w `crates/syspilot-core/src/tests.rs` (łącznie 36/36 testów w workspace).
+  - [x] Certyfikacja SRE: zatwierdzono w `BP-ARGON-SPRINT-01-TERMINAL-001` (PATCH-019 / PATCH-020).
+- [ ] **Sprint 2: Narzędzia Zewnętrzne & Odporność Sieci (`updater.rs`, `sentinels.rs`, `firmware.rs`, `orphans.rs`):**
+  - [ ] Wprowadzenie twardych barier timeoutów dla `checkupdates`, `yay`, `arch-audit`, `fwupdmgr`.
+  - [ ] Graceful fallback i tryb offline przy awarii mirrora lub DNS (zero zawieszeń UI/demona).
+  - [ ] Testy jednostkowe timeoutów i obsługa symulowanego braku sieci.
+- [ ] **Sprint 3: Telemetria & Trwałość Stanu (`models.rs`, `triage.rs`):**
+  - [ ] Fuzzing parsera telemetrycznego z użyciem `proptest` (odporność na ucięte/zniekształcone JSON-y).
+  - [ ] Atomowy zapis i obsługa anomalii zegara systemowego (clock skew).
+- [ ] **Sprint 4: Demon Zasobnika 24/7 & D-Bus (`syspilot-tray`):**
+  - [ ] Weryfikacja wycieków deskryptorów inotify w wielotygodniowym uptime.
+  - [ ] Odporność na restart demona D-Bus / ponowne łączenie z GameMode.
+  - [ ] Czysty shutdown (`SIGTERM`).
+- [ ] **Sprint 5: Interfejs Slint GUI & Pętla Zdarzeń (`syspilot-gui`):**
+  - [ ] Weryfikacja pokrewieństwa wątków (thread-affinity) we wszystkich callbackach UI.
+  - [ ] Rozszerzenie testów bezgłowych (`watcher_smoke.rs`) o symulację kliknięć i blokadę podwójnego kliknięcia Copilota.
+- [ ] **Sprint 6: Integracja CLI & Systemd Packaging (`bin/syspilot`, `packaging/PKGBUILD`):**
+  - [ ] Asercje standardu POSIX dla przekazywania argumentów CLI.
+  - [ ] Weryfikacja czystości pakietowania i integracji z XDG autostart.
+
+---
+
 ## 4. Procedura Awaryjnego Wznowienia Projektu (Quick Resume Runbook)
 
 W przypadku restartu sesji, zaniku zasilania lub powrotu do projektu w nowym oknie:

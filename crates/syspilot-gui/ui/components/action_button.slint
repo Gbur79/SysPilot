@@ -6,6 +6,7 @@ export component ActionButton inherits Rectangle {
     in property <color> action-color: Theme.status-green;
     callback clicked();
 
+    vertical-stretch: 0;
     background: touch.pressed ? action-color.darker(30%)
                : touch.has-hover ? (primary ? action-color.darker(15%) : action-color.transparentize(80%))
                : (primary ? action-color : Colors.transparent);

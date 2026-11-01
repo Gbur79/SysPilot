@@ -2,7 +2,7 @@ slint::include_modules!();
 
 use slint::ComponentHandle;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 fn acquire_single_instance_lock() -> bool {
     syspilot_core::acquire_single_instance_lock(".gui.lock")
@@ -240,16 +240,71 @@ fn update_ui_from_error(ui: &AppWindow, err: &str) {
     ui.set_orphans_details("Telemetry unavailable".into());
 }
 
-static COPILOT_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static COPILOT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static LAST_SPAWN_MONO_MS: AtomicU64 = AtomicU64::new(0);
+const SPAWN_DEBOUNCE_WINDOW_MS: u64 = 750;
+
+fn monotonic_now_ms() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let ret = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    if ret == 0 {
+        (ts.tv_sec as u64) * 1000 + (ts.tv_nsec as u64) / 1_000_000
+    } else {
+        0
+    }
+}
+
+fn can_spawn_task_with_window(window_ms: u64) -> bool {
+    let now = monotonic_now_ms();
+    let mut last = LAST_SPAWN_MONO_MS.load(Ordering::Acquire);
+    loop {
+        if now.saturating_sub(last) < window_ms {
+            return false;
+        }
+        match LAST_SPAWN_MONO_MS.compare_exchange_weak(
+            last,
+            now,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(actual) => last = actual,
+        }
+    }
+}
+
+fn can_spawn_task() -> bool {
+    can_spawn_task_with_window(SPAWN_DEBOUNCE_WINDOW_MS)
+}
+
+struct CopilotFlightGuard;
+
+impl Drop for CopilotFlightGuard {
+    fn drop(&mut self) {
+        COPILOT_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
+
+struct RefreshFlightGuard;
+
+impl Drop for RefreshFlightGuard {
+    fn drop(&mut self) {
+        REFRESH_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
 
 fn trigger_copilot_query(ui_weak: slint::Weak<AppWindow>, query: String) {
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return;
+    }
+
     if COPILOT_IN_FLIGHT
-        .compare_exchange(
-            false,
-            true,
-            std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst,
-        )
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
         return;
@@ -265,23 +320,22 @@ fn trigger_copilot_query(ui_weak: slint::Weak<AppWindow>, query: String) {
         );
     }
 
+    let ui_weak_thread = ui_weak;
     std::thread::spawn(move || {
+        let _guard = CopilotFlightGuard;
         let result = syspilot_core::execute_copilot_query(&query);
-        let _ = slint::invoke_from_event_loop(move || {
-            COPILOT_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_copilot_running(false);
-                match result {
-                    Ok(answer) => {
-                        ui.set_copilot_console_text(
-                            format!("🤖 SysPilot Copilot Solution:\n\n{answer}\n").into(),
-                        );
-                    }
-                    Err(err) => {
-                        ui.set_copilot_console_text(
-                            format!("✖ Copilot Execution Failed:\n\n{err}\n\nTip: You can also use the interactive terminal button above for real-time interaction.").into(),
-                        );
-                    }
+        let _ = ui_weak_thread.upgrade_in_event_loop(move |ui| {
+            ui.set_copilot_running(false);
+            match result {
+                Ok(answer) => {
+                    ui.set_copilot_console_text(
+                        format!("🤖 SysPilot Copilot Solution:\n\n{answer}\n").into(),
+                    );
+                }
+                Err(err) => {
+                    ui.set_copilot_console_text(
+                        format!("✖ Copilot Execution Failed:\n\n{err}\n\nTip: You can also use the interactive terminal button above for real-time interaction.").into(),
+                    );
                 }
             }
         });
@@ -289,6 +343,10 @@ fn trigger_copilot_query(ui_weak: slint::Weak<AppWindow>, query: String) {
 }
 
 fn trigger_task_with_post_triage(ui_weak: slint::Weak<AppWindow>, args: &[&str], title: &str) {
+    if !can_spawn_task() {
+        return;
+    }
+
     let _ = syspilot_core::spawn_syspilot_task_with_callback(args, title, move || {
         std::thread::spawn(move || {
             let rt = match tokio::runtime::Builder::new_current_thread()
@@ -314,6 +372,20 @@ fn trigger_task_with_post_triage(ui_weak: slint::Weak<AppWindow>, args: &[&str],
     });
 }
 
+fn trigger_shell_task(command: &str, title: &str) {
+    if !can_spawn_task() {
+        return;
+    }
+    let _ = syspilot_core::spawn_shell_task(command, title);
+}
+
+fn trigger_terminal_task(args: &[&str], title: &str) {
+    if !can_spawn_task() {
+        return;
+    }
+    let _ = syspilot_core::spawn_syspilot_task(args, title);
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !acquire_single_instance_lock() {
         eprintln!("SysPilot GUI is already running.");
@@ -337,23 +409,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect Callbacks - Dashboard & General
     let ui_weak = ui.as_weak();
     ui.on_refresh_clicked(move || {
+        if REFRESH_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
         let copy = ui_weak.clone();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
+            let _guard = RefreshFlightGuard;
+            let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap();
+            {
+                Ok(rt) => rt,
+                Err(err) => {
+                    eprintln!("SysPilot: failed to build runtime for refresh: {err}");
+                    return;
+                }
+            };
             rt.block_on(async {
                 let _ = syspilot_core::run_triage(true, false).await;
                 let status_path = syspilot_core::get_status_path();
                 let snapshot_res = syspilot_core::read_system_snapshot(&status_path);
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui_inst) = copy.upgrade() {
-                        match snapshot_res {
-                            Ok(snapshot) => update_ui_from_snapshot(&ui_inst, &snapshot),
-                            Err(err) => update_ui_from_error(&ui_inst, &err),
-                        }
-                    }
+                let _ = copy.upgrade_in_event_loop(move |ui_inst| match snapshot_res {
+                    Ok(snapshot) => update_ui_from_snapshot(&ui_inst, &snapshot),
+                    Err(err) => update_ui_from_error(&ui_inst, &err),
                 });
             });
         });
@@ -424,21 +506,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     ui.on_run_cve_clicked(|| {
-        let _ = syspilot_core::spawn_shell_task(
+        trigger_shell_task(
             "echo '🔍 Arch Linux Security Advisories (CVE Triage)...'; if type -P arch-audit &>/dev/null; then arch-audit -u; else echo 'arch-audit is not installed. Install via: sudo pacman -S arch-audit'; fi",
             "SysPilot Security CVE Inspection",
         );
     });
 
     ui.on_run_firmware_clicked(|| {
-        let _ = syspilot_core::spawn_shell_task(
+        trigger_shell_task(
             "echo '⚡ Hardware Firmware Upgrade (fwupd / LVFS)...'; if type -P fwupdmgr &>/dev/null; then fwupdmgr update; else echo 'fwupd is not installed. Install via: sudo pacman -S fwupd'; fi",
             "SysPilot Hardware Firmware Upgrade",
         );
     });
 
     ui.on_run_precache_clicked(|| {
-        let _ = syspilot_core::spawn_shell_task(
+        trigger_shell_task(
             "echo '⚡ Pre-caching pending package updates into pacman cache...'; if type -P checkupdates &>/dev/null; then checkupdates -d || sudo pacman -Sw --noconfirm; else sudo pacman -Sw --noconfirm; fi",
             "SysPilot Package Pre-Caching",
         );
@@ -446,10 +528,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect Callbacks - AI Copilot
     ui.on_copilot_terminal_clicked(|| {
-        let _ = syspilot_core::spawn_syspilot_task(
-            &["--copilot-shell"],
-            "SysPilot AI Copilot Interactive",
-        );
+        trigger_terminal_task(&["--copilot-shell"], "SysPilot AI Copilot Interactive");
     });
 
     let ui_weak_copilot = ui.as_weak();
@@ -517,4 +596,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     gui_running.store(false, Ordering::Relaxed);
     run_res?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_spawn_debounce_window_rejection() {
+        assert!(can_spawn_task_with_window(0));
+        assert!(!can_spawn_task_with_window(5000));
+    }
+
+    #[test]
+    fn test_copilot_flight_guard_raii() {
+        COPILOT_IN_FLIGHT.store(false, Ordering::SeqCst);
+        assert!(!COPILOT_IN_FLIGHT.load(Ordering::SeqCst));
+        {
+            let _guard = CopilotFlightGuard;
+            COPILOT_IN_FLIGHT.store(true, Ordering::SeqCst);
+            assert!(COPILOT_IN_FLIGHT.load(Ordering::SeqCst));
+        }
+        assert!(!COPILOT_IN_FLIGHT.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_refresh_flight_guard_raii() {
+        REFRESH_IN_FLIGHT.store(false, Ordering::SeqCst);
+        assert!(!REFRESH_IN_FLIGHT.load(Ordering::SeqCst));
+        {
+            let _guard = RefreshFlightGuard;
+            REFRESH_IN_FLIGHT.store(true, Ordering::SeqCst);
+            assert!(REFRESH_IN_FLIGHT.load(Ordering::SeqCst));
+        }
+        assert!(!REFRESH_IN_FLIGHT.load(Ordering::SeqCst));
+    }
 }

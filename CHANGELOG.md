@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added asynchronous exit callback mechanism (`TerminalWithCallback`) in `syspilot-core::terminal`, ensuring that when an upgrade or maintenance terminal is closed, triage and GUI sync are triggered immediately within <=100ms.
   - Linked GUI 1-second watcher to detect external modifications to `summary.json`, eliminating the state persistence disconnect.
   - Added hermetic unit test `test_terminal_callback_executed_on_exit` (36/36 tests PASS).
+- **Sprint 1 Subprocess Engine Hardening & Copilot Anti-Hang Timeout (`BP-ARGON-SPRINT-01-COMPLETION-001`)**:
+  - Replaced blocking synchronous execution in `copilot.rs` with `execute_copilot_query_with_timeout` and `execute_copilot_query_async` backed by Tokio runtime and `tokio::process::Command`.
+  - Added configurable 90s timeout (overridable via `SYSPILOT_COPILOT_TIMEOUT_SECS`) with `kill_on_drop(true)` and automatic child termination, permanently eliminating indefinite GUI freezes and permanent `COPILOT_IN_FLIGHT = true` lockups.
+  - Added `spawn_shell_task_with_callback` in `terminal.rs` for full parity with `spawn_syspilot_task_with_callback` and `spawn_terminal_command_with_callback`.
+  - Added hermetic multithreaded unit tests `test_killed_child_reaped_and_slot_freed` and `test_copilot_timeout_enforcement` in `tests.rs`, verifying 0 zombie processes and 100% slot reclamation upon abrupt child SIGKILL (workspace test suite: core 25/25, total 38/38).
 
 ### Fixed / SysPilot Tray Deduplication, Background Triage & Kernel Ingestion (`BP-ARGON-20261031-INCIDENT-001`)
 - **Single-Instance Advisory Locking (`crates/syspilot-tray`, `crates/syspilot-gui`, `crates/syspilot-core`)**:

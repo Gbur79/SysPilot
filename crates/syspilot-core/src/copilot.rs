@@ -1,6 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::process::Command;
+use tokio::time::timeout;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CopilotInfo {
@@ -315,7 +318,75 @@ pub fn resolve_goose_recipe() -> Option<PathBuf> {
     None
 }
 
+pub fn default_copilot_timeout() -> Duration {
+    if let Ok(val) = std::env::var("SYSPILOT_COPILOT_TIMEOUT_SECS") {
+        if let Ok(secs) = val.trim().parse::<u64>() {
+            if secs > 0 {
+                return Duration::from_secs(secs);
+            }
+        }
+    }
+    Duration::from_secs(90)
+}
+
+async fn run_command_with_timeout(
+    mut cmd: Command,
+    timeout_dur: Duration,
+    desc: &str,
+) -> Result<std::process::Output, String> {
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn {desc}: {e}"))?;
+
+    match timeout(timeout_dur, child.wait_with_output()).await {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(e)) => Err(format!("Failed to execute {desc}: {e}")),
+        Err(_) => {
+            // Note: Since kill_on_drop(true) is enabled, dropping wait_with_output
+            // (which owns child) immediately dispatches SIGKILL to the child process.
+            Err(format!(
+                "Copilot query timed out after {}s (process terminated)",
+                timeout_dur.as_secs()
+            ))
+        }
+    }
+}
+
 pub fn execute_copilot_query(query: &str) -> Result<String, String> {
+    execute_copilot_query_with_timeout(query, default_copilot_timeout())
+}
+
+pub fn execute_copilot_query_with_timeout(
+    query: &str,
+    timeout_dur: Duration,
+) -> Result<String, String> {
+    let query_owned = query.to_string();
+    let run_async = move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("Failed to build tokio runtime: {e}"))?;
+        rt.block_on(execute_copilot_query_async(&query_owned, timeout_dur))
+    };
+
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::spawn(run_async)
+            .join()
+            .map_err(|_| "Copilot worker thread panicked".to_string())?
+    } else {
+        run_async()
+    }
+}
+
+pub async fn execute_copilot_query_async(
+    query: &str,
+    timeout_dur: Duration,
+) -> Result<String, String> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Err("Query cannot be empty.".to_string());
@@ -335,10 +406,15 @@ pub fn execute_copilot_query(query: &str) -> Result<String, String> {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "bash".to_string());
 
-        let output = Command::new(&bash_bin)
-            .args(["-c", &format!("{effective_cmd} \"$@\""), "--", trimmed])
-            .output()
-            .map_err(|e| format!("Failed to execute custom Copilot command via {bash_bin}: {e}"))?;
+        let mut command = Command::new(&bash_bin);
+        command.args(["-c", &format!("{effective_cmd} \"$@\""), "--", trimmed]);
+
+        let output = run_command_with_timeout(
+            command,
+            timeout_dur,
+            &format!("custom Copilot command via {bash_bin}"),
+        )
+        .await?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -360,10 +436,11 @@ pub fn execute_copilot_query(query: &str) -> Result<String, String> {
     // Check if goose is available, fallback to agy
     if crate::terminal::find_program("goose").is_none() {
         if crate::terminal::find_program("agy").is_some() {
-            let output = Command::new("agy")
-                .args(["-p", trimmed])
-                .output()
-                .map_err(|e| format!("Failed to execute agy CLI: {e}"))?;
+            let mut command = Command::new("agy");
+            command.args(["-p", trimmed]);
+
+            let output = run_command_with_timeout(command, timeout_dur, "agy CLI").await?;
+
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             if !output.status.success() {
@@ -402,9 +479,7 @@ pub fn execute_copilot_query(query: &str) -> Result<String, String> {
     cmd.env("GOOSE_DISABLE_SESSION_NAMING", "true");
     cmd.env("GOOSE_CLI_SHOW_COST", "true");
 
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Failed to launch Goose CLI: {e}"))?;
+    let output = run_command_with_timeout(cmd, timeout_dur, "Goose CLI").await?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 

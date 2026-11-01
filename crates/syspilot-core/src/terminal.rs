@@ -351,3 +351,15 @@ pub fn spawn_shell_task(command: &str, title: &str) -> Result<(), String> {
     let bash = PathBuf::from("/usr/bin/bash");
     spawn_terminal_command(&bash, &["-c", command], title)
 }
+
+pub fn spawn_shell_task_with_callback<F>(
+    command: &str,
+    title: &str,
+    callback: F,
+) -> Result<(), String>
+where
+    F: FnOnce() + Send + 'static,
+{
+    let bash = PathBuf::from("/usr/bin/bash");
+    spawn_terminal_command_with_callback(&bash, &["-c", command], title, callback)
+}

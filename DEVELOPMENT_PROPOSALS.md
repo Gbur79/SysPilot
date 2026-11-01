@@ -508,6 +508,25 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-021: [IMPLEMENTED] Sprint 1 100% Completion: Copilot Anti-Hang Timeout & Subprocess Reaping Hardening
+- **Status:** `[IMPLEMENTED]` *(SRE Certified — Audit `BP-ARGON-SPRINT-01-COMPLETION-001`, Auditor Argon Pro)*
+- **Data zgłoszenia:** 2026-11-01
+- **Źródło:** SysPilot SRE Audit Plan (`SRE_AUDIT_PLAN.md` Sprint 1 Completion)
+- **Audyt SRE:**
+  - `BP-ARGON-SPRINT-01-COMPLETION-001` (Auditor Argon Pro): Likwidacja ryzyka blokowania wątków i trwałego zablokowania flagi `COPILOT_IN_FLIGHT = true` przy braku odpowiedzi CLI/API. Wprowadzenie asynchronicznej obsługi Tokio z twardym timeoutem (domyślnie 90s, konfigurowalnym przez `SYSPILOT_COPILOT_TIMEOUT_SECS`) i automatycznym zabijaniem procesu potomnego (`kill_on_drop(true)`). Wprowadzenie `spawn_shell_task_with_callback` w `terminal.rs` dla pełnej symetrii z zadaniami syspilot. Dodanie hermetycznych testów weryfikujących zwalnianie slotów i brak procesów zombie przy nagłym SIGKILL.
+- **Docelowe Komponenty:**
+  - `crates/syspilot-core/src/copilot.rs` (`default_copilot_timeout`, `execute_copilot_query_with_timeout`, `execute_copilot_query_async`, `run_command_with_timeout`)
+  - `crates/syspilot-core/src/terminal.rs` (`spawn_shell_task_with_callback`)
+  - `crates/syspilot-core/src/tests.rs` (`test_killed_child_reaped_and_slot_freed`, `test_copilot_timeout_enforcement`)
+  - `CHANGELOG.md`
+  - `AUDIT_MATRIX.md`
+  - `SRE_AUDIT_PLAN.md`
+- **Kontekst i Uzasadnienie:**
+  Wcześniejsza implementacja `execute_copilot_query` wywoływała proces synchronicznie bez limitu czasu. Zawieszenie połączenia sieciowego lub oczekiwanie na interaktywne wejście blokowało wątek tła GUI na stałe, uniemożliwiając kolejne zapytania do Copilota aż do restartu okna. Nowa architektura gwarantuje natychmiastowe ubicie zawieszonego procesu i bezpieczne wyczyszczenie stanu w UI.
+- **Weryfikacja:** `dev-tools/verify-rust.sh -q` ➔ 38/38 unit tests PASS (core: 25, tray: 12, gui: 1), Clippy clean, fmt clean.
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

@@ -559,7 +559,9 @@ static TERMINAL_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn test_terminal_slot_bounds_and_underflow_immunity() {
-    let _guard = TERMINAL_TEST_MUTEX.lock().unwrap();
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     use crate::terminal::{active_terminals_count, release_slot, reserve_slot};
 
     // Drain any leftover active terminal slots from earlier runs
@@ -599,7 +601,9 @@ fn test_terminal_slot_bounds_and_underflow_immunity() {
 
 #[test]
 fn test_detached_gui_reaper_isolation() {
-    let _guard = TERMINAL_TEST_MUTEX.lock().unwrap();
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     use crate::terminal::{
         TrackedProcess, active_terminals_count, reaper, release_slot, reserve_slot,
     };
@@ -660,7 +664,9 @@ fn test_detached_gui_reaper_isolation() {
 
 #[test]
 fn test_terminal_callback_executed_on_exit() {
-    let _guard = TERMINAL_TEST_MUTEX.lock().unwrap();
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     use crate::terminal::{
         TrackedProcess, active_terminals_count, reaper, release_slot, reserve_slot,
     };
@@ -706,5 +712,107 @@ fn test_terminal_callback_executed_on_exit() {
         active_terminals_count(),
         0,
         "Terminal slot must be released when process with callback exits"
+    );
+}
+
+#[test]
+fn test_killed_child_reaped_and_slot_freed() {
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    use crate::terminal::{
+        TrackedProcess, active_terminals_count, reaper, release_slot, reserve_slot,
+    };
+    use std::path::Path;
+    use std::process::Command;
+    use std::thread;
+    use std::time::Duration;
+
+    // Drain any leftover active terminal slots from earlier tests
+    while active_terminals_count() > 0 {
+        release_slot();
+    }
+
+    // Reserve 1 terminal slot
+    assert!(reserve_slot(), "Reservation must succeed");
+    assert_eq!(active_terminals_count(), 1);
+
+    // Spawn a long-lived process to simulate sudden external kill
+    let child = Command::new("/usr/bin/sleep")
+        .arg("60")
+        .spawn()
+        .expect("Failed to spawn child process");
+    let pid = child.id() as libc::pid_t;
+
+    // Register child with the background reaper thread
+    reaper()
+        .try_send(TrackedProcess::Terminal(child))
+        .expect("Failed to dispatch process to reaper");
+
+    // Process should initially exist in the OS process table
+    assert!(
+        Path::new(&format!("/proc/{pid}")).exists(),
+        "Process /proc/{pid} must exist after spawn"
+    );
+
+    // Simulate abrupt external termination (SIGKILL)
+    unsafe {
+        let rc = libc::kill(pid, libc::SIGKILL);
+        assert_eq!(rc, 0, "SIGKILL to child process must succeed");
+    }
+
+    // Poll until reaper detects exit, reaps the child, and releases the slot (up to 3s)
+    let start = std::time::Instant::now();
+    while (active_terminals_count() != 0 || Path::new(&format!("/proc/{pid}")).exists())
+        && start.elapsed() < Duration::from_secs(3)
+    {
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    // Assert that the active terminal slot was freed back to 0
+    assert_eq!(
+        active_terminals_count(),
+        0,
+        "Active terminal slot must be restored to 0 by reaper"
+    );
+
+    // Assert that the process has been reaped and does not remain in zombie state
+    assert!(
+        !Path::new(&format!("/proc/{pid}")).exists(),
+        "Killed child process must be reaped from /proc without leaving zombie state"
+    );
+}
+
+#[test]
+fn test_copilot_timeout_enforcement() {
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    use crate::copilot::execute_copilot_query_with_timeout;
+    use std::time::Duration;
+
+    unsafe {
+        std::env::set_var("SYSPILOT_COPILOT_CMD", "bash -c 'sleep 5' --");
+        std::env::set_var("COPILOT_LABEL", "Test Sleep");
+    }
+
+    let start = std::time::Instant::now();
+    let res = execute_copilot_query_with_timeout("test query", Duration::from_millis(150));
+    let elapsed = start.elapsed();
+
+    unsafe {
+        std::env::remove_var("SYSPILOT_COPILOT_CMD");
+        std::env::remove_var("COPILOT_LABEL");
+    }
+
+    assert!(res.is_err(), "Query must fail due to timeout");
+    let err = res.unwrap_err();
+    assert!(
+        err.contains("timed out"),
+        "Error message must indicate timeout: {err}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "Timeout must abort fast (elapsed: {elapsed:?})"
     );
 }

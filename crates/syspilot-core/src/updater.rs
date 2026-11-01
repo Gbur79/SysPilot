@@ -87,10 +87,12 @@ pub fn find_executable(name: &str) -> Option<PathBuf> {
         name.to_ascii_uppercase().replace('-', "_")
     );
     if let Ok(path_str) = std::env::var(env_key) {
-        let p = PathBuf::from(path_str);
-        if p.is_file() {
-            return Some(p);
+        let trimmed = path_str.trim();
+        if trimmed.is_empty() || trimmed == "none" || trimmed == "disabled" {
+            return None;
         }
+        let p = PathBuf::from(trimmed);
+        return if p.is_file() { Some(p) } else { None };
     }
     for dir in ["/usr/bin", "/usr/local/bin"] {
         let p = Path::new(dir).join(name);

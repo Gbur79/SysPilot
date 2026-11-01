@@ -17,13 +17,13 @@ use tokio::time::timeout;
 
 pub async fn check_pacnew_files() -> Vec<String> {
     let run_cmd = async {
-        Command::new("find")
-            .args(["/etc", "-maxdepth", "4", "-name", "*.pacnew"])
+        let mut cmd = Command::new("find");
+        cmd.args(["/etc", "-maxdepth", "4", "-name", "*.pacnew"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .output()
-            .await
+            .kill_on_drop(true);
+        cmd.output().await
     };
 
     match timeout(Duration::from_millis(1500), run_cmd).await {
@@ -198,23 +198,51 @@ pub fn compute_flight_status(inputs: FlightStatusInputs) -> (String, Vec<String>
     (status, status_reasons, informational_reasons)
 }
 
+static ATOMIC_WRITE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub fn write_status_json_atomic(dest_path: &Path, payload: &StatusJson) -> std::io::Result<()> {
     if let Some(parent) = dest_path.parent() {
         fs::create_dir_all(parent)?;
     }
 
     let pid = unsafe { libc::getpid() };
-    let tmp_path = dest_path.with_file_name(format!(".status.json.tmp.{pid}"));
+    let seq = ATOMIC_WRITE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let file_name = dest_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("status.json");
+    let tmp_path = dest_path.with_file_name(format!(".{file_name}.tmp.{pid}.{seq}.{nanos}"));
 
-    {
+    let write_res = (|| -> std::io::Result<()> {
         let mut file = File::create(&tmp_path)?;
         let json_bytes = serde_json::to_vec_pretty(payload)?;
         file.write_all(&json_bytes)?;
         file.flush()?;
         file.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(e) = write_res {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
     }
 
-    fs::rename(tmp_path, dest_path)?;
+    if let Err(e) = fs::rename(&tmp_path, dest_path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    // Fsync the parent directory to guarantee atomic directory entry persistence
+    if let Some(parent) = dest_path.parent() {
+        if let Ok(dir) = File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+
     Ok(())
 }
 
@@ -227,9 +255,25 @@ struct SummaryCounts {
 }
 
 #[derive(Debug, serde::Deserialize)]
+struct SummaryChecksMirrors {
+    #[serde(default)]
+    arch_primary_alive: Option<bool>,
+    #[serde(default)]
+    arch_age_days: Option<f64>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SummaryChecks {
+    #[serde(default)]
+    mirrors: Option<SummaryChecksMirrors>,
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct SummaryJson {
     #[serde(default)]
     counts: Option<SummaryCounts>,
+    #[serde(default)]
+    checks: Option<SummaryChecks>,
     #[serde(default)]
     environment: Option<SysHealthEnvironment>,
     #[serde(default)]
@@ -248,12 +292,21 @@ pub fn load_sys_health() -> SysHealth {
                             .counts
                             .map(|c| (c.errors, c.warnings))
                             .unwrap_or((0, 0));
+                        let mirrors =
+                            summary
+                                .checks
+                                .and_then(|c| c.mirrors)
+                                .map(|m| SysHealthMirrors {
+                                    arch_primary_alive: m.arch_primary_alive,
+                                    arch_age_days: m.arch_age_days,
+                                });
                         SysHealth {
                             available: true,
                             errors,
                             warnings,
                             environment: summary.environment,
                             gaming: summary.gaming,
+                            mirrors,
                         }
                     }
                     Err(_) => SysHealth::default(),

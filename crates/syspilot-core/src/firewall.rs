@@ -21,13 +21,13 @@ pub fn parse_firewalld_conf_zone(conf_content: &str) -> Option<String> {
 
 pub async fn check_systemd_service_active(service: &str) -> bool {
     let run_cmd = async {
-        Command::new("systemctl")
-            .args(["is-active", service])
+        let mut cmd = Command::new("systemctl");
+        cmd.args(["is-active", service])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .output()
-            .await
+            .kill_on_drop(true);
+        cmd.output().await
     };
 
     match timeout(Duration::from_millis(800), run_cmd).await {

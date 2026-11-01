@@ -3,8 +3,8 @@
 **Principal authority:** SRE Auditor Sol (`gpt-5.6-sol`)  
 **Project:** SysPilot  
 **Review date:** 2026-11-01  
-**Governance blueprint:** `BP-ARGON-SPRINT-02-001`  
-**Approval:** `ARGON-20261101-SPRINT-02-PASS`
+**Governance blueprint:** `BP-ARGON-SPRINT-03-001`  
+**Approval:** `ARGON-20261101-SPRINT-03-PASS`
 
 ---
 
@@ -19,7 +19,7 @@
 | SYS-005 | PyQt6 GUI | `gui/` | RETIRED [Argon] | Medium | Replaced by `crates/syspilot-gui/` (Slint 1.18) |
 | SYS-006 | CLI entrypoint router | `bin/syspilot` | CERTIFIED [Argon] | High | POSIX array-safe multi-agent router with fallback to native binary |
 | SYS-007 | Legacy Triage engine | `core/triage.py` | RETIRED [Argon] | High | Replaced by `crates/syspilot-core/` |
-| SYS-008 | Pure Rust Triage Core | `crates/syspilot-core/` | CERTIFIED [Argon] | High | Resilient Serde Schema 1.0/2.0, Sprint 1 & 2 100% (Subprocess Reaper, Network/Pacman I/O timeouts, 29 tests) |
+| SYS-008 | Pure Rust Triage Core | `crates/syspilot-core/` | CERTIFIED [Argon] | High | Resilient Serde Schema 1.0/2.0, Sprint 1, 2 & 3 100% (Subprocess Reaper, Network/Pacman timeouts, Telemetry clock-skew & atomic sync, 34 tests) |
 | SYS-009 | Rust StatusNotifierItem Tray | `crates/syspilot-tray/` | CERTIFIED [Argon] | Medium | Zero-waste sentinel ~5.7 MB RSS, zbus 5.19, ksni |
 | SYS-010 | Slint Native Desktop GUI | `crates/syspilot-gui/` | CERTIFIED [Argon] | High | 3-tab cockpit, Maintenance suite, AI Copilot, SRE playbooks, dual renderers |
 | SYS-011 | Packaging & XDG Integration | `packaging/` | CERTIFIED [Argon] | High | Pure Rust PKGBUILD v2.0.0, dedicated GUI & tray desktop entries, optdepends |

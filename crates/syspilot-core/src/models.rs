@@ -7,15 +7,32 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const MAX_STATUS_BYTES: u64 = 1024 * 1024;
 pub const SUPPORTED_SCHEMA_MAJOR: &str = "1";
 pub const STALE_AFTER_SECS: u64 = 6 * 60 * 60;
+pub const CLOCK_SKEW_TOLERANCE_SECS: u64 = 60;
 
 use std::collections::BTreeMap;
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FailedServicesStatus {
     #[serde(default)]
     pub system: Vec<String>,
     #[serde(default)]
     pub user: Vec<String>,
+    #[serde(default = "default_true")]
+    pub user_manager_available: bool,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+impl Default for FailedServicesStatus {
+    fn default() -> Self {
+        Self {
+            system: Vec::new(),
+            user: Vec::new(),
+            user_manager_available: true,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -189,7 +206,15 @@ pub struct StatusFirewall {
     pub details: String,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SysHealthMirrors {
+    #[serde(default)]
+    pub arch_primary_alive: Option<bool>,
+    #[serde(default)]
+    pub arch_age_days: Option<f64>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SysHealth {
     #[serde(default)]
     pub available: bool,
@@ -201,6 +226,8 @@ pub struct SysHealth {
     pub environment: Option<SysHealthEnvironment>,
     #[serde(default)]
     pub gaming: Option<SysHealthGaming>,
+    #[serde(default)]
+    pub mirrors: Option<SysHealthMirrors>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -263,9 +290,18 @@ impl Default for SystemSnapshot {
 
 impl SystemSnapshot {
     pub fn age_seconds(&self) -> Option<u64> {
-        self.modified
-            .and_then(|time| SystemTime::now().duration_since(time).ok())
-            .map(|duration| duration.as_secs())
+        let time = self.modified?;
+        let now = SystemTime::now();
+        match now.duration_since(time) {
+            Ok(duration) => Some(duration.as_secs()),
+            Err(err) => {
+                if err.duration().as_secs() <= CLOCK_SKEW_TOLERANCE_SECS {
+                    Some(0)
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     pub fn age_label(&self) -> String {
@@ -392,9 +428,35 @@ pub fn valid_schema(schema: &str) -> bool {
 }
 
 pub fn is_stale(modified: Option<SystemTime>) -> bool {
-    match modified.and_then(|time| SystemTime::now().duration_since(time).ok()) {
-        Some(age) => age.as_secs() > STALE_AFTER_SECS,
-        None => true,
+    let Some(time) = modified else {
+        return true;
+    };
+    let now = SystemTime::now();
+    match now.duration_since(time) {
+        Ok(age) => age.as_secs() > STALE_AFTER_SECS,
+        Err(err) => {
+            // now < time: Clock skew detected.
+            // If future timestamp is within tolerance (<= 60s), treat as fresh.
+            err.duration().as_secs() > CLOCK_SKEW_TOLERANCE_SECS
+        }
+    }
+}
+
+pub fn read_system_snapshot_or_fallback(path: &Path) -> SystemSnapshot {
+    match read_system_snapshot(path) {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            let modified = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+            SystemSnapshot {
+                status: "UNKNOWN".into(),
+                cache_stale: is_stale(modified),
+                modified,
+                source_error: Some(err),
+                os: detect_os(),
+                kernel: detect_kernel(),
+                ..Default::default()
+            }
+        }
     }
 }
 

@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added configurable 90s timeout (overridable via `SYSPILOT_COPILOT_TIMEOUT_SECS`) with `kill_on_drop(true)` and automatic child termination, permanently eliminating indefinite GUI freezes and permanent `COPILOT_IN_FLIGHT = true` lockups.
   - Added `spawn_shell_task_with_callback` in `terminal.rs` for full parity with `spawn_syspilot_task_with_callback` and `spawn_terminal_command_with_callback`.
   - Added hermetic multithreaded unit tests `test_killed_child_reaped_and_slot_freed` and `test_copilot_timeout_enforcement` in `tests.rs`, verifying 0 zombie processes and 100% slot reclamation upon abrupt child SIGKILL (workspace test suite: core 25/25, total 38/38).
+- **Sprint 3: Telemetry & State Ingestion Hardening (`BP-ARGON-SPRINT-03-001`)**:
+  - Implemented clock-skew and NTP step-back resilience in `models.rs` (`CLOCK_SKEW_TOLERANCE_SECS = 60`), preventing false-positive cache degradation alarms (`age > 6h` / `DATA DEGRADED ⚠`) when system time shifts backwards up to 60 seconds.
+  - Hardened Serde state deserialization with fallback parsing (`read_system_snapshot_or_fallback`), guaranteeing zero panics on corrupted or truncated JSON telemetry.
+  - Hardened atomic state writes in `triage.rs` against concurrent multi-threaded collisions with process-unique nanosecond temp files (`.{name}.tmp.{pid}.{seq}.{nanos}`) and guaranteed on-disk durability via parent directory `sync_all()`.
+  - Upgraded systemd failed service detection in `services.rs` to return `Result<Vec<String>, String>`, distinguishing transient/uncontactable user manager sessions (`user_manager_available: false`) from critical system-level service degradation.
+  - Enforced `cmd.kill_on_drop(true)` across `services.rs`, `firewall.rs`, and `triage.rs`, preventing orphaned subprocesses in the OS process table.
+  - Corrected `find_executable` in `updater.rs` to authoritatively honor `SYSPILOT_BIN_*` environment overrides without falling through to system PATH when an override is explicitly set.
+  - Expanded telemetry ingestion in `triage.rs` to ingest `SysHealthMirrors` (`checks.mirrors`) from `summary.json`.
+  - Added 5 hermetic unit tests (`test_clock_skew_resilience`, `test_concurrent_atomic_status_writes`, `test_json_fuzz_property_resilience`, `test_sys_health_ingests_mirrors_telemetry`, `test_services_failed_units_differentiation`), bringing workspace test coverage to 47/47 PASS (core: 34, tray: 12, gui: 1).
 - **Sprint 2: Network & Pacman I/O Hardening (`BP-ARGON-SPRINT-02-001`)**:
   - Implemented hard timeout enforcement in `updater.rs` via `run_command_with_timeout` (15s for `checkupdates`/`yay`, 10s for `sys-health`) with unconditional `cmd.stdin(Stdio::null())` and `cmd.kill_on_drop(true)`.
   - Added proactive check against active processes in `check_official_updates` auto-heal routine to eliminate race conditions around `/tmp/checkup-db-<uid>/db.lck`.

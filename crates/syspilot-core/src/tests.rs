@@ -839,32 +839,42 @@ async fn test_subprocess_timeout_enforcement_and_kill_on_drop() {
     );
 }
 
-#[tokio::test]
-async fn test_updater_offline_mode_resilience() {
+#[test]
+fn test_updater_offline_mode_resilience() {
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     use crate::updater::{check_aur_updates, check_official_updates, check_standalone_updates};
 
-    unsafe {
-        std::env::set_var("SYSPILOT_BIN_CHECKUPDATES", "/nonexistent/checkupdates/bin");
-        std::env::set_var("SYSPILOT_BIN_YAY", "/nonexistent/yay/bin");
-        std::env::set_var("SYSPILOT_BIN_SYS_HEALTH", "/nonexistent/sys-health/bin");
-    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
 
-    let (core, regular, pkgs) = check_official_updates().await;
-    assert_eq!(core, 0);
-    assert_eq!(regular, 0);
-    assert!(pkgs.is_empty());
+    rt.block_on(async {
+        unsafe {
+            std::env::set_var("SYSPILOT_BIN_CHECKUPDATES", "/nonexistent/checkupdates/bin");
+            std::env::set_var("SYSPILOT_BIN_YAY", "/nonexistent/yay/bin");
+            std::env::set_var("SYSPILOT_BIN_SYS_HEALTH", "/nonexistent/sys-health/bin");
+        }
 
-    let aur = check_aur_updates().await;
-    assert_eq!(aur, 0);
+        let (core, regular, pkgs) = check_official_updates().await;
+        assert_eq!(core, 0);
+        assert_eq!(regular, 0);
+        assert!(pkgs.is_empty());
 
-    let standalone = check_standalone_updates().await;
-    assert_eq!(standalone, 0);
+        let aur = check_aur_updates().await;
+        assert_eq!(aur, 0);
 
-    unsafe {
-        std::env::remove_var("SYSPILOT_BIN_CHECKUPDATES");
-        std::env::remove_var("SYSPILOT_BIN_YAY");
-        std::env::remove_var("SYSPILOT_BIN_SYS_HEALTH");
-    }
+        let standalone = check_standalone_updates().await;
+        assert_eq!(standalone, 0);
+
+        unsafe {
+            std::env::remove_var("SYSPILOT_BIN_CHECKUPDATES");
+            std::env::remove_var("SYSPILOT_BIN_YAY");
+            std::env::remove_var("SYSPILOT_BIN_SYS_HEALTH");
+        }
+    });
 }
 
 #[test]
@@ -918,4 +928,268 @@ fn test_fwupd_nvram_quirk_insufficient_space() {
         quirks[0].reason,
         "NVRAM write limit (insufficient NVRAM storage)"
     );
+}
+
+#[test]
+fn test_clock_skew_resilience() {
+    use crate::models::{STALE_AFTER_SECS, SystemSnapshot, is_stale};
+    use std::time::{Duration, SystemTime};
+
+    let now = SystemTime::now();
+
+    // 1. Clock skew <= 60s in future (e.g. +10s) -> Not stale, age 0s
+    let future_fresh = now + Duration::from_secs(10);
+    assert!(!is_stale(Some(future_fresh)));
+
+    let snap_fresh = SystemSnapshot {
+        modified: Some(future_fresh),
+        ..Default::default()
+    };
+    assert_eq!(snap_fresh.age_seconds(), Some(0));
+    assert_eq!(snap_fresh.age_label(), "0s");
+
+    // 2. Clock skew <= 60s boundary (+59s) -> Not stale
+    let future_fresh_59 = now + Duration::from_secs(59);
+    assert!(!is_stale(Some(future_fresh_59)));
+    let snap_fresh_59 = SystemSnapshot {
+        modified: Some(future_fresh_59),
+        ..Default::default()
+    };
+    assert_eq!(snap_fresh_59.age_seconds(), Some(0));
+
+    // 3. Excessive clock skew > 60s (+120s) -> Stale, age unknown
+    let future_excessive = now + Duration::from_secs(120);
+    assert!(is_stale(Some(future_excessive)));
+
+    let snap_excessive = SystemSnapshot {
+        modified: Some(future_excessive),
+        ..Default::default()
+    };
+    assert_eq!(snap_excessive.age_seconds(), None);
+    assert_eq!(snap_excessive.age_label(), "unknown/clock-skew");
+
+    // 4. Normal past (< STALE_AFTER_SECS) -> Not stale
+    let past_valid = now - Duration::from_secs(120);
+    assert!(!is_stale(Some(past_valid)));
+
+    // 5. Expired past (> STALE_AFTER_SECS) -> Stale
+    let past_expired = now - Duration::from_secs(STALE_AFTER_SECS + 60);
+    assert!(is_stale(Some(past_expired)));
+}
+
+#[test]
+fn test_concurrent_atomic_status_writes() {
+    use crate::models::{StatusJson, StatusUpdates, read_system_snapshot};
+    use crate::triage::write_status_json_atomic;
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp_dir = std::env::temp_dir().join(format!("syspilot-atomic-concurrent-{nanos}"));
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+    let status_path = Arc::new(tmp_dir.join("status.json"));
+
+    let mut handles = Vec::new();
+    for thread_idx in 0..16 {
+        let p = Arc::clone(&status_path);
+        handles.push(thread::spawn(move || {
+            for i in 0..10 {
+                let payload = StatusJson {
+                    schema_version: "1.0".into(),
+                    status: "FLIGHT_READY".into(),
+                    status_reasons: Vec::new(),
+                    informational_reasons: Vec::new(),
+                    timestamp: Some(format!("thread-{thread_idx}-iter-{i}")),
+                    gaming_mode: false,
+                    reboot_pending: false,
+                    updates: StatusUpdates {
+                        total: 0,
+                        core_count: 0,
+                        regular_count: 0,
+                        aur_count: 0,
+                    },
+                    failed_services: None,
+                    disk: None,
+                    pacnew: None,
+                    orphans: None,
+                    sys_health: None,
+                    security: None,
+                    firmware: None,
+                    firewall: None,
+                };
+                write_status_json_atomic(&p, &payload)
+                    .expect("Concurrent atomic write must succeed");
+            }
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    // Verify destination exists and parses cleanly
+    assert!(status_path.is_file());
+    let snapshot = read_system_snapshot(&status_path)
+        .expect("Snapshot written by concurrent threads must parse without corruption");
+    assert_eq!(snapshot.status, "FLIGHT_READY");
+
+    // Verify NO temporary files (.status.json.tmp.*) remain orphaned
+    let entries = std::fs::read_dir(&tmp_dir).unwrap();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        assert!(
+            !name.starts_with(".status.json.tmp"),
+            "Dangling temporary file found: {name}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+#[test]
+fn test_json_fuzz_property_resilience() {
+    use crate::models::{read_system_snapshot, read_system_snapshot_or_fallback};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp_file = std::env::temp_dir().join(format!("syspilot-fuzz-{nanos}/status.json"));
+    std::fs::create_dir_all(tmp_file.parent().unwrap()).unwrap();
+
+    let valid_base = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "status_reasons": ["all good"],
+        "updates": {"total": 3, "core_count": 1, "regular_count": 2, "aur_count": 0},
+        "gaming_mode": false,
+        "reboot_pending": false
+    }"#;
+
+    // Fuzz iteration seeds (500 variations)
+    let mut prng_state: u64 = 0x853c49e6748fea9b;
+    let mut next_u32 = || {
+        prng_state = prng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (prng_state >> 32) as u32
+    };
+
+    for i in 0..500 {
+        let mut bytes = valid_base.as_bytes().to_vec();
+        match i % 5 {
+            0 => {
+                // Truncation at arbitrary cut points
+                let cut = (next_u32() as usize) % (bytes.len() + 1);
+                bytes.truncate(cut);
+            }
+            1 => {
+                // Byte flip / corruption
+                if !bytes.is_empty() {
+                    let idx = (next_u32() as usize) % bytes.len();
+                    bytes[idx] ^= (next_u32() & 0xFF) as u8;
+                }
+            }
+            2 => {
+                // Insertion of null bytes and special chars
+                let idx = (next_u32() as usize) % (bytes.len() + 1);
+                bytes.insert(idx, 0x00);
+            }
+            3 => {
+                // Huge values / unexpected types
+                let malformed = format!(
+                    r#"{{"schema_version": {}, "status": null, "updates": {{"total": 99999999999}}}}"#,
+                    i
+                );
+                bytes = malformed.into_bytes();
+            }
+            _ => {
+                // Random junk
+                let len = (next_u32() as usize) % 256;
+                bytes = (0..len).map(|_| (next_u32() & 0xFF) as u8).collect();
+            }
+        }
+
+        std::fs::write(&tmp_file, &bytes).unwrap();
+
+        // 1. read_system_snapshot MUST NOT PANIC
+        let _ = read_system_snapshot(&tmp_file);
+
+        // 2. read_system_snapshot_or_fallback MUST NEVER PANIC AND ALWAYS RETURN A VALID SNAPSHOT
+        let snapshot = read_system_snapshot_or_fallback(&tmp_file);
+        if bytes.is_empty() || bytes != valid_base.as_bytes() {
+            // Must have handled errors gracefully
+            assert!(
+                snapshot.source_error.is_some() || snapshot.status == "FLIGHT_READY",
+                "Snapshot must report error or valid status"
+            );
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
+}
+
+#[test]
+fn test_sys_health_ingests_mirrors_telemetry() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let state_dir = std::env::temp_dir().join(format!("syspilot-mirrors-test-{nanos}"));
+    let summary_dir = state_dir.join("system-health");
+    std::fs::create_dir_all(&summary_dir).unwrap();
+
+    let summary_content = r#"{
+        "schema_version": "2.0",
+        "counts": {"errors": 1, "warnings": 2},
+        "checks": {
+            "mirrors": {
+                "arch_primary_alive": true,
+                "arch_age_days": 0.42
+            }
+        },
+        "environment": {
+            "os": "EndeavourOS",
+            "kernel": "6.12.0-zen"
+        }
+    }"#;
+    std::fs::write(summary_dir.join("summary.json"), summary_content).unwrap();
+
+    unsafe {
+        std::env::set_var("XDG_STATE_HOME", &state_dir);
+    }
+
+    let health = crate::triage::load_sys_health();
+
+    unsafe {
+        std::env::remove_var("XDG_STATE_HOME");
+    }
+
+    assert!(health.available);
+    assert_eq!(health.errors, 1);
+    assert_eq!(health.warnings, 2);
+    let mirrors = health.mirrors.expect("Mirrors telemetry must be ingested");
+    assert_eq!(mirrors.arch_primary_alive, Some(true));
+    assert_eq!(mirrors.arch_age_days, Some(0.42));
+
+    let _ = std::fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn test_services_failed_units_differentiation() {
+    use crate::models::FailedServicesStatus;
+
+    let status = FailedServicesStatus::default();
+    assert!(status.user_manager_available);
+    assert!(status.system.is_empty());
+    assert!(status.user.is_empty());
+
+    let deserialized: FailedServicesStatus =
+        serde_json::from_str(r#"{"system":[], "user":[]}"#).unwrap();
+    assert!(deserialized.user_manager_available); // Backward compatible default
 }

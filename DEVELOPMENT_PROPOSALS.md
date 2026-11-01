@@ -549,6 +549,28 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-023: [IMPLEMENTED] Sprint 3 100% Completion: Telemetry & State Ingestion Hardening
+- **Status:** `[IMPLEMENTED]` *(SRE Certified — Audit `BP-ARGON-SPRINT-03-001`, Auditor Argon Pro)*
+- **Data zgłoszenia:** 2026-11-01
+- **Źródło:** SysPilot SRE Audit Plan (`SRE_AUDIT_PLAN.md` Sprint 3 Completion)
+- **Audyt SRE:**
+  - `BP-ARGON-SPRINT-03-001` (Auditor Argon Pro): Hartowanie trwałości telemetrii, odporności na NTP/clock-skew, wielowątkowego zapisu atomowego i deserializacji Serde. Wprowadzenie `CLOCK_SKEW_TOLERANCE_SECS = 60` w `models.rs` eliminujące fałszywe alarmy `DATA DEGRADED ⚠` przy cofnięciu zegara. Dodanie funkcji `read_system_snapshot_or_fallback` odpornej na zniekształcone dane. Wprowadzenie unikalnego nazewnictwa plików tymczasowych (`.{name}.tmp.{pid}.{seq}.{nanos}`) z `sync_all()` na pliku i katalogu nadrzędnym w `triage.rs`. Różnicowanie statusu `user_manager_available` w `services.rs` zapobiegające fałszywym alarmom o awarii usług systemowych. Rozszerzenie `kill_on_drop(true)` na `services.rs`, `firewall.rs` i `triage.rs`. Autorytatywna obsługa zmiennych `SYSPILOT_BIN_*` w `updater.rs`. Pobieranie telemetrii `checks.mirrors` z `summary.json`. Dodanie 5 hermetycznych testów jednostkowych (clock-skew, atomic write contention, property fuzzing, mirrors telemetry, services differentiation).
+- **Docelowe Komponenty:**
+  - `crates/syspilot-core/src/models.rs` (`CLOCK_SKEW_TOLERANCE_SECS`, `read_system_snapshot_or_fallback`, `FailedServicesStatus.user_manager_available`, `SysHealthMirrors`)
+  - `crates/syspilot-core/src/triage.rs` (`ATOMIC_WRITE_SEQ`, directory fsync, `checks.mirrors` ingestion, `kill_on_drop(true)`)
+  - `crates/syspilot-core/src/services.rs` (`query_failed_units`, `user_manager_available`, `kill_on_drop(true)`)
+  - `crates/syspilot-core/src/firewall.rs` (`kill_on_drop(true)`)
+  - `crates/syspilot-core/src/updater.rs` (`find_executable` authoritative env handling)
+  - `crates/syspilot-core/src/tests.rs` (`test_clock_skew_resilience`, `test_concurrent_atomic_status_writes`, `test_json_fuzz_property_resilience`, `test_sys_health_ingests_mirrors_telemetry`, `test_services_failed_units_differentiation`)
+  - `CHANGELOG.md`
+  - `AUDIT_MATRIX.md`
+  - `SRE_AUDIT_PLAN.md`
+- **Kontekst i Uzasadnienie:**
+  Drobne przesunięcia zegara systemowego przez NTP (np. cofnięcie o 1–60 s) powodowały błąd w obliczaniu wieku snapshotu (`duration_since(mtime)`), co prowadziło do fałszywego oznaczania danych jako przeterminowane (`is_stale() == true`). Ponadto, wielowątkowy zapis do wspólnego pliku `.status.json.tmp.{pid}` mógł prowadzić do kolizji i utraty integralności pliku w przypadku awarii zasilania bez fsync katalogu. Nowy moduł zapewnia pełną spójność ACID na poziomie systemu plików oraz absolutną odporność parsera JSON.
+- **Weryfikacja:** `dev-tools/verify-rust.sh -q` ➔ 47/47 unit tests PASS (core: 34, tray: 12, gui: 1), Clippy clean, fmt clean.
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

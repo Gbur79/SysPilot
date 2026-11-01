@@ -62,13 +62,13 @@ pub async fn get_transient_desktop_app_units(unit_names: &[String]) -> HashSet<S
     args.extend(candidates.iter().cloned());
 
     let run_cmd = async {
-        Command::new("systemctl")
-            .args(&args)
+        let mut cmd = Command::new("systemctl");
+        cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .output()
-            .await
+            .kill_on_drop(true);
+        cmd.output().await
     };
 
     match timeout(Duration::from_millis(1000), run_cmd).await {
@@ -76,48 +76,67 @@ pub async fn get_transient_desktop_app_units(unit_names: &[String]) -> HashSet<S
             let stdout_str = String::from_utf8_lossy(&output.stdout);
             parse_systemctl_show_transient(&stdout_str, &candidates)
         }
-        _ => HashSet::new(), // Fail open on timeout or execution error
+        _ => HashSet::new(),
     }
 }
 
-pub async fn query_failed_units(user_mode: bool) -> Vec<String> {
+pub async fn query_failed_units(user_mode: bool) -> Result<Vec<String>, String> {
     let mut args = vec!["--failed", "--no-legend", "--plain"];
     if user_mode {
         args.insert(0, "--user");
     }
 
     let run_cmd = async {
-        Command::new("systemctl")
-            .args(&args)
+        let mut cmd = Command::new("systemctl");
+        cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .await
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        cmd.output().await
     };
 
     match timeout(Duration::from_millis(1500), run_cmd).await {
-        Ok(Ok(output)) if output.status.success() => {
-            let stdout_str = String::from_utf8_lossy(&output.stdout);
-            stdout_str
-                .lines()
-                .filter_map(|line| line.split_whitespace().next().map(|s| s.to_string()))
-                .collect()
+        Ok(Ok(output)) => {
+            if output.status.success() {
+                let stdout_str = String::from_utf8_lossy(&output.stdout);
+                let units = stdout_str
+                    .lines()
+                    .filter_map(|line| line.split_whitespace().next().map(|s| s.to_string()))
+                    .collect();
+                Ok(units)
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let err_msg = if stderr.is_empty() {
+                    format!("systemctl failed with exit code {:?}", output.status.code())
+                } else {
+                    stderr
+                };
+                Err(err_msg)
+            }
         }
-        _ => Vec::new(),
+        Ok(Err(e)) => Err(format!("failed to spawn systemctl: {e}")),
+        Err(_) => Err("systemctl query timed out".to_string()),
     }
 }
 
 pub async fn check_failed_services() -> FailedServicesStatus {
-    let system = query_failed_units(false).await;
-    let raw_user = query_failed_units(true).await;
+    let system = query_failed_units(false).await.unwrap_or_default();
+    let (user, user_manager_available) = match query_failed_units(true).await {
+        Ok(raw_user) => {
+            let ignored_user = get_transient_desktop_app_units(&raw_user).await;
+            let user = raw_user
+                .into_iter()
+                .filter(|u| !ignored_user.contains(u))
+                .collect();
+            (user, true)
+        }
+        Err(_) => (Vec::new(), false),
+    };
 
-    let ignored_user = get_transient_desktop_app_units(&raw_user).await;
-
-    let user = raw_user
-        .into_iter()
-        .filter(|u| !ignored_user.contains(u))
-        .collect();
-
-    FailedServicesStatus { system, user }
+    FailedServicesStatus {
+        system,
+        user,
+        user_manager_available,
+    }
 }

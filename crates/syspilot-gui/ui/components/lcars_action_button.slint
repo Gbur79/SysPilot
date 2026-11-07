@@ -1,0 +1,34 @@
+export component LcarsActionButton inherits Rectangle {
+    in property <string> text: "";
+    in property <color> fill-color: #ffaa66;
+    callback clicked();
+
+    height: 44px;
+    background: touch.pressed ? root.fill-color.darker(15%) : (touch.has-hover ? @linear-gradient(90deg, root.fill-color 0%, root.fill-color.brighter(12%) 100%) : @linear-gradient(90deg, root.fill-color.darker(5%) 0%, root.fill-color.brighter(6%) 100%));
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    drop-shadow-blur: touch.has-hover ? 14px : 0px;
+    drop-shadow-color: root.fill-color.transparentize(40%);
+    drop-shadow-offset-x: 0px;
+    drop-shadow-offset-y: 0px;
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: 10px;
+        padding-right: 10px;
+        Text {
+            text: root.text;
+            color: #000000;
+            font-size: 13px;
+            font-family: "Antonio";
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            vertical-alignment: center;
+        }
+    }
+}

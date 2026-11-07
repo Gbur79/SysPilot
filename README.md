@@ -1,7 +1,7 @@
 # ✈️ SysPilot
 
 > **The Token-Lean SRE Desktop Copilot & Sentinel for Arch Linux & Derivatives**  
-> *Ultra-lightweight 24/7 Rust Sentinel (~3.2 MB RAM) • Decoupled on-demand GUI • Zero token waste • Native D-Bus.*
+> *Ultra-lightweight 24/7 Rust Sentinel (~3.2 MB RAM) • Dual-Skin Cockpit (Classic & Star Trek LCARS) • Functional Stardate Engine • Zero token waste • Native D-Bus.*
 
 ---
 
@@ -85,6 +85,13 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
   - Single instance locking via non-blocking `libc::flock`.
   - Dynamic **Hardware Platform & GPU** telemetry row detecting CPU architecture, GPU model, and active driver stack without hardcoded assumptions.
   - Responsive status synchronization: zero lag between tray amber warnings and dashboard components.
+- **🖖 Star Trek Okuda 1987 LCARS Dual-Skin Cockpit:**
+  - **Authentic LCARS 1987 Architecture:** Faithful recreation of Michael Okuda's iconic Star Trek interface design, featuring curved 2D structural elbows, segmented pill pods, authentic color accents (Pumpkin `#ffaa66`, Gold `#ffcc00`, Lavender `#cc99cc`, Ice Blue `#99ccff`, Alert Red `#ef4444`), and typography powered by the embedded Antonio condensed font.
+  - **Dynamic Astronomical Stardate Engine:** Built-in real-time mathematical stardate calculator based on the Gregorian UTC calendar ($STARDATE = YEAR + \frac{\text{day of year}}{\text{days in year}} + \frac{\text{seconds since midnight}}{86400.0}$), generating authentic stardates (e.g. `STARDATE 2026.311.64`) updated dynamically every 10 seconds.
+  - **1-Click Holodeck Runtime Switching (`HOLODECK ⇄`):** Switch instantly between the modern Classic Cyberpunk theme and the Star Trek LCARS Cockpit. The active skin choice is persistently saved to `~/.config/syspilot/skin` and restored on cold starts.
+  - **Content-Aware Dynamic Window Geometry ($H(N)$):** Eliminated static window dimensions and empty black space. The window height scales proportionally based on active tab and pod count ($590\text{px}$ Dashboard, $630\text{px}$ Maintain for 8 items, $780\text{px}$ AI Copilot), preserving snug 36px OLED breathing margins.
+  - **SRE Universalism Hardening:** Zero hardcoded distribution or hardware assumptions. Distribution branding is parsed dynamically from `/etc/os-release`, GPU telemetry is queried with zero-fork sysfs/drm detection across NVIDIA, AMD, Intel, and virtualized DRI, root storage reports universal root capacity, and firewall inspection uses neutral multi-backend telemetry.
+  - **OLED Glassmorphism & High-Contrast Readability:** Hardware-accelerated glowing pods, breathing status indicator, subtle depth effects, and strict left-aligned typography ($x = 138\text{px}$) compliant with WCAG AAA contrast ratios.
 - **Universal & Configurable AI Copilot:**
   - Seamlessly configured via `~/.config/syspilot/config.env` (`SYSPILOT_COPILOT_CMD`, `SYSPILOT_GOOSE_RECIPE`, `COPILOT_LABEL`).
   - Supports private agent profiles or native terminal runners without modifying public codebase.
@@ -94,6 +101,10 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
   - 2) **Refresh & Rank Regional Mirrors:** Benchmarks and ranks fastest regional mirrors with atomic fallback safety.
   - 3) **Safe Maintenance:** Trims pacman cache (retains last 2), vacuums journal logs, and cleans temporary artifacts.
   - 4) **Deep Clean:** Purges user Trash, browser caches, thumbnail caches, and legacy diagnostic runs.
+  - 5) **Security Advisories (CVE Triage):** Deep CVE inspection powered by `arch-audit`.
+  - 6) **Hardware Firmware Upgrade (LVFS):** Upgrades firmware for NVMe, UEFI, and attached peripherals via `fwupdmgr`.
+  - 7) **Pre-Cache Packages:** Interactively pre-downloads large packages ahead of maintenance without locking pacman.
+  - 8) **SysPilot Suite Self-Update & GitHub Sync:** Synchronizes with upstream GitHub releases with 1-click atomic rebuild and restart.
 - **Deterministic 1-Click FAF (Forged Alliance Forever) Setup (`syspilot --faf-repair`):**
   - Verifies 32-bit Vulkan ICDs, syncs `Game.prefs` across Steam libraries, and generates dynamic launcher wrappers.
 
@@ -101,13 +112,17 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
 
 ## 🖥️ Graphical Dashboard Layout
 
-The SysPilot native Slint GUI is organized into 3 streamlined, high-density tabs:
+The SysPilot native Slint GUI features a **dual-skin architecture** (switchable on the fly via the `HOLODECK ⇄` button, with persistent preference in `~/.config/syspilot/skin`):
+- **🖖 Star Trek LCARS 1987 Skin:** Faithful Okuda 2D layout with dynamic Stardate HUD, curved structural elbows, glowing pods, and high-contrast WCAG AAA typography.
+- **✈ Classic Cyberpunk Skin:** Modern dark minimalist cockpit with high-density card containers and direct action buttons.
 
-1. **✈ Dashboard:** Real-time operational cockpit categorized into 3 synchronized telemetry cards:
+The cockpit is organized into 3 streamlined, high-density tabs with proportional dynamic height ($590\text{px}$ Dashboard, $630\text{px}$ Maintenance, $780\text{px}$ AI Copilot):
+
+1. **✈ Dashboard (01 DASHBOARD):** Real-time operational cockpit categorized into 3 synchronized telemetry pods/cards:
    - **System Health & Hygiene:** Kernel & modules sync, root storage (`/`), host firewall shield, failed systemd units, and dynamic Hardware Platform & GPU telemetry.
    - **System Updates:** Core system packages (kernel/drivers), official repository updates, AUR packages, and security advisories (CVE tracking).
    - **Third-Party & Peripherals:** Hardware firmware (LVFS / `fwupd`) and orphan package detection, paired with quick action triggers (`RUN GUARDED UPGRADE`, `DIAGNOSTIC AUDIT`, `PRUNE ORPHANS`).
-2. **🛠 System Maintenance:** 7 atomic, battle-tested maintenance cards:
+2. **🛠 System Maintenance (02 MAINTAIN):** 8 atomic, battle-tested maintenance pods/cards:
    - 1) **Orphan Package Triage & Prune:** Interactive 3-tier orphan purger preserving optional dependencies (`optdepends`).
    - 2) **Refresh & Rank Regional Mirrors:** Benchmarks and ranks fastest regional mirrors with atomic backup.
    - 3) **Safe Maintenance & Cache Trimming:** Trims pacman cache (retains last 2), vacuums journal logs (>14 days), and cleans old run logs.
@@ -115,7 +130,8 @@ The SysPilot native Slint GUI is organized into 3 streamlined, high-density tabs
    - 5) **Security Advisories (CVE Triage):** Deep CVE inspection powered by `arch-audit`.
    - 6) **Hardware Firmware Upgrade (LVFS):** Upgrades firmware for NVMe, UEFI, and attached peripherals via `fwupdmgr`.
    - 7) **Pre-Cache Packages:** Interactively pre-downloads large packages ahead of maintenance without locking pacman.
-3. **🤖 AI Copilot:** Embedded SRE diagnostic console featuring:
+   - 8) **SysPilot Suite Self-Update & GitHub Sync:** Synchronizes with upstream GitHub releases with 1-click atomic rebuild and restart.
+3. **🤖 AI Copilot (03 AI COPILOT):** Embedded SRE diagnostic console featuring:
    - 1-click battle-tested playbooks: **FAF Client Repair**, **Steam / Proton Fix**, **Reconcile .pacnew**, and **PipeWire Audio Fix**.
    - Pluggable multi-agent CLI adapter: Seamlessly routes queries to Google Antigravity CLI (`agy`), Goose, or custom local runners.
    - Live interactive diagnostic console and terminal launcher.
@@ -236,7 +252,7 @@ sysPilot/
 ├── autostart/
 │   └── syspilot.desktop         # XDG autostart entry for background tray sentinel
 ├── packaging/
-│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.0.1)
+│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.1.0)
 │   └── syspilot.desktop         # Application menu desktop launcher (Exec=syspilot --gui)
 └── systemd/
     └── syspilot-tray.service    # User systemd service for 24/7 Rust Sentinel

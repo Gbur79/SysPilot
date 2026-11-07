@@ -21,3 +21,6 @@ build/
 test-suite-root*
 target/
 rust-tray/target/
+*.figcraft
+/syspilot_*.png
+/syspilot_*.gif

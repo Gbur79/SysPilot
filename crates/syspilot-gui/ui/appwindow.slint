@@ -1,26 +1,36 @@
+import "fonts/Antonio.ttf";
 import { Theme } from "theme.slint";
+import { LcarsTopElbow } from "components/lcars_top_elbow.slint";
+import { LcarsBottomElbow } from "components/lcars_bottom_elbow.slint";
+import { LcarsTabButton } from "components/lcars_tab_button.slint";
+import { LcarsActionButton } from "components/lcars_action_button.slint";
+import { LcarsPodHeader } from "components/lcars_pod_header.slint";
+import { LcarsTelemetryRow } from "components/lcars_telemetry_row.slint";
+import { LcarsMaintenanceRow } from "components/lcars_maintenance_row.slint";
+import { MaintenanceCard } from "components/maintenance_card.slint";
+import { ActionButton } from "components/action_button.slint";
 import { Card } from "components/card.slint";
 import { GridRow } from "components/grid_row.slint";
 import { StatusBadge } from "components/status_badge.slint";
-import { ActionButton } from "components/action_button.slint";
 import { TabButton } from "components/tab_button.slint";
-import { MaintenanceCard } from "components/maintenance_card.slint";
 import { LineEdit, ScrollView } from "std-widgets.slint";
 
 export component AppWindow inherits Window {
     title: "SysPilot — System Health & AI Copilot";
-    min-width: 820px;
-    min-height: 640px;
-    preferred-width: 900px;
-    preferred-height: 720px;
-    background: Theme.background;
-    default-font-family: "DejaVu Sans, Noto Sans, Liberation Sans, sans-serif";
+    min-width: 960px;
+    min-height: 520px;
+    preferred-width: 1040px;
+    preferred-height: (root.active-tab == 1) ? (182px + root.maintenance_item_count * 56px) : (root.active-tab == 2 ? 780px : 590px);
+    background: root.is_lcars_skin ? #000000 : Theme.background;
+    default-font-family: root.is_lcars_skin ? "Antonio" : "DejaVu Sans, Noto Sans, Liberation Sans, sans-serif";
 
     // Callbacks - Navigation & Common
     callback refresh_clicked();
     callback upgrade_clicked();
     callback audit_clicked();
     callback prune_clicked();
+    callback toggle_skin();
+    callback tab_changed(int);
 
     // Callbacks - Maintenance
     callback run_orphans_clicked();
@@ -39,6 +49,10 @@ export component AppWindow inherits Window {
 
     // Active Navigation Tab: 0 = Dashboard, 1 = Maintenance, 2 = Copilot
     in-out property <int> active-tab: 0;
+    in-out property <bool> is_refreshing: false;
+    in-out property <string> refresh_label: "04  REFRESH DATA";
+    in-out property <bool> is_lcars_skin: true;
+    in property <int> maintenance_item_count: 8;
 
     // Header Properties
     in property <bool> has_error: false;
@@ -46,8 +60,9 @@ export component AppWindow inherits Window {
     in property <string> overall_status: "INITIALIZING";
     in property <string> overall_status_label: "CONNECTING...";
     in property <color> overall_status_color: Theme.text-muted;
-    in property <string> hardware_info: "Probing system environment...";
-    in property <string> copilot_badge_label: "🤖 Probing Copilot...";
+    in property <string> hardware_info: "INITIALIZING ENVIRONMENT...";
+    in property <string> stardate_label: "STARDATE 2026.311.00";
+    in property <string> copilot_badge_label: "COPILOT STANDBY";
 
     // Dashboard Telemetry Properties
     in property <string> kernel_status: "--";
@@ -101,302 +116,1106 @@ export component AppWindow inherits Window {
 
     // Self-Update & GitHub Sync Properties
     in property <bool> has_app_update: false;
-    in property <string> app_update_badge: "v2.0.2 AVAILABLE 🚀";
-    in property <string> self_update_title: "8) 🚀 SysPilot Suite Self-Update & GitHub Sync";
+    in property <string> app_update_badge: "v2.1.0 AVAILABLE";
+    in property <string> self_update_title: "SysPilot Suite Self-Update & GitHub Sync";
     in property <string> self_update_desc: "Synchronizes the SysPilot suite with the latest upstream GitHub release and performs atomic rebuild.";
     in property <string> self_update_btn_text: "Check & Update Suite";
 
-    VerticalLayout {
-        padding: 16px;
-        spacing: 12px;
+    // Dynamic LCARS Respiration Pulse: Calm sleep breathing when nominal, faster when alert
+    property <duration> pulse-period: (root.overall_status == "ACTION_REQUIRED") ? 1000ms : ((root.overall_status == "PRE_FLIGHT_ATTENTION") ? 1800ms : 2800ms);
+    property <float> pulse-min: (root.overall_status == "ACTION_REQUIRED") ? 0.45 : ((root.overall_status == "PRE_FLIGHT_ATTENTION") ? 0.65 : 0.76);
+    property <float> lcars-pulse: root.pulse-min + (1.0 - root.pulse-min) * ((1.0 + sin(360deg * animation-tick() / root.pulse-period)) / 2.0);
 
-        // Top HUD Header
+    // LCARS Frame Status Color (Reflects system operational condition)
+    property <color> frame-color: (root.overall_status == "ACTION_REQUIRED") ? Theme.status-red : ((root.overall_status == "PRE_FLIGHT_ATTENTION") ? Theme.okuda-amber : root.overall_status_color);
+
+    // ========================================================
+    // SKIN 1: STAR TREK LCARS COCKPIT (OLED OKUDA STANDARD)
+    // ========================================================
+    if (root.is_lcars_skin) : Rectangle {
+        width: 100%;
+        height: 100%;
+
+        // 1. TOP LEFT L-ELBOW (ARCH)
         Rectangle {
-            vertical-stretch: 0;
-            background: root.overall_status_color.transparentize(92%);
-            border-color: root.overall_status_color.transparentize(50%);
-            border-width: 2px;
-            border-radius: Theme.radius-md;
+            x: 12px;
+            y: 12px;
+            width: 220px;
+            height: 120px;
+            opacity: root.lcars-pulse;
+
+            LcarsTopElbow {
+                x: 0px;
+                y: 0px;
+                fill-color: root.frame-color;
+            }
+
+            Text {
+                x: 14px;
+                y: 14px;
+                text: "441-A";
+                color: #000000;
+                font-size: 14px;
+                font-family: "Antonio";
+                font-weight: 800;
+            }
+        }
+
+        // 2. TOP HEADER ROW (Cutout Title - Centered with Breathing Room)
+        HorizontalLayout {
+            x: 232px;
+            y: 12px;
+            width: 348px;
+            height: 44px;
+            spacing: 16px;
+            alignment: center;
+            opacity: root.lcars-pulse;
+
+            Text {
+                text: "SYS PILOT";
+                color: root.frame-color;
+                font-size: 26px;
+                font-family: "Antonio";
+                font-weight: 800;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: root.hardware_info;
+                color: root.frame-color;
+                font-size: 16px;
+                font-family: "Antonio";
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+        }
+
+        // Trailing Top Rail (Horizon Dissolve into Deep Space)
+        Rectangle {
+            x: 580px;
+            y: 12px;
+            width: root.width - 592px;
+            height: 44px;
+            background: @linear-gradient(90deg, root.frame-color 0%, root.frame-color 65%, root.frame-color.transparentize(30%) 85%, root.frame-color.transparentize(75%) 100%);
+            border-top-right-radius: 22px;
+            border-bottom-right-radius: 22px;
+            opacity: root.lcars-pulse;
 
             HorizontalLayout {
-                padding: 14px;
+                padding-left: 18px;
+                padding-right: 14px;
                 alignment: space-between;
 
                 VerticalLayout {
-                    spacing: 4px;
                     alignment: center;
+                    Text {
+                        text: root.stardate_label;
+                        color: #000000;
+                        font-size: 14px;
+                        font-family: "Antonio";
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+
+                    // Independent illuminated status sub-window
+                    Rectangle {
+                        background: @linear-gradient(90deg, root.overall_status_color.darker(18%) 0%, root.overall_status_color.darker(10%) 60%, root.overall_status_color.transparentize(25%) 100%);
+                        border-radius: 14px;
+                        height: 28px;
+                        drop-shadow-blur: 10px;
+                        drop-shadow-color: root.overall_status_color.darker(15%).transparentize(40%);
+                        drop-shadow-offset-x: 0px;
+                        drop-shadow-offset-y: 0px;
+
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            alignment: center;
+
+                            Text {
+                                text: root.overall_status_label;
+                                color: #000000;
+                                font-size: 12px;
+                                font-family: "Antonio";
+                                font-weight: 800;
+                                letter-spacing: 0.5px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. LEFT SPINE NAVIGATION (Vertically Centered)
+        VerticalLayout {
+            x: 12px;
+            y: 136px;
+            width: 138px;
+            spacing: 4px;
+
+            LcarsTabButton {
+                text: "01  DASHBOARD";
+                active: root.active-tab == 0;
+                base-color: Theme.okuda-peach;
+                active-color: Theme.okuda-peach;
+                clicked => { root.active-tab = 0; root.tab_changed(0); }
+            }
+
+            LcarsTabButton {
+                text: "02  MAINTAIN";
+                active: root.active-tab == 1;
+                base-color: Theme.enterprise-lilac;
+                active-color: Theme.okuda-peach;
+                clicked => { root.active-tab = 1; root.tab_changed(1); }
+            }
+
+            LcarsTabButton {
+                text: "03  AI COPILOT";
+                active: root.active-tab == 2;
+                base-color: Theme.federation-blue;
+                active-color: Theme.okuda-peach;
+                clicked => { root.active-tab = 2; root.tab_changed(2); }
+            }
+
+            LcarsTabButton {
+                text: root.refresh_label;
+                active: root.is_refreshing;
+                base-color: Theme.tricorder-cyan;
+                active-color: Theme.tricorder-cyan;
+                clicked => { root.refresh_clicked(); }
+            }
+
+            // Pasek Pomocniczy 1
+            Rectangle {
+                width: 128px;
+                height: 16px;
+                background: #3d240c;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    alignment: start;
+                    Text {
+                        text: "441-9886";
+                        color: #aaaaaa;
+                        font-size: 10px;
+                        font-family: "Antonio";
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Pasek Pomocniczy 2
+            Rectangle {
+                width: 128px;
+                height: 16px;
+                background: #2e1633;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    alignment: start;
+                    Text {
+                        text: "02-65459";
+                        color: #aaaaaa;
+                        font-size: 10px;
+                        font-family: "Antonio";
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Kapsuła HOLODECK (Przełącznik Skórek z zachowaniem 4px marginesu do Calipera)
+            Rectangle {
+                width: 128px;
+                height: 28px;
+                background: touch_holodeck.has-hover ? #fde047 : Theme.okuda-gold;
+                border-radius: 4px;
+                drop-shadow-blur: touch_holodeck.has-hover ? 8px : 4px;
+                drop-shadow-color: Theme.okuda-gold.transparentize(50%);
+                drop-shadow-offset-x: 0px;
+                drop-shadow-offset-y: 0px;
+
+                touch_holodeck := TouchArea {
+                    clicked => { root.toggle_skin(); }
+                    mouse-cursor: pointer;
+                }
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    alignment: space-between;
+
+                    Text {
+                        text: "HOLODECK";
+                        color: #000000;
+                        font-size: 12px;
+                        font-family: "Antonio";
+                        font-weight: 800;
+                        letter-spacing: 0.5px;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "⇄";
+                        color: #000000;
+                        font-size: 13px;
+                        font-weight: 800;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // 4. LOWER CALIPER (Monolithic Seamless Spine down to Curve & SEC-01 Rail)
+        Rectangle {
+            x: 12px;
+            y: 390px;
+            width: 220px;
+            height: root.height - 12px - 390px;
+            opacity: root.lcars-pulse;
+
+            LcarsBottomElbow {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                fill-color: root.frame-color;
+            }
+
+            Text {
+                x: 14px;
+                y: parent.height - 44px;
+                height: 44px;
+                text: "SEC-01";
+                color: #000000;
+                font-size: 14px;
+                font-family: "Antonio";
+                font-weight: 800;
+                vertical-alignment: center;
+            }
+        }
+
+        // 5. BOTTOM ACTION RAIL (Segmented Blocks)
+        HorizontalLayout {
+            x: 236px;
+            y: root.height - 56px;
+            width: root.width - 248px;
+            height: 44px;
+            spacing: 4px;
+
+            if (root.active-tab == 0) : LcarsActionButton {
+                text: "ENGAGE UPGRADE";
+                fill-color: Theme.okuda-peach;
+                clicked => { root.upgrade_clicked(); }
+            }
+            if (root.active-tab == 0) : LcarsActionButton {
+                text: "DIAGNOSTIC AUDIT";
+                fill-color: Theme.enterprise-lilac;
+                clicked => { root.audit_clicked(); }
+            }
+            if (root.active-tab == 0) : LcarsActionButton {
+                text: "SYSTEM HYGIENE";
+                fill-color: Theme.tricorder-cyan;
+                clicked => { root.prune_clicked(); }
+            }
+
+            if (root.active-tab == 1) : LcarsActionButton {
+                text: "SAFE MAINTENANCE";
+                fill-color: Theme.okuda-peach;
+                clicked => { root.run_maintenance_clicked(); }
+            }
+            if (root.active-tab == 1) : LcarsActionButton {
+                text: "FASTEST MIRRORS";
+                fill-color: Theme.enterprise-lilac;
+                clicked => { root.run_mirrors_clicked(); }
+            }
+            if (root.active-tab == 1) : LcarsActionButton {
+                text: "ORPHAN TRIAGE";
+                fill-color: Theme.tricorder-cyan;
+                clicked => { root.run_orphans_clicked(); }
+            }
+
+            if (root.active-tab == 2) : LcarsActionButton {
+                text: "LAUNCH TERMINAL";
+                fill-color: Theme.okuda-peach;
+                clicked => { root.copilot_terminal_clicked(); }
+            }
+            if (root.active-tab == 2) : LcarsActionButton {
+                text: "DIAGNOSTIC AUDIT";
+                fill-color: Theme.enterprise-lilac;
+                clicked => { root.copilot_playbook_clicked("audit"); }
+            }
+            if (root.active-tab == 2) : LcarsActionButton {
+                text: "SERVICE REPAIR";
+                fill-color: Theme.tricorder-cyan;
+                clicked => { root.copilot_playbook_clicked("repair"); }
+            }
+
+            // Trailing Block (Horizon Dissolve into Deep Space)
+            Rectangle {
+                background: @linear-gradient(90deg, root.frame-color 0%, root.frame-color 65%, root.frame-color.transparentize(30%) 85%, root.frame-color.transparentize(75%) 100%);
+                border-top-right-radius: 22px;
+                border-bottom-right-radius: 22px;
+                horizontal-stretch: 2;
+                opacity: root.lcars-pulse;
+
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 20px;
+                    alignment: space-between;
+
+                    Text {
+                        text: root.active-tab == 0 ? "SYS-01 // TELEMETRY" : (root.active-tab == 1 ? "SYS-02 // MAINTENANCE" : "SYS-03 // AI COPILOT");
+                        color: #000000;
+                        font-size: 13px;
+                        font-family: "Antonio";
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: root.copilot_badge_label;
+                        color: #000000;
+                        font-size: 13px;
+                        font-family: "Antonio";
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // 6. CENTRAL PODS DECK (Pure OLED Viewport)
+        Rectangle {
+            x: 176px;
+            y: 66px;
+            width: root.width - 188px;
+            height: root.height - 128px;
+            background: #00000000;
+            clip: true;
+
+            if (root.has_error) : Rectangle {
+                y: 0px;
+                height: 36px;
+                background: Theme.status-red.transparentize(85%);
+                border-color: Theme.status-red;
+                border-width: 1px;
+                border-radius: Theme.radius-sm;
+                HorizontalLayout {
+                    padding: 8px;
+                    Text {
+                        text: root.error_message;
+                        color: Theme.status-red;
+                        font-size: 12px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // TAB 0: DASHBOARD VIEW
+            if (root.active-tab == 0) : VerticalLayout {
+                width: parent.width;
+                spacing: 12px;
+                alignment: start;
+
+                // POD 01: SYSTEM HEALTH & HYGIENE
+                VerticalLayout {
+                    width: parent.width;
+                    spacing: 6px;
+                    LcarsPodHeader {
+                        title: "POD 01 // SYSTEM HEALTH & HYGIENE";
+                        accent-color: Theme.okuda-peach;
+                    }
+                    LcarsTelemetryRow {
+                        label: "KERNEL & MODULES";
+                        value: root.kernel_details;
+                        status: root.kernel_status;
+                        accent-color: Theme.okuda-peach;
+                        status-color: root.kernel_color;
+                    }
+                    LcarsTelemetryRow {
+                        label: "ROOT STORAGE (/)";
+                        value: root.root_details;
+                        status: root.root_status;
+                        accent-color: Theme.okuda-peach;
+                        status-color: root.root_color;
+                    }
+                    LcarsTelemetryRow {
+                        label: "HOST FIREWALL";
+                        value: root.firewall_details;
+                        status: root.firewall_status;
+                        accent-color: Theme.okuda-peach;
+                        status-color: root.firewall_color;
+                    }
+                    LcarsTelemetryRow {
+                        label: "FAILED SYSTEM SERVICES";
+                        value: root.failed_services_details;
+                        status: root.failed_services_status;
+                        accent-color: Theme.okuda-peach;
+                        status-color: root.failed_services_color;
+                    }
+                    LcarsTelemetryRow {
+                        label: "HARDWARE PLATFORM & GPU";
+                        value: root.gpu_details;
+                        status: root.gpu_status;
+                        accent-color: Theme.okuda-peach;
+                        status-color: root.gpu_color;
+                    }
+                }
+
+                // POD 02: SYSTEM UPDATES & REPOSITORIES
+                VerticalLayout {
+                    width: parent.width;
+                    spacing: 6px;
+                    LcarsPodHeader {
+                        title: "POD 02 // SYSTEM UPDATES & REPOSITORIES";
+                        accent-color: Theme.enterprise-lilac;
+                    }
+                    LcarsTelemetryRow {
+                        label: "CORE SYSTEM (KERNEL/DRV)";
+                        value: root.updates_core_details;
+                        status: root.updates_core_text;
+                        accent-color: Theme.enterprise-lilac;
+                        status-color: root.updates_core_color;
+                    }
+                    LcarsTelemetryRow {
+                        label: "OFFICIAL REPOSITORIES";
+                        value: root.updates_repo_details;
+                        status: root.updates_repo_text;
+                        accent-color: Theme.enterprise-lilac;
+                        status-color: root.updates_repo_color;
+                    }
+                    LcarsTelemetryRow {
+                        label: "AUR PACKAGES";
+                        value: root.updates_aur_details;
+                        status: root.updates_aur_text;
+                        accent-color: Theme.enterprise-lilac;
+                        status-color: root.updates_aur_color;
+                    }
+                    LcarsTelemetryRow {
+                        label: "SECURITY ADVISORIES (CVE)";
+                        value: root.cve_details;
+                        status: root.cve_status;
+                        accent-color: Theme.enterprise-lilac;
+                        status-color: root.cve_color;
+                    }
+                }
+
+                // POD 03: THIRD-PARTY & PERIPHERALS
+                VerticalLayout {
+                    width: parent.width;
+                    spacing: 6px;
+                    LcarsPodHeader {
+                        title: "POD 03 // THIRD-PARTY & PERIPHERALS";
+                        accent-color: Theme.tricorder-cyan;
+                    }
+                    LcarsTelemetryRow {
+                        label: "HARDWARE FIRMWARE (LVFS)";
+                        value: root.firmware_details;
+                        status: root.firmware_status;
+                        accent-color: Theme.tricorder-cyan;
+                        status-color: root.firmware_color;
+                    }
+                    LcarsTelemetryRow {
+                        label: "ORPHAN PACKAGES";
+                        value: root.orphans_details;
+                        status: root.orphans_status;
+                        accent-color: Theme.tricorder-cyan;
+                        status-color: root.orphans_color;
+                    }
+                }
+            }
+
+            // TAB 1: SYSTEM MAINTENANCE VIEW
+            if (root.active-tab == 1) : ScrollView {
+                VerticalLayout {
+                    spacing: 8px;
+                    padding-bottom: 12px;
+
+                    LcarsPodHeader {
+                        title: "POD 01 // SRE ATOMIC MAINTENANCE PROTOCOLS";
+                        accent-color: Theme.okuda-peach;
+                    }
+
+                    LcarsMaintenanceRow {
+                        code: "01 // PRUNE";
+                        title: "Orphan Package Triage & Prune";
+                        description: "Interactive 3-tier orphan package resolver. Safely purges abandoned dependencies.";
+                        action-text: "RUN TRIAGE";
+                        accent-color: Theme.okuda-peach;
+                        action-color: Theme.okuda-peach;
+                        clicked => { root.run_orphans_clicked(); }
+                    }
+
+                    LcarsMaintenanceRow {
+                        code: "02 // MIRRORS";
+                        title: "Refresh & Rank Regional Mirrors";
+                        description: "Benchmarks and ranks the fastest, most reliable regional Arch and EOS mirrors.";
+                        action-text: "RANK MIRRORS";
+                        accent-color: Theme.enterprise-lilac;
+                        action-color: Theme.enterprise-lilac;
+                        clicked => { root.run_mirrors_clicked(); }
+                    }
+
+                    LcarsMaintenanceRow {
+                        code: "03 // CACHE";
+                        title: "Safe Maintenance & Cache Trimming";
+                        description: "Trims pacman cache to latest 2 versions, vacuums journal logs (>14 days), cleans run logs.";
+                        action-text: "EXECUTE CACHE";
+                        accent-color: Theme.status-green;
+                        action-color: Theme.status-green;
+                        clicked => { root.run_maintenance_clicked(); }
+                    }
+
+                    LcarsMaintenanceRow {
+                        code: "04 // PURGE";
+                        title: "Deep Clean (Trash, Browser, Thumbnails)";
+                        description: "Deep non-destructive reclamation: user Trash, thumbnail caches, browser cache tempfiles.";
+                        action-text: "PURGE TEMP";
+                        accent-color: Theme.tricorder-cyan;
+                        action-color: Theme.tricorder-cyan;
+                        clicked => { root.run_deep_clean_clicked(); }
+                    }
+
+                    LcarsMaintenanceRow {
+                        code: "05 // CVE";
+                        title: "Security Advisories (CVE Triage)";
+                        description: "Arch Linux security database vulnerability scan (arch-audit) for unpatched packages.";
+                        action-text: "INSPECT CVES";
+                        accent-color: Theme.status-red;
+                        action-color: Theme.status-red;
+                        clicked => { root.run_cve_clicked(); }
+                    }
+
+                    LcarsMaintenanceRow {
+                        code: "06 // FIRMWARE";
+                        title: "Hardware Firmware Upgrade (LVFS)";
+                        description: "Upgrades hardware firmware for UEFI, NVMe storage, and attached peripherals via fwupdmgr.";
+                        action-text: "UPGRADE FW";
+                        accent-color: Theme.enterprise-lilac;
+                        action-color: Theme.enterprise-lilac;
+                        clicked => { root.run_firmware_clicked(); }
+                    }
+
+                    LcarsMaintenanceRow {
+                        code: "07 // PRECACHE";
+                        title: "Pre-Cache Packages into Pacman Cache";
+                        description: "Downloads pending updates ahead of time without installing them, minimizing downtime.";
+                        action-text: "PRECACHE PKGS";
+                        accent-color: Theme.tricorder-cyan;
+                        action-color: Theme.tricorder-cyan;
+                        clicked => { root.run_precache_clicked(); }
+                    }
+
+                    LcarsMaintenanceRow {
+                        code: "08 // UPDATE";
+                        title: root.self_update_title;
+                        description: root.self_update_desc;
+                        action-text: "UPDATE SUITE";
+                        accent-color: Theme.okuda-peach;
+                        action-color: Theme.okuda-peach;
+                        clicked => { root.run_self_update_clicked(); }
+                    }
+                }
+            }
+
+            // TAB 2: AI COPILOT WORKSPACE
+            if (root.active-tab == 2) : VerticalLayout {
+                spacing: 12px;
+
+                LcarsPodHeader {
+                    title: "POD 01 // AUTONOMOUS SYSTEM COPILOT & LOG DIAGNOSTICS";
+                    accent-color: Theme.federation-blue;
+                }
+
+                Rectangle {
+                    vertical-stretch: 0;
+                    background: Theme.surface;
+                    border-radius: Theme.radius-sm;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
 
                     HorizontalLayout {
-                        spacing: 10px;
+                        padding: 12px;
+                        alignment: space-between;
 
-                        Text {
-                            text: "SYS PILOT";
-                            color: Theme.text-primary;
-                            font-size: 16px;
-                            font-weight: 800;
-                            letter-spacing: 1px;
-                            vertical-alignment: center;
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: root.copilot_status_text;
+                                color: Theme.status-green;
+                                font-size: 12px;
+                                font-weight: 700;
+                            }
                         }
 
-                        StatusBadge {
-                            text: root.overall_status_label;
-                            badge-color: root.overall_status_color;
+                        ActionButton {
+                            text: "💻 Interactive Terminal Session";
+                            primary: false;
+                            action-color: Theme.tricorder-cyan;
+                            clicked => { root.copilot_terminal_clicked(); }
                         }
+                    }
+                }
 
-                        if (root.has_app_update) : Rectangle {
-                            height: 24px;
-                            vertical-stretch: 0;
-                            background: Theme.status-purple.transparentize(85%);
-                            border-color: Theme.status-purple.transparentize(50%);
-                            border-width: 1px;
-                            border-radius: Theme.radius-sm;
+                // Console Log Viewport
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: #050810;
+                    border-radius: Theme.radius-sm;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
 
-                            HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
-                                alignment: center;
+                    ScrollView {
+                        HorizontalLayout {
+                            padding: 12px;
+                            Text {
+                                text: root.copilot_console_text;
+                                color: #93c5fd;
+                                font-family: "monospace";
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
 
-                                Text {
-                                    text: root.app_update_badge;
-                                    color: Theme.status-purple;
-                                    font-size: 11px;
-                                    font-weight: 700;
-                                    vertical-alignment: center;
-                                }
+                // Copilot Input & Execution
+                HorizontalLayout {
+                    vertical-stretch: 0;
+                    spacing: 8px;
+
+                    copilot_input := LineEdit {
+                        horizontal-stretch: 1;
+                        placeholder-text: "Enter diagnostic query or troubleshooting instruction...";
+                        accepted => {
+                            if (self.text != "") {
+                                root.copilot_ask_clicked(self.text);
+                                self.text = "";
                             }
                         }
                     }
 
+                    ActionButton {
+                        text: root.copilot_running ? "PROCESSING..." : "ASK COPILOT";
+                        primary: true;
+                        action-color: Theme.okuda-peach;
+                        clicked => {
+                            if (copilot_input.text != "" && !root.copilot_running) {
+                                root.copilot_ask_clicked(copilot_input.text);
+                                copilot_input.text = "";
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ========================================================
+    // SKIN 2: CLASSIC ENDEAVOUROS DESKTOP HUD
+    // ========================================================
+    if (!root.is_lcars_skin) : VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+            Rectangle {
+                vertical-stretch: 0;
+                background: root.overall_status_color.transparentize(92%);
+                border-color: root.overall_status_color.transparentize(50%);
+                border-width: 2px;
+                border-radius: Theme.radius-md;
+
+                HorizontalLayout {
+                    padding: 14px;
+                    alignment: space-between;
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 10px;
+
+                            Text {
+                                text: "SYS PILOT";
+                                color: Theme.text-primary;
+                                font-size: 16px;
+                                font-weight: 800;
+                                letter-spacing: 1px;
+                                vertical-alignment: center;
+                            }
+
+                            StatusBadge {
+                                text: root.overall_status_label;
+                                badge-color: root.overall_status_color;
+                            }
+
+                            if (root.has_app_update) : Rectangle {
+                                height: 24px;
+                                vertical-stretch: 0;
+                                background: Theme.status-purple.transparentize(85%);
+                                border-color: Theme.status-purple.transparentize(50%);
+                                border-width: 1px;
+                                border-radius: Theme.radius-sm;
+
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    alignment: center;
+
+                                    Text {
+                                        text: root.app_update_badge;
+                                        color: Theme.status-purple;
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: root.hardware_info;
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+
+                        Rectangle {
+                            height: 32px;
+                            background: Theme.surface;
+                            border-radius: Theme.radius-sm;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                alignment: center;
+
+                                Text {
+                                    text: root.copilot_badge_label;
+                                    color: Theme.status-cyan;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+
+                        ActionButton {
+                            text: "🚪 EXIT HOLODECK (LCARS)";
+                            primary: false;
+                            action-color: Theme.okuda-gold;
+                            clicked => { root.toggle_skin(); }
+                        }
+
+                        ActionButton {
+                            text: "REFRESH 🔄";
+                            primary: false;
+                            action-color: Theme.status-cyan;
+                            clicked => { root.refresh_clicked(); }
+                        }
+                    }
+                }
+            }
+
+            // Navigation Tab Bar
+            HorizontalLayout {
+                vertical-stretch: 0;
+                height: 36px;
+                spacing: 8px;
+                alignment: start;
+
+                TabButton {
+                    text: "✈  Dashboard";
+                    active: root.active-tab == 0;
+                    clicked => { root.active-tab = 0; root.tab_changed(0); }
+                }
+                TabButton {
+                    text: "🛠  System Maintenance";
+                    active: root.active-tab == 1;
+                    clicked => { root.active-tab = 1; root.tab_changed(1); }
+                }
+                TabButton {
+                    text: "🤖  AI Copilot";
+                    active: root.active-tab == 2;
+                    clicked => { root.active-tab = 2; root.tab_changed(2); }
+                }
+            }
+
+            // Telemetry Error / Degraded Banner
+            if (root.has_error) : Rectangle {
+                vertical-stretch: 0;
+                background: Theme.status-amber.transparentize(88%);
+                border-color: Theme.status-amber;
+                border-width: 1px;
+                border-radius: Theme.radius-sm;
+                min-height: 32px;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    alignment: start;
+                    spacing: 8px;
+
                     Text {
-                        text: root.hardware_info;
-                        color: Theme.text-muted;
+                        text: "DATA UNAVAILABLE: " + root.error_message;
+                        color: Theme.status-amber;
                         font-size: 11px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            // TAB 0: DASHBOARD VIEW
+            if (root.active-tab == 0) : VerticalLayout {
+                vertical-stretch: 1;
+                spacing: 10px;
+
+                Card {
+                    title: "🛡 System Health & Hygiene";
+
+                    GridRow {
+                        name: "Kernel & Modules";
+                        status-text: root.kernel_status;
+                        status-color: root.kernel_color;
+                        details: root.kernel_details;
+                    }
+                    GridRow {
+                        name: "Root Storage (/)";
+                        status-text: root.root_status;
+                        status-color: root.root_color;
+                        details: root.root_details;
+                    }
+                    GridRow {
+                        name: "Host Firewall (Shield)";
+                        status-text: root.firewall_status;
+                        status-color: root.firewall_color;
+                        details: root.firewall_details;
+                    }
+                    GridRow {
+                        name: "Failed System Services";
+                        status-text: root.failed_services_status;
+                        status-color: root.failed_services_color;
+                        details: root.failed_services_details;
+                    }
+                    GridRow {
+                        name: "Hardware Platform & GPU";
+                        status-text: root.gpu_status;
+                        status-color: root.gpu_color;
+                        details: root.gpu_details;
                     }
                 }
 
-                HorizontalLayout {
-                    spacing: 10px;
-                    alignment: center;
+                Card {
+                    title: "📦 System Updates";
 
+                    GridRow {
+                        name: "Core System (Kernel/Drivers)";
+                        status-text: root.updates_core_text;
+                        status-color: root.updates_core_color;
+                        details: root.updates_core_details;
+                    }
+                    GridRow {
+                        name: "Official Repositories";
+                        status-text: root.updates_repo_text;
+                        status-color: root.updates_repo_color;
+                        details: root.updates_repo_details;
+                    }
+                    GridRow {
+                        name: "AUR Packages";
+                        status-text: root.updates_aur_text;
+                        status-color: root.updates_aur_color;
+                        details: root.updates_aur_details;
+                    }
+                    GridRow {
+                        name: "Security Advisories (CVE)";
+                        status-text: root.cve_status;
+                        status-color: root.cve_color;
+                        details: root.cve_details;
+                    }
+                }
+
+                Card {
+                    title: "🔌 Third-Party & Peripherals";
+
+                    GridRow {
+                        name: "Hardware Firmware (LVFS)";
+                        status-text: root.firmware_status;
+                        status-color: root.firmware_color;
+                        details: root.firmware_details;
+                    }
+                    GridRow {
+                        name: "Orphan Packages";
+                        status-text: root.orphans_status;
+                        status-color: root.orphans_color;
+                        details: root.orphans_details;
+                    }
+                }
+
+                // Bottom Action Bar
+                Rectangle {
+                    vertical-stretch: 0;
+                    background: Theme.surface;
+                    border-radius: Theme.radius-md;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+
+                    HorizontalLayout {
+                        padding: 10px;
+                        spacing: 12px;
+                        alignment: space-between;
+
+                        ActionButton {
+                            text: "RUN GUARDED UPGRADE ⚡";
+                            primary: true;
+                            action-color: Theme.status-green;
+                            clicked => { root.upgrade_clicked(); }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            ActionButton {
+                                text: "DIAGNOSTIC AUDIT 🔍";
+                                primary: false;
+                                action-color: Theme.status-cyan;
+                                clicked => { root.audit_clicked(); }
+                            }
+
+                            ActionButton {
+                                text: "PRUNE ORPHANS 🗑";
+                                primary: false;
+                                action-color: Theme.status-amber;
+                                clicked => { root.prune_clicked(); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // TAB 1: SYSTEM MAINTENANCE VIEW
+            if (root.active-tab == 1) : ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 10px;
+                    padding-bottom: 12px;
+
+                    // Suite Intro Card
                     Rectangle {
-                        height: 32px;
                         background: Theme.surface;
-                        border-radius: Theme.radius-sm;
+                        border-radius: Theme.radius-md;
                         border-width: 1px;
                         border-color: Theme.border-subtle;
 
                         HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            alignment: center;
+                            padding: 12px;
+                            spacing: 10px;
+
+                            Rectangle {
+                                width: 4px;
+                                background: Theme.status-green;
+                                border-radius: 2px;
+                            }
 
                             Text {
-                                text: root.copilot_badge_label;
-                                color: Theme.status-cyan;
-                                font-size: 11px;
-                                font-weight: 700;
-                                vertical-alignment: center;
-                                horizontal-alignment: center;
+                                text: "Universal SRE Maintenance Suite: Safe, atomic maintenance utilities that maintain system health without breaking package dependencies or user configuration.";
+                                color: Theme.text-primary;
+                                font-size: 12px;
+                                wrap: word-wrap;
                             }
                         }
                     }
 
-                    ActionButton {
-                        text: "REFRESH 🔄";
-                        primary: false;
+                    MaintenanceCard {
+                        title: "1) 🗑 Orphan Package Triage & Prune";
+                        description: "Interactive 3-tier orphan package resolver. Safely purges abandoned dependencies without breaking optdepends.";
+                        action-text: "Run Orphan Triage";
+                        action-color: Theme.status-amber;
+                        clicked => { root.run_orphans_clicked(); }
+                    }
+
+                    MaintenanceCard {
+                        title: "2) 🌐 Refresh & Rank Regional Mirrors";
+                        description: "Benchmarks and ranks the fastest, most reliable regional Arch and EndeavourOS mirrors with atomic backup.";
+                        action-text: "Rank Fastest Mirrors";
                         action-color: Theme.status-cyan;
-                        clicked => { root.refresh_clicked(); }
+                        clicked => { root.run_mirrors_clicked(); }
                     }
-                }
-            }
-        }
 
-        // Navigation Tab Bar
-        HorizontalLayout {
-            vertical-stretch: 0;
-            height: 36px;
-            spacing: 8px;
-            alignment: start;
-
-            TabButton {
-                text: "✈  Dashboard";
-                active: root.active-tab == 0;
-                clicked => { root.active-tab = 0; }
-            }
-            TabButton {
-                text: "🛠  System Maintenance";
-                active: root.active-tab == 1;
-                clicked => { root.active-tab = 1; }
-            }
-            TabButton {
-                text: "🤖  AI Copilot";
-                active: root.active-tab == 2;
-                clicked => { root.active-tab = 2; }
-            }
-        }
-
-        // Telemetry Error / Degraded Banner
-        if (root.has_error) : Rectangle {
-            vertical-stretch: 0;
-            background: Theme.status-amber.transparentize(88%);
-            border-color: Theme.status-amber;
-            border-width: 1px;
-            border-radius: Theme.radius-sm;
-            min-height: 32px;
-
-            HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 12px;
-                alignment: start;
-                spacing: 8px;
-
-                Text {
-                    text: "DATA UNAVAILABLE: " + root.error_message;
-                    color: Theme.status-amber;
-                    font-size: 11px;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-            }
-        }
-
-        // TAB 0: DASHBOARD VIEW
-        if (root.active-tab == 0) : VerticalLayout {
-            vertical-stretch: 1;
-            spacing: 10px;
-
-            Card {
-                title: "🛡 System Health & Hygiene";
-
-                GridRow {
-                    name: "Kernel & Modules";
-                    status-text: root.kernel_status;
-                    status-color: root.kernel_color;
-                    details: root.kernel_details;
-                }
-                GridRow {
-                    name: "Root Storage (/)";
-                    status-text: root.root_status;
-                    status-color: root.root_color;
-                    details: root.root_details;
-                }
-                GridRow {
-                    name: "Host Firewall (Shield)";
-                    status-text: root.firewall_status;
-                    status-color: root.firewall_color;
-                    details: root.firewall_details;
-                }
-                GridRow {
-                    name: "Failed System Services";
-                    status-text: root.failed_services_status;
-                    status-color: root.failed_services_color;
-                    details: root.failed_services_details;
-                }
-                GridRow {
-                    name: "Hardware Platform & GPU";
-                    status-text: root.gpu_status;
-                    status-color: root.gpu_color;
-                    details: root.gpu_details;
-                }
-            }
-
-            Card {
-                title: "📦 System Updates";
-
-                GridRow {
-                    name: "Core System (Kernel/Drivers)";
-                    status-text: root.updates_core_text;
-                    status-color: root.updates_core_color;
-                    details: root.updates_core_details;
-                }
-                GridRow {
-                    name: "Official Repositories";
-                    status-text: root.updates_repo_text;
-                    status-color: root.updates_repo_color;
-                    details: root.updates_repo_details;
-                }
-                GridRow {
-                    name: "AUR Packages";
-                    status-text: root.updates_aur_text;
-                    status-color: root.updates_aur_color;
-                    details: root.updates_aur_details;
-                }
-                GridRow {
-                    name: "Security Advisories (CVE)";
-                    status-text: root.cve_status;
-                    status-color: root.cve_color;
-                    details: root.cve_details;
-                }
-            }
-
-            Card {
-                title: "🔌 Third-Party & Peripherals";
-
-                GridRow {
-                    name: "Hardware Firmware (LVFS)";
-                    status-text: root.firmware_status;
-                    status-color: root.firmware_color;
-                    details: root.firmware_details;
-                }
-                GridRow {
-                    name: "Orphan Packages";
-                    status-text: root.orphans_status;
-                    status-color: root.orphans_color;
-                    details: root.orphans_details;
-                }
-            }
-
-            // Bottom Action Bar
-            Rectangle {
-                vertical-stretch: 0;
-                background: Theme.surface;
-                border-radius: Theme.radius-md;
-                border-width: 1px;
-                border-color: Theme.border-subtle;
-
-                HorizontalLayout {
-                    padding: 10px;
-                    spacing: 12px;
-                    alignment: space-between;
-
-                    ActionButton {
-                        text: "RUN GUARDED UPGRADE ⚡";
-                        primary: true;
+                    MaintenanceCard {
+                        title: "3) 🧹 Safe Maintenance & Cache Trimming";
+                        description: "Trims pacman package cache to latest 2 versions, vacuums journal logs (>14 days), and cleans old run logs.";
+                        action-text: "Execute Maintenance";
                         action-color: Theme.status-green;
-                        clicked => { root.upgrade_clicked(); }
+                        clicked => { root.run_maintenance_clicked(); }
                     }
 
-                    HorizontalLayout {
-                        spacing: 8px;
+                    MaintenanceCard {
+                        title: "4) 🧼 Deep Clean (Trash, Browser, Thumbnails)";
+                        description: "Deep non-destructive reclamation: empties user Trash, clears thumbnail caches, and browser cache tempfiles.";
+                        action-text: "Execute Deep Clean";
+                        action-color: Theme.status-cyan;
+                        clicked => { root.run_deep_clean_clicked(); }
+                    }
 
-                        ActionButton {
-                            text: "DIAGNOSTIC AUDIT 🔍";
-                            primary: false;
-                            action-color: Theme.status-cyan;
-                            clicked => { root.audit_clicked(); }
-                        }
+                    MaintenanceCard {
+                        title: "5) 🔍 Security Advisories (CVE Triage)";
+                        description: "Arch Linux security database vulnerability scan (arch-audit) to identify and triage unpatched packages.";
+                        action-text: "Inspect Security CVEs";
+                        action-color: Theme.status-red;
+                        clicked => { root.run_cve_clicked(); }
+                    }
 
-                        ActionButton {
-                            text: "PRUNE ORPHANS 🗑";
-                            primary: false;
-                            action-color: Theme.status-amber;
-                            clicked => { root.prune_clicked(); }
-                        }
+                    MaintenanceCard {
+                        title: "6) ⚡ Hardware Firmware Upgrade (LVFS)";
+                        description: "Upgrades hardware firmware for UEFI, NVMe storage, and attached peripherals via fwupdmgr.";
+                        action-text: "Upgrade Firmware";
+                        action-color: Theme.status-purple;
+                        clicked => { root.run_firmware_clicked(); }
+                    }
+
+                    MaintenanceCard {
+                        title: "7) ⚡ Pre-Cache Packages into Pacman Cache";
+                        description: "Downloads pending updates ahead of time without installing them, minimizing downtime during upgrades.";
+                        action-text: "Pre-Cache Packages";
+                        action-color: Theme.status-cyan;
+                        clicked => { root.run_precache_clicked(); }
+                    }
+
+                    MaintenanceCard {
+                        title: root.self_update_title;
+                        description: root.self_update_desc;
+                        action-text: root.self_update_btn_text;
+                        action-color: Theme.status-purple;
+                        clicked => { root.run_self_update_clicked(); }
                     }
                 }
             }
-        }
 
-        // TAB 1: SYSTEM MAINTENANCE VIEW
-        if (root.active-tab == 1) : ScrollView {
-            vertical-stretch: 1;
-            VerticalLayout {
-                spacing: 10px;
-                padding-bottom: 12px;
+            // TAB 2: AI COPILOT WORKSPACE
+            if (root.active-tab == 2) : VerticalLayout {
+                vertical-stretch: 1;
+                spacing: 12px;
 
-                // Suite Intro Card
+                // Connection Status Bar
                 Rectangle {
+                    vertical-stretch: 0;
                     background: Theme.surface;
                     border-radius: Theme.radius-md;
                     border-width: 1px;
@@ -404,235 +1223,137 @@ export component AppWindow inherits Window {
 
                     HorizontalLayout {
                         padding: 12px;
-                        spacing: 10px;
+                        alignment: space-between;
 
-                        Rectangle {
-                            width: 4px;
-                            background: Theme.status-green;
-                            border-radius: 2px;
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: root.copilot_status_text;
+                                color: Theme.status-green;
+                                font-size: 12px;
+                                font-weight: 700;
+                            }
                         }
 
-                        Text {
-                            text: "Universal SRE Maintenance Suite: Safe, atomic maintenance utilities that maintain system health without breaking package dependencies or user configuration.";
-                            color: Theme.text-primary;
+                        ActionButton {
+                            text: "💻 Interactive Terminal Session";
+                            primary: false;
+                            action-color: Theme.status-cyan;
+                            clicked => { root.copilot_terminal_clicked(); }
+                        }
+                    }
+                }
+
+                // Playbooks Quick Launch
+                VerticalLayout {
+                    vertical-stretch: 0;
+                    spacing: 6px;
+
+                    Text {
+                        text: "Battle-Tested SRE Playbooks (1-Click Diagnostics):";
+                        color: Theme.text-primary;
+                        font-size: 12px;
+                        font-weight: 700;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        ActionButton {
+                            text: "⚡ FAF Client Repair";
+                            action-color: Theme.status-cyan;
+                            clicked => {
+                                if (!root.copilot_running) {
+                                    root.copilot_playbook_clicked("faf");
+                                }
+                            }
+                        }
+
+                        ActionButton {
+                            text: "🎮 Steam / Proton Fix";
+                            action-color: Theme.status-purple;
+                            clicked => {
+                                if (!root.copilot_running) {
+                                    root.copilot_playbook_clicked("proton");
+                                }
+                            }
+                        }
+
+                        ActionButton {
+                            text: "🔧 Reconcile .pacnew";
+                            action-color: Theme.status-amber;
+                            clicked => {
+                                if (!root.copilot_running) {
+                                    root.copilot_playbook_clicked("pacnew");
+                                }
+                            }
+                        }
+
+                        ActionButton {
+                            text: "🔊 PipeWire Audio Fix";
+                            action-color: Theme.status-green;
+                            clicked => {
+                                if (!root.copilot_running) {
+                                    root.copilot_playbook_clicked("audio");
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Query Input Bar
+                Rectangle {
+                    vertical-stretch: 0;
+                    background: Theme.surface;
+                    border-radius: Theme.radius-md;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+
+                    HorizontalLayout {
+                        padding: 8px;
+                        spacing: 10px;
+
+                        classic_query_input := LineEdit {
+                            placeholder-text: "Ask SysPilot Copilot anything (e.g. 'Why did my audio fail?' or 'Fix service XYZ')...";
                             font-size: 12px;
+                            accepted(text) => {
+                                if (text != "" && !root.copilot_running) {
+                                    root.copilot_ask_clicked(text);
+                                }
+                            }
+                        }
+
+                        ActionButton {
+                            text: root.copilot_running ? "Thinking... ⏳" : "Ask Copilot 🚀";
+                            primary: true;
+                            action-color: Theme.status-cyan;
+                            clicked => {
+                                if (classic_query_input.text != "" && !root.copilot_running) {
+                                    root.copilot_ask_clicked(classic_query_input.text);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Output Console Card
+                Card {
+                    vertical-stretch: 1;
+                    title: "🤖 Copilot Diagnostic Console";
+                    badge-text: root.copilot_running ? "RUNNING" : "IDLE";
+                    badge-color: root.copilot_running ? Theme.status-amber : Theme.status-green;
+
+                    ScrollView {
+                        min-height: 180px;
+
+                        Text {
+                            text: root.copilot_console_text;
+                            color: Theme.text-primary;
+                            font-size: 11px;
                             wrap: word-wrap;
                         }
                     }
                 }
-
-                MaintenanceCard {
-                    title: "1) 🗑 Orphan Package Triage & Prune";
-                    description: "Interactive 3-tier orphan package resolver. Safely purges abandoned dependencies without breaking optdepends.";
-                    action-text: "Run Orphan Triage";
-                    action-color: Theme.status-amber;
-                    clicked => { root.run_orphans_clicked(); }
-                }
-
-                MaintenanceCard {
-                    title: "2) 🌐 Refresh & Rank Regional Mirrors";
-                    description: "Benchmarks and ranks the fastest, most reliable regional Arch and EndeavourOS mirrors with atomic backup.";
-                    action-text: "Rank Fastest Mirrors";
-                    action-color: Theme.status-cyan;
-                    clicked => { root.run_mirrors_clicked(); }
-                }
-
-                MaintenanceCard {
-                    title: "3) 🧹 Safe Maintenance & Cache Trimming";
-                    description: "Trims pacman package cache to latest 2 versions, vacuums journal logs (>14 days), and cleans old run logs.";
-                    action-text: "Execute Maintenance";
-                    action-color: Theme.status-green;
-                    clicked => { root.run_maintenance_clicked(); }
-                }
-
-                MaintenanceCard {
-                    title: "4) 🧼 Deep Clean (Trash, Browser, Thumbnails)";
-                    description: "Deep non-destructive reclamation: empties user Trash, clears thumbnail caches, and browser cache tempfiles.";
-                    action-text: "Execute Deep Clean";
-                    action-color: Theme.status-cyan;
-                    clicked => { root.run_deep_clean_clicked(); }
-                }
-
-                MaintenanceCard {
-                    title: "5) 🔍 Security Advisories (CVE Triage)";
-                    description: "Arch Linux security database vulnerability scan (arch-audit) to identify and triage unpatched packages.";
-                    action-text: "Inspect Security CVEs";
-                    action-color: Theme.status-red;
-                    clicked => { root.run_cve_clicked(); }
-                }
-
-                MaintenanceCard {
-                    title: "6) ⚡ Hardware Firmware Upgrade (LVFS)";
-                    description: "Upgrades hardware firmware for UEFI, NVMe storage, and attached peripherals via fwupdmgr.";
-                    action-text: "Upgrade Firmware";
-                    action-color: Theme.status-purple;
-                    clicked => { root.run_firmware_clicked(); }
-                }
-
-                MaintenanceCard {
-                    title: "7) ⚡ Pre-Cache Packages into Pacman Cache";
-                    description: "Downloads pending updates ahead of time without installing them, minimizing downtime during upgrades.";
-                    action-text: "Pre-Cache Packages";
-                    action-color: Theme.status-cyan;
-                    clicked => { root.run_precache_clicked(); }
-                }
-
-                MaintenanceCard {
-                    title: root.self_update_title;
-                    description: root.self_update_desc;
-                    action-text: root.self_update_btn_text;
-                    action-color: Theme.status-purple;
-                    clicked => { root.run_self_update_clicked(); }
-                }
             }
-        }
-
-        // TAB 2: AI COPILOT WORKSPACE
-        if (root.active-tab == 2) : VerticalLayout {
-            vertical-stretch: 1;
-            spacing: 12px;
-
-            // Connection Status Bar
-            Rectangle {
-                vertical-stretch: 0;
-                background: Theme.surface;
-                border-radius: Theme.radius-md;
-                border-width: 1px;
-                border-color: Theme.border-subtle;
-
-                HorizontalLayout {
-                    padding: 12px;
-                    alignment: space-between;
-
-                    VerticalLayout {
-                        alignment: center;
-                        Text {
-                            text: root.copilot_status_text;
-                            color: Theme.status-green;
-                            font-size: 12px;
-                            font-weight: 700;
-                        }
-                    }
-
-                    ActionButton {
-                        text: "💻 Interactive Terminal Session";
-                        primary: false;
-                        action-color: Theme.status-cyan;
-                        clicked => { root.copilot_terminal_clicked(); }
-                    }
-                }
-            }
-
-            // Playbooks Quick Launch
-            VerticalLayout {
-                vertical-stretch: 0;
-                spacing: 6px;
-
-                Text {
-                    text: "Battle-Tested SRE Playbooks (1-Click Diagnostics):";
-                    color: Theme.text-primary;
-                    font-size: 12px;
-                    font-weight: 700;
-                }
-
-                HorizontalLayout {
-                    spacing: 8px;
-
-                    ActionButton {
-                        text: "⚡ FAF Client Repair";
-                        action-color: Theme.status-cyan;
-                        clicked => {
-                            if (!root.copilot_running) {
-                                root.copilot_playbook_clicked("faf");
-                            }
-                        }
-                    }
-
-                    ActionButton {
-                        text: "🎮 Steam / Proton Fix";
-                        action-color: Theme.status-purple;
-                        clicked => {
-                            if (!root.copilot_running) {
-                                root.copilot_playbook_clicked("proton");
-                            }
-                        }
-                    }
-
-                    ActionButton {
-                        text: "🔧 Reconcile .pacnew";
-                        action-color: Theme.status-amber;
-                        clicked => {
-                            if (!root.copilot_running) {
-                                root.copilot_playbook_clicked("pacnew");
-                            }
-                        }
-                    }
-
-                    ActionButton {
-                        text: "🔊 PipeWire Audio Fix";
-                        action-color: Theme.status-green;
-                        clicked => {
-                            if (!root.copilot_running) {
-                                root.copilot_playbook_clicked("audio");
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Query Input Bar
-            Rectangle {
-                vertical-stretch: 0;
-                background: Theme.surface;
-                border-radius: Theme.radius-md;
-                border-width: 1px;
-                border-color: Theme.border-subtle;
-
-                HorizontalLayout {
-                    padding: 8px;
-                    spacing: 10px;
-
-                    query_input := LineEdit {
-                        placeholder-text: "Ask SysPilot Copilot anything (e.g. 'Why did my audio fail?' or 'Fix service XYZ')...";
-                        font-size: 12px;
-                        accepted(text) => {
-                            if (text != "" && !root.copilot_running) {
-                                root.copilot_ask_clicked(text);
-                            }
-                        }
-                    }
-
-                    ActionButton {
-                        text: root.copilot_running ? "Thinking... ⏳" : "Ask Copilot 🚀";
-                        primary: true;
-                        action-color: Theme.status-cyan;
-                        clicked => {
-                            if (query_input.text != "" && !root.copilot_running) {
-                                root.copilot_ask_clicked(query_input.text);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Output Console Card
-            Card {
-                vertical-stretch: 1;
-                title: "🤖 Copilot Diagnostic Console";
-                badge-text: root.copilot_running ? "RUNNING" : "IDLE";
-                badge-color: root.copilot_running ? Theme.status-amber : Theme.status-green;
-
-                ScrollView {
-                    min-height: 180px;
-
-                    Text {
-                        text: root.copilot_console_text;
-                        color: Theme.text-primary;
-                        font-size: 11px;
-                        wrap: word-wrap;
-                    }
-                }
-            }
-        }
     }
 }

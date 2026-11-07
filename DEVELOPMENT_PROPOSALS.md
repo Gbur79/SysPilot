@@ -591,6 +591,31 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-025: [IMPLEMENTED] Star Trek Okuda 1987 LCARS Cockpit Dual-Skin Architecture, Astronomical Stardate Engine, Dynamic Window Geometry & SRE Universalism Hardening
+- **Status:** `[IMPLEMENTED]` *(SRE Certified — Audit `BP-ARGON-SYSPILOT-UNIVERSALISM-MAINTAIN-H630`, Auditor Argon Pro)*
+- **Data zgłoszenia:** 2026-11-07
+- **Źródło:** SysPilot Aesthetic & SRE Universalism Evolution (User Karol Specification & SRE Universalism Gate)
+- **Audyt SRE:**
+  - `BP-ARGON-SYSPILOT-UNIVERSALISM-MAINTAIN-H630` (Auditor Argon Pro): Wdrożenie dwuskórkowej architektury UI (Classic Dark Cyberpunk oraz Star Trek Okuda 1987 LCARS) w natywnym Slint 1.18. Certyfikacja matematycznego silnika Stardate ($STARDATE = YEAR + \frac{\text{day of year}}{\text{days in year}} + \frac{\text{seconds since midnight}}{86400.0}$) przeliczanego asynchronicznie na pętli zdarzeń Slint co 10s. Usunięcie pustej przestrzeni pod kartami na ekranie Dashboard i Maintain poprzez wprowadzenie proporcjonalnej geometrii okna $H(N) = \text{clamp}(180.0 + N \times 56.0, 590.0, 1200.0)$ ($590\text{px}$ Dashboard, $630\text{px}$ Maintain dla $N=8$, $780\text{px}$ Copilot). Wdrożenie standardu SRE Universalism: dynamiczna detekcja dystrybucji z `/etc/os-release` via `detect_os()`, bezwzględna eliminacja lokalnych założeń sprzętowych poprzez zero-fork detektor GPU w sysfs/procfs (`detect_gpu()`) dla NVIDIA, AMD, Intel i wirtualnych adapterów DRI, neutralne opisy wolumenów dyskowych oraz zorientowany na perimeter status zapory sieciowej. Dynamiczne przełączanie skórek `HOLODECK ⇄` z utrwaleniem w `~/.config/syspilot/skin` oraz zapamiętywaniem aktywnej zakładki w `~/.config/syspilot/last_tab`. Wyrównanie akapitów wierszy serwisowych do osi $x = 138\text{px}$.
+- **Docelowe Komponenty:**
+  - `crates/syspilot-gui/ui/appwindow.slint` (dual-skin layout, dynamic stardate header, proportional window height, Holodeck button)
+  - `crates/syspilot-gui/ui/components/lcars_*.slint` (elbows, pod headers, action buttons, tab buttons, telemetry rows, maintenance rows)
+  - `crates/syspilot-gui/ui/fonts/Antonio.ttf` (embedded condensed LCARS typeface)
+  - `crates/syspilot-gui/src/main.rs` (stardate computation timer, dynamic window sizing, OS/kernel formatting, refresh tactile pacing, unit tests)
+  - `crates/syspilot-core/src/skin.rs` (atomic skin & last_tab persistence in ~/.config/syspilot)
+  - `crates/syspilot-core/src/models.rs` (zero-fork `detect_gpu()`, universal telemetry models, version 2.1.0)
+  - `crates/syspilot-core/src/tests.rs` (unit tests for GPU detection, skin persistence, tab persistence)
+  - `bin/syspilot` (version bump to 2.1.0)
+  - `packaging/PKGBUILD` (pkgver=2.1.0)
+  - `Cargo.toml` / `Cargo.lock` (version bump to 2.1.0)
+  - `README.md`
+  - `CHANGELOG.md`
+- **Kontekst i Uzasadnienie:**
+  Wersja 2.1.0 realizuje postulat podwójnej tożsamości wizualnej (modern cyberpunk vs kultowy interfejs LCARS z 1987 r. autorstwa Michaela Okudy) z zachowaniem pełnej ergonomii, zerowego narzutu na pamięć RAM i zgodności ze standardem SRE Universalism (brak zahardkodowanych parametrów stacji roboczej developera w kodzie publicznym).
+- **Weryfikacja:** `dev-tools/verify-rust.sh -q` ➔ 65/65 unit tests PASS (core: 40, tray: 16, gui: 9), Clippy clean, fmt clean. `dev-tools/test-cli.sh` ➔ 13/13 tests PASS.
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

@@ -1,0 +1,46 @@
+export component LcarsTabButton inherits Rectangle {
+    in property <string> text: "";
+    in property <bool> active: false;
+    in property <color> base-color: #cc99cc;
+    in property <color> active-color: #ffaa66;
+    callback clicked();
+
+    width: root.active ? 132px : 124px;
+    height: root.active ? 46px : 40px;
+    background: root.active ? @linear-gradient(90deg, root.active-color.darker(5%) 0%, root.active-color.brighter(6%) 100%) : (touch.has-hover ? #222b3d : #151c27);
+    border-radius: 0px;
+    drop-shadow-blur: root.active ? 12px : 0px;
+    drop-shadow-color: root.active ? root.active-color.transparentize(45%) : #00000000;
+    drop-shadow-offset-x: 0px;
+    drop-shadow-offset-y: 0px;
+
+    animate width, height, background {
+        duration: 180ms;
+        easing: ease-out;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: space-between;
+        Text {
+            text: root.text;
+            color: root.active ? #000000 : (touch.has-hover ? #94a3b8 : #64748b);
+            font-size: 13px;
+            font-family: "Antonio";
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+        if root.active: Text {
+            text: "▶";
+            color: #000000;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+}

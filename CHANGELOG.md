@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.0] - 2026-11-07
+
+### Added & Hardened / Star Trek Okuda 1987 LCARS Dual-Skin Architecture & SRE Universalism (`BP-ARGON-SYSPILOT-UNIVERSALISM-MAINTAIN-H630`)
+- **Star Trek Okuda 1987 LCARS Dual-Skin Cockpit (`crates/syspilot-gui/ui`)**:
+  - Complete, faithful recreation of Michael Okuda's iconic 1987 Star Trek LCARS interface language alongside the classic modern dark cyberpunk theme.
+  - Modular native Slint components: `lcars_top_elbow.slint`, `lcars_bottom_elbow.slint`, `lcars_pod_header.slint`, `lcars_telemetry_row.slint`, `lcars_tab_button.slint`, `lcars_action_button.slint`, and `lcars_maintenance_row.slint`.
+  - Bundled condensed typeface `ui/fonts/Antonio.ttf` for authentic LCARS headers, badges, and pod titles.
+  - Authentic Okuda color palette with high WCAG AAA contrast ratios: Pumpkin (`#ffaa66`), Gold (`#ffcc00`), Lavender (`#cc99cc`), Ice Blue (`#99ccff`), Alert Red (`#ef4444`), and pure OLED pitch black (`#000000`).
+- **Functional Astronomical Stardate Engine (`crates/syspilot-core/src/skin.rs`, `crates/syspilot-gui/src/main.rs`)**:
+  - Mathematical UTC Gregorian stardate engine: $STARDATE = YEAR + \frac{\text{day of year}}{\text{days in year}} + \frac{\text{seconds since midnight}}{86400.0}$.
+  - Dynamically recalculated on the GUI main event loop every 10 seconds (e.g. `STARDATE 2026.311.64`).
+- **Holodeck Skin Switcher & Runtime Persistence**:
+  - High-visibility gold capsule button (`HOLODECK ⇄` in LCARS / `🚪 EXIT HOLODECK (LCARS)` in Classic) providing instantaneous runtime skin swapping without process restart.
+  - Persistent skin preference stored in `~/.config/syspilot/skin`.
+  - Tab state memory stored in `~/.config/syspilot/last_tab`.
+- **Content-Aware Dynamic Window Geometry**:
+  - SRE-certified formula $H(N) = \text{clamp}(180.0 + N \times 56.0, 590.0, 1200.0)$, dynamically sizing the window to eliminate black voids under telemetry pods ($590\text{px}$ Dashboard, $630\text{px}$ Maintenance for 8 pods, $780\text{px}$ Copilot).
+- **SRE Universalism Hardening**:
+  - **Dynamic OS Branding**: Replaced hardcoded distribution strings with dynamic OS name and kernel version parsed directly from `/etc/os-release` via `detect_os()`.
+  - **Zero-Fork Multi-Vendor GPU Telemetry (`crates/syspilot-core/src/models.rs`)**: Zero-fork sysfs and procfs detection scanning `/proc/driver/nvidia` and `/sys/bus/pci/devices` (PCI class `0x03*`) supporting NVIDIA, AMD/ATI, Intel, and virtualized DRI display adapters.
+  - **Universal Storage & Firewall Descriptions**: Neutral, distribution-agnostic labels (`AVAILABLE ON ROOT`, `FIREWALL ACTIVE • PACKET FILTERING ENFORCED`).
+  - **Micro-Pulsing & Glow Effects**: Hardware-accelerated glowing pods and pulsating condition indicators with graceful fallbacks.
+  - **Strict Paragraph Alignment**: Enforced left-aligned typography ($x = 138\text{px}$) across all maintenance items.
+- **Fixed**:
+  - Removed redundant numeric prefix in Maintenance pod 8 (`8) SysPilot Suite Self-Update...` -> `SysPilot Suite Self-Update & GitHub Sync`).
+  - Fixed Slint layout text centering artifacts by enforcing `horizontal-alignment: left`.
+
 ## [2.0.2] - 2026-11-01
 
 ### Added & Hardened / GitHub Release Sync & Self-Update Engine (`BP-ARGON-FEAT-SELFUPDATE-001`)

@@ -1,0 +1,93 @@
+export component LcarsTelemetryRow inherits HorizontalLayout {
+    in property <string> label: "";
+    in property <string> value: "";
+    in property <string> status: "PASS";
+    in property <color> accent-color: #ffaa66;
+    in property <color> status-color: #22c55e;
+    in property <color> value-color: #93c5fd;
+
+    height: 24px;
+    spacing: 4px;
+    vertical-stretch: 0;
+
+    // Left Cap: [ARCH ... 90] Flat Fluorescent-Lit Module
+    Rectangle {
+        width: 200px;
+        height: 24px;
+        background: @linear-gradient(90deg, root.accent-color.darker(5%) 0%, root.accent-color.brighter(6%) 100%);
+        border-top-left-radius: 12px;
+        border-bottom-left-radius: 12px;
+        horizontal-stretch: 0;
+        drop-shadow-blur: 8px;
+        drop-shadow-color: root.accent-color.transparentize(65%);
+        drop-shadow-offset-x: 0px;
+        drop-shadow-offset-y: 0px;
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 6px;
+            alignment: start;
+            Text {
+                text: root.label;
+                color: #000000;
+                font-size: 12px;
+                font-family: "Antonio";
+                font-weight: 800;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+
+    // Mid Segment: [90 ... 90] Pure OLED Backlit Track
+    Rectangle {
+        height: 24px;
+        background: #00000000;
+        horizontal-stretch: 1;
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            alignment: start;
+            Text {
+                text: root.value;
+                color: root.value-color;
+                font-size: 13px;
+                font-family: "Antonio";
+                font-weight: 700;
+                letter-spacing: 0.5px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+
+    // Right Cap: [90 ... ARCH] Deep Space Horizon Dissolve
+    Rectangle {
+        width: 80px;
+        height: 24px;
+        background: @linear-gradient(90deg, root.status-color 0%, root.status-color 45%, root.status-color.transparentize(25%) 75%, root.status-color.transparentize(65%) 100%);
+        border-top-right-radius: 12px;
+        border-bottom-right-radius: 12px;
+        horizontal-stretch: 0;
+        drop-shadow-blur: 10px;
+        drop-shadow-color: root.status-color.transparentize(50%);
+        drop-shadow-offset-x: 0px;
+        drop-shadow-offset-y: 0px;
+
+        HorizontalLayout {
+            alignment: center;
+            padding-left: 4px;
+            padding-right: 6px;
+            Text {
+                text: root.status;
+                color: #000000;
+                font-size: 12px;
+                font-family: "Antonio";
+                font-weight: 800;
+                letter-spacing: 0.5px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

@@ -1,0 +1,50 @@
+export component LcarsPodHeader inherits HorizontalLayout {
+    in property <string> title: "";
+    in property <color> accent-color: #ffaa66;
+
+    height: 24px;
+    spacing: 8px;
+    vertical-stretch: 0;
+    horizontal-stretch: 1;
+
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 0;
+        Rectangle {
+            width: 16px;
+            height: 16px;
+            background: root.accent-color;
+            border-top-left-radius: 8px;
+            border-bottom-left-radius: 8px;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: root.accent-color.transparentize(50%);
+            drop-shadow-offset-x: 0px;
+            drop-shadow-offset-y: 0px;
+        }
+    }
+
+    Text {
+        text: root.title;
+        color: root.accent-color;
+        font-size: 13px;
+        font-family: "Antonio";
+        font-weight: 800;
+        letter-spacing: 0.5px;
+        vertical-alignment: center;
+        horizontal-stretch: 0;
+    }
+
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+        Rectangle {
+            height: 2px;
+            background: @linear-gradient(90deg, root.accent-color 0%, root.accent-color.transparentize(25%) 70%, root.accent-color.transparentize(65%) 100%);
+            horizontal-stretch: 1;
+            drop-shadow-blur: 4px;
+            drop-shadow-color: root.accent-color.transparentize(70%);
+            drop-shadow-offset-x: 0px;
+            drop-shadow-offset-y: 0px;
+        }
+    }
+}

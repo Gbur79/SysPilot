@@ -1,0 +1,32 @@
+export component LcarsBottomElbow inherits Rectangle {
+    in property <color> fill-color: #ff9900;
+
+    // 1. Continuous vertical spine from top to bottom
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 128px;
+        height: parent.height;
+        background: root.fill-color;
+        border-bottom-left-radius: 28px;
+    }
+
+    // 2. Bottom horizontal rail (SEC-01 segment)
+    Rectangle {
+        x: 127px;
+        y: parent.height - 44px;
+        width: parent.width - 127px;
+        height: 44px;
+        background: root.fill-color;
+    }
+
+    // 3. Smooth concave inner curve
+    Path {
+        x: 127px;
+        y: parent.height - 64px;
+        width: 21px;
+        height: 21px;
+        commands: "M 0 0 C 0 11.046, 8.954 20, 20 20 L 0 20 Z";
+        fill: root.fill-color;
+    }
+}

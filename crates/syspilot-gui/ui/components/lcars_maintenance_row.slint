@@ -1,0 +1,116 @@
+export component LcarsMaintenanceRow inherits Rectangle {
+    in property <string> code: "01 // PRUNE";
+    in property <string> title: "Title";
+    in property <string> description: "Description";
+    in property <string> action-text: "EXECUTE";
+    in property <color> accent-color: #ffaa66;
+    in property <color> action-color: #ffaa66;
+    callback clicked();
+
+    height: 48px;
+    background: #00000000;
+    vertical-stretch: 0;
+
+    HorizontalLayout {
+        spacing: 6px;
+
+        // 1. Left Cap: [ARCH ... 90] Code block (120px x 48px)
+        Rectangle {
+            width: 120px;
+            height: 48px;
+            background: root.accent-color;
+            border-top-left-radius: 12px;
+            border-bottom-left-radius: 12px;
+            horizontal-stretch: 0;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 8px;
+                alignment: start;
+                Text {
+                    text: root.code;
+                    color: #000000;
+                    font-size: 13px;
+                    font-family: "Antonio";
+                    font-weight: 800;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // 2. Middle Segment: Title & Description on Pure OLED
+        Rectangle {
+            height: 48px;
+            background: #00000000;
+            horizontal-stretch: 1;
+
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text: root.title;
+                    color: #f8fafc;
+                    font-size: 14px;
+                    font-family: "Antonio";
+                    font-weight: 800;
+                    letter-spacing: 0.5px;
+                    horizontal-alignment: left;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: root.description;
+                    color: #93c5fd;
+                    font-size: 11px;
+                    font-family: "Antonio";
+                    font-weight: 600;
+                    horizontal-alignment: left;
+                    overflow: elide;
+                }
+            }
+        }
+
+        // 3. Right Cap: [90 ... ARCH] Interactive Action Button (150px x 44px)
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+
+            Rectangle {
+                width: 150px;
+                height: 44px;
+                background: touch.has-hover ? 
+                    @linear-gradient(90deg, root.action-color.brighter(15%) 0%, root.action-color.brighter(15%) 45%, root.action-color.brighter(15%).transparentize(25%) 75%, root.action-color.brighter(15%).transparentize(65%) 100%) :
+                    @linear-gradient(90deg, root.action-color 0%, root.action-color 45%, root.action-color.transparentize(25%) 75%, root.action-color.transparentize(65%) 100%);
+                border-top-right-radius: 12px;
+                border-bottom-right-radius: 12px;
+                drop-shadow-blur: touch.has-hover ? 12px : 6px;
+                drop-shadow-color: root.action-color.transparentize(50%);
+                drop-shadow-offset-x: 0px;
+                drop-shadow-offset-y: 0px;
+
+                touch := TouchArea {
+                    clicked => { root.clicked(); }
+                    mouse-cursor: pointer;
+                }
+
+                HorizontalLayout {
+                    alignment: center;
+                    padding-left: 8px;
+                    padding-right: 12px;
+                    Text {
+                        text: root.action-text;
+                        color: #000000;
+                        font-size: 13px;
+                        font-family: "Antonio";
+                        font-weight: 800;
+                        letter-spacing: 0.5px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

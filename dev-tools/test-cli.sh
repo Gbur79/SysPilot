@@ -68,9 +68,9 @@ pass_step
 # -----------------------------------------------------------------------------
 current_test="version_flags"
 out_v=$("$CLI" -v 2>&1) || fail "-v returned non-zero exit code"
-[[ "$out_v" == "syspilot 2.0.2" ]] || fail "-v returned '$out_v', expected 'syspilot 2.0.2'"
+[[ "$out_v" == "syspilot 2.1.0" ]] || fail "-v returned '$out_v', expected 'syspilot 2.1.0'"
 out_ver=$("$CLI" --version 2>&1) || fail "--version returned non-zero exit code"
-[[ "$out_ver" == "syspilot 2.0.2" ]] || fail "--version returned '$out_ver', expected 'syspilot 2.0.2'"
+[[ "$out_ver" == "syspilot 2.1.0" ]] || fail "--version returned '$out_ver', expected 'syspilot 2.1.0'"
 pass_step
 
 # -----------------------------------------------------------------------------
@@ -264,7 +264,7 @@ grep -q "Slice=app.slice" "$service_file" || fail "systemd service missing Slice
 pkgbuild="$project_root/packaging/PKGBUILD"
 [[ -f "$pkgbuild" ]] || fail "packaging/PKGBUILD not found"
 bash -n "$pkgbuild" 2>&1 || fail "bash -n packaging/PKGBUILD failed"
-grep -q "pkgver=2.0.2" "$pkgbuild" || fail "PKGBUILD pkgver mismatch"
+grep -q "pkgver=2.1.0" "$pkgbuild" || fail "PKGBUILD pkgver mismatch"
 
 # 11e. Shellcheck validation if available
 shellcheck_status="CLEAN"

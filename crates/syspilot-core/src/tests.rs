@@ -429,6 +429,9 @@ fn test_goose_recipe_resolution() {
 
 #[test]
 fn test_agy_copilot_detection() {
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     use crate::copilot::get_copilot_info;
 
     unsafe {
@@ -1292,4 +1295,39 @@ fn test_release_cache_ttl_logic() {
     if let Some(parent) = tmp_path.parent() {
         let _ = std::fs::remove_dir_all(parent);
     }
+}
+
+#[test]
+fn test_skin_preference_persistence() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp_path = std::env::temp_dir().join(format!("syspilot-skin-test-{nanos}/skin"));
+
+    // 1. Non-existent path returns default true (LCARS)
+    assert!(crate::skin::load_skin_preference_from(&tmp_path));
+
+    // 2. Save classic, verify read back
+    crate::skin::save_skin_preference_to(&tmp_path, false).unwrap();
+    assert!(!crate::skin::load_skin_preference_from(&tmp_path));
+
+    // 3. Save LCARS, verify read back
+    crate::skin::save_skin_preference_to(&tmp_path, true).unwrap();
+    assert!(crate::skin::load_skin_preference_from(&tmp_path));
+
+    // Cleanup
+    if let Some(parent) = tmp_path.parent() {
+        let _ = std::fs::remove_dir_all(parent);
+    }
+}
+
+#[test]
+fn test_detect_gpu_zero_fork() {
+    let gpu = crate::models::detect_gpu();
+    assert!(!gpu.is_empty(), "GPU descriptor must not be empty");
+    assert!(
+        gpu.chars().all(|c| !c.is_alphabetic() || c.is_uppercase()),
+        "GPU descriptor must be uppercase: {gpu}"
+    );
 }

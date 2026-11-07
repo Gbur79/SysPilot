@@ -1,7 +1,18 @@
 export global Theme {
-    // Base surfaces
-    in property <color> background: #0b0f19;
-    in property <color> surface: #131b2e;
+    // LCARS Okuda 1987 Palette
+    in property <color> okuda-amber: #ff9900;
+    in property <color> okuda-orange: #ff6600;
+    in property <color> okuda-peach: #ffaa66;
+    in property <color> okuda-gold: #ffcc00;
+    in property <color> federation-blue: #9999ff;
+    in property <color> enterprise-lilac: #cc99cc;
+    in property <color> tricorder-cyan: #38bdf8;
+    in property <color> pure-black: #000000;
+    in property <color> telemetry-track: #0e1828;
+
+    // Base surfaces (Pure OLED)
+    in property <color> background: #000000;
+    in property <color> surface: #0e1828;
     in property <color> surface-hover: #1b2640;
     in property <color> surface-active: #223152;
     in property <color> border-subtle: #1e293b;
@@ -16,7 +27,7 @@ export global Theme {
     in property <color> status-amber: #f59e0b;
     in property <color> status-red: #ef4444;
     in property <color> status-cyan: #38bdf8;
-    in property <color> status-purple: #a855f7;
+    in property <color> status-purple: #cc99cc;
 
     // Radius & Spacing
     in property <length> radius-sm: 4px;

@@ -305,7 +305,7 @@ impl Default for SystemSnapshot {
             firmware_updates: 0,
             firewall_active: false,
             app_update_available: false,
-            app_current_version: "2.0.2".into(),
+            app_current_version: "2.1.0".into(),
             app_latest_version: String::new(),
             app_release_url: String::new(),
         }
@@ -601,11 +601,78 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
         firewall_active: firewall.active,
         app_update_available: app_update.update_available,
         app_current_version: if app_update.current_version.is_empty() {
-            "2.0.2".into()
+            "2.1.0".into()
         } else {
             app_update.current_version
         },
         app_latest_version: app_update.latest_version,
         app_release_url: app_update.release_url,
     })
+}
+
+pub fn detect_gpu() -> String {
+    // 1. Try NVIDIA procfs (official driver telemetry)
+    if let Ok(entries) = std::fs::read_dir("/proc/driver/nvidia/gpus") {
+        for entry in entries.flatten() {
+            let info_path = entry.path().join("information");
+            if let Ok(content) = std::fs::read_to_string(&info_path) {
+                for line in content.lines() {
+                    if let Some(model) = line.strip_prefix("Model:") {
+                        let model_trimmed = model.trim();
+                        let driver_suffix = std::fs::read_to_string("/proc/driver/nvidia/version")
+                            .ok()
+                            .and_then(|ver_content| {
+                                ver_content
+                                    .split_whitespace()
+                                    .skip_while(|&w| w != "Module")
+                                    .nth(1)
+                                    .map(|v| format!(" • DRIVER {v}"))
+                            })
+                            .unwrap_or_default();
+                        return format!("{model_trimmed}{driver_suffix}").to_uppercase();
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Sysfs PCI display controller scan (zero-fork)
+    if let Ok(entries) = std::fs::read_dir("/sys/bus/pci/devices") {
+        for entry in entries.flatten() {
+            let dev_path = entry.path();
+            let class_path = dev_path.join("class");
+            if let Ok(class_str) = std::fs::read_to_string(&class_path) {
+                let class_trimmed = class_str.trim().to_lowercase();
+                // 0x0300xx (VGA), 0x0302xx (3D controller), 0x0380xx (Display controller)
+                if class_trimmed.starts_with("0x03") {
+                    let vendor_id = std::fs::read_to_string(dev_path.join("vendor"))
+                        .unwrap_or_default()
+                        .trim()
+                        .to_lowercase();
+                    let device_id = std::fs::read_to_string(dev_path.join("device"))
+                        .unwrap_or_default()
+                        .trim()
+                        .to_lowercase();
+                    let driver_name = std::fs::read_link(dev_path.join("driver"))
+                        .ok()
+                        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_uppercase()))
+                        .unwrap_or_else(|| "GENERIC".into());
+
+                    let vendor_name = match vendor_id.as_str() {
+                        "0x10de" => "NVIDIA",
+                        "0x1002" => "AMD/ATI",
+                        "0x8086" => "INTEL",
+                        _ => "PCI DISPLAY",
+                    };
+
+                    return format!(
+                        "{vendor_name} GPU ({vendor_id}:{device_id}) • DRIVER: {driver_name}"
+                    )
+                    .to_uppercase();
+                }
+            }
+        }
+    }
+
+    "DEFAULT DISPLAY ADAPTER".into()
 }

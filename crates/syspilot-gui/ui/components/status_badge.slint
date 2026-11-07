@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 
 export component StatusBadge inherits Rectangle {
-    in property <string> text: "PASS ✔";
+    in property <string> text: "PASS";
     in property <color> badge-color: Theme.status-green;
 
     background: badge-color.transparentize(85%);

@@ -9,6 +9,11 @@
 
 <img width="904" height="783" alt="image" src="https://github.com/user-attachments/assets/1739eb87-c309-481f-9f3a-261410d3d579" />
 
+LCARS UI
+
+<img width="1043" height="621" alt="image" src="https://github.com/user-attachments/assets/d42dad96-9e70-4689-bc16-dff6e36ff2dc" />
+
+<img width="1044" height="663" alt="image" src="https://github.com/user-attachments/assets/85d9838e-8ea2-4465-9cab-6d388c84b020" />
 
 ## 🌟 Overview
 

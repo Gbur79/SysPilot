@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.2] - 2026-11-08
+
+### Hardened & Certified / SRE 3-Axis Audit Stages 1–3 (`AUDIT-3AXIS-STAGES-1-3`)
+- **Zero-Subprocess Core Probes (Stage 1 / MOD-CORE-06 & MOD-CORE-07)**:
+  - Eliminacja subprocesów `systemctl` oraz `pacman` w `firewall.rs` i `release.rs` na rzecz czystego Rusta (`/etc/systemd/system`, `/usr/lib/systemd/system`, `/run/systemd/system` oraz `/var/lib/pacman/local/`).
+  - Gwarancja `assert_eq!(spawn_count(), 0)` we wszystkich ścieżkach zbierania telemetrii.
+- **Hermetyzacja Sond `*_at(root)` & 5 Archetypów MockRig (Stages 2–3)**:
+  - Pełna hermetyzacja sond diagnostycznych z jawnym parametrem korzenia `root: &Path` dla 5 archetypów `MockRig` w modułach: `security.rs`, `orphans.rs`, `firmware.rs`, `services.rs`, `sentinels.rs`, `triage.rs`, `models.rs` oraz `syspilot-tray/src/tray.rs`.
+  - Całkowita izolacja testów i eliminacja wycieków do żywego `/proc` i `/sys` (`Arch Linux Minimal`, `EndeavourOS Maxwell Hybrid`, `Immutable/SteamOS`, `Broken Corrupted State`, `Empty/Bare Container`).
+- **Weryfikacja SRE & Chirurgiczne Testy Mutacyjne (0 Surviving Mutants)**:
+  - Rozszerzenie pokrycia testowego przestrzeni roboczej Cargo do 82/82 testów jednostkowych i integracyjnych (`core`: 55, `tray`: 17, `gui`: 10) oraz 13/13 testów CLI routera.
+  - Osiągnięcie 0 przetrwałych mutantów (`cargo-mutants`) w 10 audytowanych modułach (`sentinels.rs`, `firewall.rs`, `release.rs`, `services.rs`, `orphans.rs`, `firmware.rs`, `security.rs`, `triage.rs`, `models.rs` oraz `tray.rs`).
+
 ## [2.1.1] - 2026-11-08
 
 ### Added & Hardened / Mega SRE Verification Tooling, Zero-Root Guard & Killer Features #1–#2 (`PATCH-026`)

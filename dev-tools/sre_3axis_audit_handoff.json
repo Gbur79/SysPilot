@@ -2,8 +2,8 @@
   "schema": "syspilot-sre-3axis-audit-handoff/v2",
   "generated_at": "2026-11-08T11:44:00Z",
   "project_root": "/home/gbur/Projects/sysPilot",
-  "current_version": "2.1.1",
-  "release_policy": "HOLD_GITHUB_PUSH_UNTIL_STAGE_4_COMPLETE",
+  "current_version": "2.1.2",
+  "release_policy": "STAGES_1_TO_3_RELEASED_V2_1_2_STAGE_4_DEFERRED",
   "certified_metrics_after_stage_3": {
     "workspace_tests": "82/82 (core: 55, tray: 17, gui: 10)",
     "cli_tests": "13/13",

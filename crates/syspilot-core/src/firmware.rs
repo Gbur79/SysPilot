@@ -1,32 +1,62 @@
 use crate::models::{FirmwareQuirk, StatusFirmware};
+use crate::sys_root::sub_path;
 use serde::Deserialize;
+#[cfg(test)]
+use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::time::timeout;
 
+#[cfg(test)]
+thread_local! {
+    static TEST_FWUPD_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static TEST_FWUPD_BIN: RefCell<Option<Option<PathBuf>>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn set_test_fwupd_overrides(root: Option<PathBuf>, bin: Option<Option<PathBuf>>) {
+    TEST_FWUPD_ROOT.with(|r| *r.borrow_mut() = root);
+    TEST_FWUPD_BIN.with(|b| *b.borrow_mut() = bin);
+}
+
+pub fn parse_timeout_ms(raw: Option<&str>, default_ms: u64) -> Duration {
+    let ms = raw
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&ms| ms > 0)
+        .unwrap_or(default_ms);
+    Duration::from_millis(ms)
+}
+
 pub fn default_firmware_timeout() -> Duration {
-    if let Ok(val) = std::env::var("SYSPILOT_FIRMWARE_TIMEOUT_MS") {
-        if let Ok(ms) = val.trim().parse::<u64>() {
-            if ms > 0 {
-                return Duration::from_millis(ms);
-            }
-        }
+    parse_timeout_ms(
+        std::env::var("SYSPILOT_FIRMWARE_TIMEOUT_MS")
+            .ok()
+            .as_deref(),
+        3500,
+    )
+}
+
+pub fn is_secure_boot_enabled_at(root: &Path) -> bool {
+    let sb_var = sub_path(
+        root,
+        "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c",
+    );
+    match fs::read(sb_var) {
+        Ok(data) => data.get(4).copied() == Some(1),
+        Err(_) => false,
     }
-    Duration::from_millis(3500)
 }
 
 pub fn is_secure_boot_enabled() -> bool {
-    let sb_var =
-        Path::new("/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c");
-    if !sb_var.is_file() {
-        return false;
+    #[cfg(test)]
+    if let Some(root) = TEST_FWUPD_ROOT.with(|r| r.borrow().clone()) {
+        return is_secure_boot_enabled_at(&root);
     }
-    match fs::read(sb_var) {
-        Ok(data) => data.len() >= 5 && data[4] == 1,
-        Err(_) => false,
-    }
+    is_secure_boot_enabled_at(Path::new("/"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,19 +106,20 @@ pub fn parse_fwupd_devices(
             .unwrap_or_default()
             .to_ascii_lowercase();
 
-        let has_nvram_error = err_lower.contains("nvram")
-            || err_lower.contains("no space left")
-            || err_lower.contains("insufficient space");
+        let has_nvram_error = ["nvram", "no space left", "insufficient space"]
+            .iter()
+            .any(|pat| err_lower.contains(pat));
 
-        let is_sb_cert = matches!(
-            plugin.as_str(),
-            "uefi_kek" | "uefi_dbx" | "uefi_db" | "uefi_pk"
-        ) || protocol.starts_with("org.uefi.dbx")
-            || protocols.iter().any(|p| p.starts_with("org.uefi.dbx"))
-            || dev_name_lower.contains("kek")
-            || dev_name_lower.contains("dbx")
-            || dev_name_lower.contains("uefi ca")
-            || dev_name_lower.contains("revocation");
+        let is_sb_plugin =
+            ["uefi_kek", "uefi_dbx", "uefi_db", "uefi_pk"].contains(&plugin.as_str());
+        let is_sb_proto = std::iter::once(protocol.as_str())
+            .chain(protocols.iter().map(String::as_str))
+            .any(|p| p.starts_with("org.uefi.dbx"));
+        let is_sb_name = ["kek", "dbx", "uefi ca", "revocation"]
+            .iter()
+            .any(|pat| dev_name_lower.contains(pat));
+
+        let is_sb_cert = is_sb_plugin || is_sb_proto || is_sb_name;
 
         if (is_sb_cert && !secure_boot_active) || has_nvram_error {
             let reason = if has_nvram_error {
@@ -123,19 +154,29 @@ pub async fn check_firmware_updates(skip: bool) -> StatusFirmware {
         };
     }
 
-    let fwupd_bin = match crate::updater::find_executable("fwupdmgr") {
-        Some(bin) => bin,
-        None => {
-            return StatusFirmware {
-                available: false,
-                tool: "fwupd".into(),
-                reason: "not_installed".into(),
-                updates_count: 0,
-                devices_monitored: 0,
-                pending_devices: Vec::new(),
-                bypassed_quirks: Vec::new(),
-            };
+    let fwupd_opt = {
+        #[cfg(test)]
+        {
+            TEST_FWUPD_BIN
+                .with(|b| b.borrow().clone())
+                .unwrap_or_else(|| crate::updater::find_executable("fwupdmgr"))
         }
+        #[cfg(not(test))]
+        {
+            crate::updater::find_executable("fwupdmgr")
+        }
+    };
+
+    let Some(fwupd_bin) = fwupd_opt else {
+        return StatusFirmware {
+            available: false,
+            tool: "fwupd".into(),
+            reason: "not_installed".into(),
+            updates_count: 0,
+            devices_monitored: 0,
+            pending_devices: Vec::new(),
+            bypassed_quirks: Vec::new(),
+        };
     };
 
     let run_cmd = async {
@@ -155,9 +196,19 @@ pub async fn check_firmware_updates(skip: bool) -> StatusFirmware {
             let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
             let trimmed = stdout.trim();
 
-            if output.status.success() && !trimmed.is_empty() {
-                let parsed: Result<FwupdOutput, _> = serde_json::from_str(trimmed);
-                match parsed {
+            if output.status.success() {
+                if trimmed.is_empty() {
+                    return StatusFirmware {
+                        available: true,
+                        tool: "fwupd".into(),
+                        reason: String::new(),
+                        updates_count: 0,
+                        devices_monitored: 0,
+                        pending_devices: Vec::new(),
+                        bypassed_quirks: Vec::new(),
+                    };
+                }
+                match serde_json::from_str::<FwupdOutput>(trimmed) {
                     Ok(data) => {
                         let sb_active = is_secure_boot_enabled();
                         let (updates_count, devices_monitored, pending_devices, bypassed_quirks) =
@@ -183,10 +234,7 @@ pub async fn check_firmware_updates(skip: bool) -> StatusFirmware {
                         bypassed_quirks: Vec::new(),
                     },
                 }
-            } else if output.status.code() == Some(2)
-                || trimmed.is_empty()
-                || stderr.contains("no updatable devices")
-            {
+            } else if output.status.code() == Some(2) || stderr.contains("no updatable devices") {
                 StatusFirmware {
                     available: true,
                     tool: "fwupd".into(),

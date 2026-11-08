@@ -1,5 +1,7 @@
 use crate::models::state_base;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -7,8 +9,20 @@ use tokio::time::timeout;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const GITHUB_REPO: &str = "Gbur79/SysPilot";
-pub const RELEASE_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+pub const RELEASE_CACHE_TTL_SECS: u64 = 86_400;
 pub const RELEASE_FETCH_TIMEOUT_SECS: u64 = 4;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CACHE_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static TEST_RELEASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn set_test_release_overrides(cache_path: Option<PathBuf>, url: Option<String>) {
+    TEST_CACHE_PATH.with(|c| *c.borrow_mut() = cache_path);
+    TEST_RELEASE_URL.with(|u| *u.borrow_mut() = url);
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct GitHubRelease {
@@ -31,10 +45,11 @@ pub struct CachedReleaseInfo {
     pub release: GitHubRelease,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InstallOrigin {
     Pacman,
     GitClone,
+    #[default]
     Standalone,
 }
 
@@ -66,13 +81,14 @@ pub fn is_newer_version(current: &str, upstream: &str) -> bool {
 }
 
 pub fn get_release_cache_path() -> PathBuf {
+    #[cfg(test)]
+    if let Some(custom) = TEST_CACHE_PATH.with(|c| c.borrow().clone()) {
+        return custom;
+    }
     state_base().join("syspilot/github_release.json")
 }
 
 pub fn read_cached_release(cache_path: &Path) -> Option<CachedReleaseInfo> {
-    if !cache_path.is_file() {
-        return None;
-    }
     let data = std::fs::read_to_string(cache_path).ok()?;
     serde_json::from_str(&data).ok()
 }
@@ -95,7 +111,20 @@ pub fn write_cached_release(cache_path: &Path, info: &CachedReleaseInfo) -> std:
 }
 
 pub async fn fetch_latest_github_release() -> Result<GitHubRelease, String> {
-    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+    let url = {
+        #[cfg(test)]
+        {
+            TEST_RELEASE_URL
+                .with(|u| u.borrow().clone())
+                .unwrap_or_else(|| {
+                    format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest")
+                })
+        }
+        #[cfg(not(test))]
+        {
+            format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest")
+        }
+    };
     let mut cmd = crate::exec::new_tokio_command("curl");
     cmd.args([
         "-sS",
@@ -115,7 +144,7 @@ pub async fn fetch_latest_github_release() -> Result<GitHubRelease, String> {
         .spawn()
         .map_err(|e| format!("failed to spawn curl: {e}"))?;
     let output = match timeout(
-        Duration::from_secs(RELEASE_FETCH_TIMEOUT_SECS + 2),
+        Duration::from_secs(RELEASE_FETCH_TIMEOUT_SECS),
         child.wait_with_output(),
     )
     .await
@@ -170,45 +199,49 @@ pub async fn check_upstream_release(force_refresh: bool) -> Option<GitHubRelease
     }
 }
 
-pub fn detect_install_origin() -> InstallOrigin {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Ok(output) = crate::exec::new_std_command("pacman")
-            .args(["-Qo", &exe.to_string_lossy()])
-            .output()
-        {
-            if output.status.success() {
-                return InstallOrigin::Pacman;
-            }
-        }
-    }
-    if std::path::Path::new("/usr/bin/syspilot").exists() {
-        if let Ok(output) = crate::exec::new_std_command("pacman")
-            .args(["-Qo", "/usr/bin/syspilot"])
-            .output()
-        {
-            if output.status.success() {
-                return InstallOrigin::Pacman;
-            }
-        }
+fn is_syspilot_pkg_dir_name(name: &str) -> bool {
+    name.strip_prefix("syspilot-")
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|c| c.is_ascii_digit())
+}
+
+fn has_pacman_syspilot_entry(root: &Path) -> bool {
+    let local_db = crate::sys_root::sub_path(root, "/var/lib/pacman/local");
+    let Ok(entries) = std::fs::read_dir(local_db) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry
+            .file_name()
+            .to_str()
+            .is_some_and(is_syspilot_pkg_dir_name)
+    })
+}
+
+fn has_git_ancestor(start: &Path) -> bool {
+    start.ancestors().any(|dir| dir.join(".git").exists())
+}
+
+pub fn detect_install_origin_at(
+    root: &Path,
+    exe_override: Option<&Path>,
+    cwd_override: Option<&Path>,
+) -> InstallOrigin {
+    let usr_bin_exists = crate::sys_root::sub_path(root, "/usr/bin/syspilot").exists()
+        || exe_override.is_some_and(|p| p.starts_with("/usr/bin"));
+    if has_pacman_syspilot_entry(root) && usr_bin_exists {
+        return InstallOrigin::Pacman;
     }
 
-    if let Ok(mut current) = std::env::current_exe() {
-        while current.pop() {
-            if current.join(".git").exists() {
-                return InstallOrigin::GitClone;
-            }
-        }
-    }
-    if let Ok(mut current) = std::env::current_dir() {
-        loop {
-            if current.join(".git").exists() {
-                return InstallOrigin::GitClone;
-            }
-            if !current.pop() {
-                break;
-            }
-        }
+    if exe_override.is_some_and(has_git_ancestor) || cwd_override.is_some_and(has_git_ancestor) {
+        return InstallOrigin::GitClone;
     }
 
     InstallOrigin::Standalone
+}
+
+pub fn detect_install_origin() -> InstallOrigin {
+    let exe = std::env::current_exe().ok();
+    let cwd = std::env::current_dir().ok();
+    detect_install_origin_at(Path::new("/"), exe.as_deref(), cwd.as_deref())
 }

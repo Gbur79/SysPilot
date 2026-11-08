@@ -12,6 +12,37 @@ use std::mem::MaybeUninit;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
+thread_local! {
+    static TEST_TRIAGE_ROOT: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+    static TEST_TRIAGE_STATE: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn set_test_triage_overrides(
+    root: Option<std::path::PathBuf>,
+    state: Option<std::path::PathBuf>,
+) {
+    TEST_TRIAGE_ROOT.with(|r| *r.borrow_mut() = root);
+    TEST_TRIAGE_STATE.with(|s| *s.borrow_mut() = state);
+}
+
+fn active_triage_root() -> std::path::PathBuf {
+    #[cfg(test)]
+    if let Some(root) = TEST_TRIAGE_ROOT.with(|r| r.borrow().clone()) {
+        return root;
+    }
+    std::path::PathBuf::from("/")
+}
+
+fn active_triage_state() -> std::path::PathBuf {
+    #[cfg(test)]
+    if let Some(state) = TEST_TRIAGE_STATE.with(|s| s.borrow().clone()) {
+        return state;
+    }
+    state_base()
+}
+
 pub fn find_pacnew_files_at(root: &Path) -> Vec<String> {
     let etc_root = crate::sys_root::sub_path(root, "/etc");
     let mut results = Vec::new();
@@ -27,9 +58,6 @@ fn walk_pacnew_dir(
     max_depth: usize,
     results: &mut Vec<String>,
 ) {
-    if current_depth > max_depth {
-        return;
-    }
     let Ok(entries) = fs::read_dir(dir) else {
         // Gracefully skip 0700 root-only directories (e.g. /etc/sudoers.d, /etc/polkit-1/rules.d)
         return;
@@ -51,12 +79,9 @@ fn walk_pacnew_dir(
         } else if file_type.is_file() {
             let name = entry.file_name();
             if name.to_string_lossy().ends_with(".pacnew") {
-                let logical_path = if root == Path::new("/") {
-                    path.to_string_lossy().to_string()
-                } else if let Ok(stripped) = path.strip_prefix(root) {
-                    format!("/{}", stripped.to_string_lossy())
-                } else {
-                    path.to_string_lossy().to_string()
+                let logical_path = match path.strip_prefix(root) {
+                    Ok(stripped) => format!("/{}", stripped.to_string_lossy()),
+                    Err(_) => path.to_string_lossy().to_string(),
                 };
                 results.push(logical_path);
             }
@@ -65,9 +90,31 @@ fn walk_pacnew_dir(
 }
 
 pub async fn check_pacnew_files() -> Vec<String> {
-    tokio::task::spawn_blocking(|| find_pacnew_files_at(Path::new("/")))
+    let root = active_triage_root();
+    tokio::task::spawn_blocking(move || find_pacnew_files_at(&root))
         .await
         .unwrap_or_default()
+}
+
+const BYTES_PER_GIB: f64 = 1_073_741_824.0;
+
+pub fn calc_disk_usage(frsize: u64, blocks: u64, bavail: u64) -> Option<DiskUsage> {
+    if blocks == 0 || frsize == 0 {
+        return None;
+    }
+    let used_blocks = blocks.saturating_sub(bavail);
+    let used_pct = ((used_blocks as f64 / blocks as f64) * 100.0).clamp(0.0, 100.0) as u8;
+    let gib_per_block = frsize as f64 / BYTES_PER_GIB;
+    let total_gb = (blocks as f64 * gib_per_block) as f32;
+    let used_gb = (used_blocks as f64 * gib_per_block) as f32;
+    let free_gb = (bavail as f64 * gib_per_block) as f32;
+
+    Some(DiskUsage {
+        total_gb,
+        used_gb,
+        free_gb,
+        used_pct,
+    })
 }
 
 pub fn get_disk_usage(path: &str) -> Option<DiskUsage> {
@@ -80,26 +127,7 @@ pub fn get_disk_usage(path: &str) -> Option<DiskUsage> {
     }
 
     let stat = unsafe { stat.assume_init() };
-    let block_size = stat.f_frsize as f64;
-    let total_bytes = stat.f_blocks as f64 * block_size;
-    let avail_bytes = stat.f_bavail as f64 * block_size;
-
-    if total_bytes <= 0.0 {
-        return None;
-    }
-
-    let used_bytes = total_bytes - avail_bytes;
-    let used_pct = ((used_bytes / total_bytes) * 100.0).clamp(0.0, 100.0) as u8;
-    let total_gb = (total_bytes / (1024.0 * 1024.0 * 1024.0)) as f32;
-    let used_gb = (used_bytes / (1024.0 * 1024.0 * 1024.0)) as f32;
-    let free_gb = (avail_bytes / (1024.0 * 1024.0 * 1024.0)) as f32;
-
-    Some(DiskUsage {
-        total_gb,
-        used_gb,
-        free_gb,
-        used_pct,
-    })
+    calc_disk_usage(stat.f_frsize, stat.f_blocks, stat.f_bavail)
 }
 
 pub fn check_disk_status() -> DiskStatus {
@@ -312,7 +340,11 @@ struct SummaryJson {
 }
 
 pub fn load_sys_health() -> SysHealth {
-    let summary_path = state_base().join("system-health/summary.json");
+    load_sys_health_at(&active_triage_state(), &active_triage_root())
+}
+
+pub fn load_sys_health_at(state_dir: &Path, root: &Path) -> SysHealth {
+    let summary_path = state_dir.join("system-health/summary.json");
     let mut health = if summary_path.is_file() {
         match std::fs::File::open(&summary_path) {
             Ok(file) => {
@@ -352,15 +384,56 @@ pub fn load_sys_health() -> SysHealth {
     let mut env = health.environment.unwrap_or_default();
 
     if env.kernel.as_deref().unwrap_or("").is_empty() || env.kernel.as_deref() == Some("unknown") {
-        env.kernel = Some(detect_kernel());
+        env.kernel = Some(detect_kernel_at(root));
     }
 
     if env.os.as_deref().unwrap_or("").is_empty() {
-        env.os = Some(detect_os());
+        env.os = Some(detect_os_at(root));
     }
 
     health.environment = Some(env);
     health
+}
+
+pub fn resolve_check_mode(check_pkgs: bool, gamemode_active: bool) -> (bool, bool) {
+    let effective = check_pkgs && !gamemode_active;
+    (effective, !effective)
+}
+
+pub fn build_status_updates(core: u32, regular: u32, aur: u32) -> StatusUpdates {
+    StatusUpdates {
+        total: core + regular + aur,
+        core_count: core,
+        regular_count: regular,
+        aur_count: aur,
+    }
+}
+
+pub fn apply_hardware_and_gaming_gates(
+    status: &mut String,
+    status_reasons: &mut Vec<String>,
+    informational_reasons: &mut Vec<String>,
+    reboot_safety: &crate::reboot_safety::RebootSafetyStatus,
+    gaming_readiness: &crate::gaming::GamingReadinessStatus,
+) {
+    if reboot_safety.black_screen_risk {
+        *status = "ACTION_REQUIRED".into();
+        for issue in reboot_safety.issues.iter().rev() {
+            status_reasons.insert(0, format!("CRITICAL REBOOT RISK: {issue}"));
+        }
+    }
+    if gaming_readiness.applicable && !gaming_readiness.ready {
+        if *status == "FLIGHT_READY" || *status == "ALL_CLEAR" {
+            *status = "PRE_FLIGHT_ATTENTION".into();
+        }
+        for warn in &gaming_readiness.warnings {
+            status_reasons.push(format!("Gaming Readiness: {warn}"));
+        }
+    } else if gaming_readiness.applicable {
+        for warn in &gaming_readiness.warnings {
+            informational_reasons.push(format!("Gaming Telemetry: {warn}"));
+        }
+    }
 }
 
 pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
@@ -371,7 +444,7 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
         None
     };
 
-    let effective_check_pkgs = check_pkgs && !gamemode_active;
+    let (effective_check_pkgs, skip_slow_probes) = resolve_check_mode(check_pkgs, gamemode_active);
 
     let failed_services = check_failed_services().await;
     let disk = check_disk_status();
@@ -382,12 +455,7 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let updates = if effective_check_pkgs {
         let (core, regular, _pkgs) = check_official_updates().await;
         let aur = check_aur_updates().await;
-        StatusUpdates {
-            total: core + regular + aur,
-            core_count: core,
-            regular_count: regular,
-            aur_count: aur,
-        }
+        build_status_updates(core, regular, aur)
     } else if let Some(ref c) = cached {
         StatusUpdates {
             total: c.updates_total,
@@ -399,8 +467,8 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
         StatusUpdates::default()
     };
 
-    let security = check_security_vulnerabilities(!effective_check_pkgs).await;
-    let firmware = check_firmware_updates(!effective_check_pkgs).await;
+    let security = check_security_vulnerabilities(skip_slow_probes).await;
+    let firmware = check_firmware_updates(skip_slow_probes).await;
     let firewall = check_host_firewall().await;
     let reboot_safety = crate::reboot_safety::check_reboot_safety();
     let gaming_readiness = crate::gaming::check_gaming_readiness();
@@ -418,24 +486,13 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
             firewall: &firewall,
         });
 
-    if reboot_safety.black_screen_risk {
-        status = "ACTION_REQUIRED".into();
-        for issue in reboot_safety.issues.iter().rev() {
-            status_reasons.insert(0, format!("CRITICAL REBOOT RISK: {issue}"));
-        }
-    }
-    if gaming_readiness.applicable && !gaming_readiness.ready {
-        if status == "FLIGHT_READY" || status == "ALL_CLEAR" {
-            status = "PRE_FLIGHT_ATTENTION".into();
-        }
-        for warn in &gaming_readiness.warnings {
-            status_reasons.push(format!("Gaming Readiness: {warn}"));
-        }
-    } else if gaming_readiness.applicable {
-        for warn in &gaming_readiness.warnings {
-            informational_reasons.push(format!("Gaming Telemetry: {warn}"));
-        }
-    }
+    apply_hardware_and_gaming_gates(
+        &mut status,
+        &mut status_reasons,
+        &mut informational_reasons,
+        &reboot_safety,
+        &gaming_readiness,
+    );
 
     let pacnew = PacnewStatus {
         count: pacnew_list.len(),

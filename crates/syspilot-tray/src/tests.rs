@@ -458,3 +458,316 @@ fn test_gamemode_resilience_without_dbus() {
         assert!(!is_active);
     });
 }
+
+#[test]
+fn test_stage3_tray_state_machine_and_mutants() {
+    use crate::tray::SysPilotTray;
+    use ksni::{Category, MenuItem, Status, Tray};
+    use syspilot_core::models::SystemSnapshot;
+    use syspilot_core::sentinels::SentinelStatus;
+    use syspilot_core::updater::UpdateSummary;
+
+    let (exit_tx, mut exit_rx) = tokio::sync::mpsc::channel(1);
+
+    let mut tray = SysPilotTray::new(
+        SystemSnapshot {
+            status: "ALL_CLEAR".into(),
+            cache_stale: false,
+            ..Default::default()
+        },
+        SentinelStatus::default(),
+        None,
+        false,
+        Some(std::path::PathBuf::from("/bin/true")),
+        exit_tx.clone(),
+    );
+
+    // 1. Tray identity & category
+    assert_eq!(tray.id(), "syspilot-sentinel");
+    assert_eq!(tray.title(), "SysPilot SRE Copilot");
+    assert_eq!(tray.category(), Category::SystemServices);
+
+    // 2. effective_updates
+    // updates = None -> (snapshot.updates_total, snapshot.core_updates)
+    tray.snapshot.updates_total = 5;
+    tray.snapshot.core_updates = 2;
+    assert_eq!(tray.effective_updates(), (5, 2));
+
+    // updates = Some(...), but snapshot.updates_total == 0 -> (0, 0)
+    tray.snapshot.updates_total = 0;
+    tray.snapshot.core_updates = 0;
+    tray.updates = Some(UpdateSummary {
+        core_count: 3,
+        regular_count: 5,
+        aur_count: 2,
+        standalone_count: 0,
+        core_packages: vec![],
+        last_checked: None,
+    });
+    assert_eq!(tray.effective_updates(), (0, 0));
+
+    // updates = Some(...), snapshot.updates_total > 0 -> (u.total(), u.core_count)
+    tray.snapshot.updates_total = 10;
+    assert_eq!(tray.effective_updates(), (10, 3));
+
+    // 3. status() state machine
+    tray.snapshot.updates_total = 0;
+    tray.updates = None;
+    assert_eq!(tray.status(), Status::Active);
+
+    // pacman_orphaned_lock -> NeedsAttention
+    tray.sentinels.pacman_orphaned_lock = true;
+    assert_eq!(tray.status(), Status::NeedsAttention);
+    tray.sentinels.pacman_orphaned_lock = false;
+
+    // reboot_pending -> NeedsAttention
+    tray.sentinels.reboot_pending = true;
+    assert_eq!(tray.status(), Status::NeedsAttention);
+    tray.sentinels.reboot_pending = false;
+
+    // has_data_problem (source_error or cache_stale) -> NeedsAttention
+    tray.snapshot.cache_stale = true;
+    assert_eq!(tray.status(), Status::NeedsAttention);
+    tray.snapshot.cache_stale = false;
+
+    // total_updates > 0 -> NeedsAttention
+    tray.snapshot.updates_total = 1;
+    assert_eq!(tray.status(), Status::NeedsAttention);
+    tray.snapshot.updates_total = 0;
+
+    // status not ALL_CLEAR/FLIGHT_READY -> NeedsAttention
+    tray.snapshot.status = "PRE_FLIGHT_ATTENTION".into();
+    assert_eq!(tray.status(), Status::NeedsAttention);
+    tray.snapshot.status = "ACTION_REQUIRED".into();
+    assert_eq!(tray.status(), Status::NeedsAttention);
+    tray.snapshot.status = "FLIGHT_READY".into();
+    assert_eq!(tray.status(), Status::Active);
+
+    // 4. icon_name()
+    tray.sentinels.pacman_orphaned_lock = true;
+    assert_eq!(tray.icon_name(), "dialog-error");
+    tray.sentinels.pacman_orphaned_lock = false;
+
+    tray.sentinels.reboot_pending = true;
+    assert_eq!(tray.icon_name(), "dialog-warning");
+    tray.sentinels.reboot_pending = false;
+
+    tray.snapshot.reboot_pending = true;
+    assert_eq!(tray.icon_name(), "dialog-warning");
+    tray.snapshot.reboot_pending = false;
+
+    tray.snapshot.updates_total = 2;
+    assert_eq!(tray.icon_name(), "dialog-warning");
+    tray.snapshot.updates_total = 0;
+
+    tray.snapshot.source_error = Some("error".into());
+    assert_eq!(tray.icon_name(), "dialog-warning");
+    tray.snapshot.source_error = None;
+
+    tray.snapshot.status = "ACTION_REQUIRED".into();
+    assert_eq!(tray.icon_name(), "dialog-error");
+
+    tray.snapshot.status = "REVIEW_WARNINGS".into();
+    assert_eq!(tray.icon_name(), "dialog-warning");
+
+    tray.snapshot.status = "PRE_FLIGHT_ATTENTION".into();
+    assert_eq!(tray.icon_name(), "dialog-warning");
+
+    tray.snapshot.status = "FLIGHT_READY".into();
+    tray.gamemode_active = true;
+    assert_eq!(tray.icon_name(), "input-gaming");
+
+    tray.gamemode_active = false;
+    assert_eq!(tray.icon_name(), "security-high");
+
+    tray.snapshot.status = "UNKNOWN_STATUS".into();
+    assert_eq!(tray.icon_name(), "utilities-system-monitor");
+    tray.snapshot.status = "FLIGHT_READY".into();
+
+    // 5. tool_tip()
+    tray.sentinels.pacman_orphaned_lock = true;
+    assert!(tray.tool_tip().title.contains("Pacman database locked"));
+    tray.sentinels.pacman_orphaned_lock = false;
+
+    tray.sentinels.reboot_pending = true;
+    assert!(tray.tool_tip().title.contains("Reboot required"));
+    assert!(tray.tool_tip().description.contains("REQUIRED ⚠"));
+    tray.sentinels.reboot_pending = false;
+
+    tray.snapshot.source_error = Some("corrupted data".into());
+    assert!(
+        tray.tool_tip()
+            .title
+            .contains("telemetry unavailable: corrupted data")
+    );
+    tray.snapshot.source_error = None;
+
+    tray.snapshot.cache_stale = true;
+    assert!(tray.tool_tip().title.contains("telemetry stale"));
+    tray.snapshot.cache_stale = false;
+
+    tray.snapshot.status = "ACTION_REQUIRED".into();
+    assert!(tray.tool_tip().title.contains("action required"));
+    tray.snapshot.status = "FLIGHT_READY".into();
+
+    tray.snapshot.security_high_risk = 3;
+    assert!(
+        tray.tool_tip()
+            .title
+            .contains("3 high-risk security CVE(s)")
+    );
+    tray.snapshot.security_high_risk = 0;
+
+    tray.snapshot.updates_total = 5;
+    tray.snapshot.core_updates = 2;
+    assert!(
+        tray.tool_tip()
+            .title
+            .contains("5 updates available (2 core)")
+    );
+    tray.snapshot.updates_total = 0;
+    tray.snapshot.core_updates = 0;
+
+    tray.gamemode_active = true;
+    assert!(tray.tool_tip().title.contains("GameMode active"));
+    tray.gamemode_active = false;
+
+    assert!(tray.tool_tip().title.contains("Status: FLIGHT_READY"));
+    assert!(tray.tool_tip().description.contains("clean"));
+
+    // 6. activate debounce
+    let t0 = std::time::Instant::now();
+    assert!(!crate::tray::is_gui_spawn_debounced(None, t0));
+    assert!(crate::tray::is_gui_spawn_debounced(Some(t0), t0));
+    assert!(crate::tray::is_gui_spawn_debounced(
+        Some(t0),
+        t0 + std::time::Duration::from_millis(1499)
+    ));
+    assert!(!crate::tray::is_gui_spawn_debounced(
+        Some(t0),
+        t0 + std::time::Duration::from_millis(1500)
+    ));
+
+    let mut tray_no_bin = SysPilotTray::new(
+        SystemSnapshot::default(),
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        exit_tx.clone(),
+    );
+    tray_no_bin.activate(0, 0); // Logs error, does not crash
+    assert!(tray_no_bin.last_gui_spawn.is_none());
+
+    tray.last_gui_spawn = None;
+    tray.activate(0, 0); // First call spawns
+    assert!(tray.last_gui_spawn.is_some());
+    let spawn_time = tray.last_gui_spawn.unwrap();
+
+    tray.activate(0, 0); // Immediate second activate is debounced (< 1500ms)
+    assert_eq!(tray.last_gui_spawn.unwrap(), spawn_time);
+
+    // 7. menu() items and activation closures
+    tray.sentinels.pacman_orphaned_lock = true;
+    let menu_orphaned = tray.menu();
+    if let MenuItem::Standard(header) = &menu_orphaned[0] {
+        assert!(
+            header
+                .label
+                .starts_with("CRITICAL — Pacman database locked")
+        );
+    }
+    tray.sentinels.pacman_orphaned_lock = false;
+
+    tray.snapshot.source_error = Some("fail".into());
+    let menu_err = tray.menu();
+    if let MenuItem::Standard(header) = &menu_err[0] {
+        assert!(header.label.starts_with("Telemetry unavailable"));
+    }
+    tray.snapshot.source_error = None;
+
+    tray.snapshot.cache_stale = true;
+    let menu_stale = tray.menu();
+    if let MenuItem::Standard(header) = &menu_stale[0] {
+        assert!(header.label.starts_with("Telemetry stale"));
+    }
+    tray.snapshot.cache_stale = false;
+
+    tray.snapshot.updates_total = 4;
+    tray.snapshot.core_updates = 1;
+    let menu_updates = tray.menu();
+    if let MenuItem::Standard(header) = &menu_updates[0] {
+        assert!(
+            header
+                .label
+                .starts_with("Updates Pending — 4 packages (1 core)")
+        );
+    }
+    tray.snapshot.updates_total = 0;
+    tray.snapshot.core_updates = 0;
+
+    tray.snapshot.status = "FLIGHT_READY".into();
+    let menu_healthy = tray.menu();
+    if let MenuItem::Standard(header) = &menu_healthy[0] {
+        assert!(header.label.contains("System primed and healthy"));
+    }
+
+    let items = tray.menu();
+    assert_eq!(items.len(), 8);
+
+    // Test activate on action_gui (item index 2)
+    if let MenuItem::Standard(ref gui_item) = items[2] {
+        assert!(gui_item.label.contains("Open SysPilot Dashboard"));
+        assert!(gui_item.enabled);
+        (gui_item.activate)(&mut tray);
+    } else {
+        panic!("Expected StandardItem for gui");
+    }
+
+    // Test activate on action terminal (item index 3)
+    if let MenuItem::Standard(ref audit_item) = items[3] {
+        assert!(audit_item.label.contains("Full System Diagnostic"));
+        assert!(audit_item.enabled);
+        (audit_item.activate)(&mut tray);
+    } else {
+        panic!("Expected StandardItem for audit");
+    }
+
+    // Test activate on action terminal (item index 4)
+    if let MenuItem::Standard(ref up_item) = items[4] {
+        assert!(up_item.label.contains("Guarded System Upgrade"));
+        assert!(up_item.enabled);
+        (up_item.activate)(&mut tray);
+    } else {
+        panic!("Expected StandardItem for upgrade");
+    }
+
+    // Test activate on action terminal (item index 5)
+    if let MenuItem::Standard(ref copilot_item) = items[5] {
+        assert!(copilot_item.label.contains("Ask SysPilot Copilot"));
+        assert!(copilot_item.enabled);
+        (copilot_item.activate)(&mut tray);
+    } else {
+        panic!("Expected StandardItem for copilot");
+    }
+
+    // Test activate on Exit (item index 7)
+    if let MenuItem::Standard(ref exit_item) = items[7] {
+        assert_eq!(exit_item.label, "Exit SysPilot");
+        (exit_item.activate)(&mut tray);
+        assert_eq!(exit_rx.try_recv().unwrap(), ());
+    } else {
+        panic!("Expected StandardItem for exit");
+    }
+
+    // Repeat actions when syspilot is None (covers the else branch)
+    let no_bin_items = tray_no_bin.menu();
+    if let MenuItem::Standard(ref gui_item) = no_bin_items[2] {
+        assert!(!gui_item.enabled);
+        (gui_item.activate)(&mut tray_no_bin);
+    }
+    if let MenuItem::Standard(ref audit_item) = no_bin_items[3] {
+        assert!(!audit_item.enabled);
+        (audit_item.activate)(&mut tray_no_bin);
+    }
+}

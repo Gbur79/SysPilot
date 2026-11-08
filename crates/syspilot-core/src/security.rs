@@ -1,9 +1,24 @@
+use crate::firmware::parse_timeout_ms;
 use crate::models::StatusSecurity;
 use serde::Deserialize;
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::BTreeSet;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::time::timeout;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_ARCH_AUDIT_BIN: RefCell<Option<Option<PathBuf>>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn set_test_arch_audit_bin(bin: Option<Option<PathBuf>>) {
+    TEST_ARCH_AUDIT_BIN.with(|b| *b.borrow_mut() = bin);
+}
 
 #[derive(Debug, Deserialize)]
 struct ArchAuditItem {
@@ -14,14 +29,12 @@ struct ArchAuditItem {
 }
 
 pub fn default_security_timeout() -> Duration {
-    if let Ok(val) = std::env::var("SYSPILOT_SECURITY_TIMEOUT_MS") {
-        if let Ok(ms) = val.trim().parse::<u64>() {
-            if ms > 0 {
-                return Duration::from_millis(ms);
-            }
-        }
-    }
-    Duration::from_millis(3500)
+    parse_timeout_ms(
+        std::env::var("SYSPILOT_SECURITY_TIMEOUT_MS")
+            .ok()
+            .as_deref(),
+        3500,
+    )
 }
 
 pub fn parse_arch_audit_json(json_str: &str) -> Result<(u32, u32, Vec<String>), String> {
@@ -59,18 +72,28 @@ pub async fn check_security_vulnerabilities(skip_network: bool) -> StatusSecurit
         };
     }
 
-    let audit_bin = match crate::updater::find_executable("arch-audit") {
-        Some(bin) => bin,
-        None => {
-            return StatusSecurity {
-                available: false,
-                tool: "arch-audit".into(),
-                reason: "not_installed".into(),
-                vulnerabilities_total: 0,
-                high_risk_count: 0,
-                packages: Vec::new(),
-            };
+    let audit_opt = {
+        #[cfg(test)]
+        {
+            TEST_ARCH_AUDIT_BIN
+                .with(|b| b.borrow().clone())
+                .unwrap_or_else(|| crate::updater::find_executable("arch-audit"))
         }
+        #[cfg(not(test))]
+        {
+            crate::updater::find_executable("arch-audit")
+        }
+    };
+
+    let Some(audit_bin) = audit_opt else {
+        return StatusSecurity {
+            available: false,
+            tool: "arch-audit".into(),
+            reason: "not_installed".into(),
+            vulnerabilities_total: 0,
+            high_risk_count: 0,
+            packages: Vec::new(),
+        };
     };
 
     let run_cmd = async {

@@ -1,8 +1,34 @@
 use crate::models::FailedServicesStatus;
+use crate::sys_root::sub_path;
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::time::timeout;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SYSTEMCTL_BIN: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn set_test_systemctl_bin(bin: Option<PathBuf>) {
+    TEST_SYSTEMCTL_BIN.with(|b| *b.borrow_mut() = bin);
+}
+
+pub fn user_systemd_available_at(root: &Path, xdg_runtime_dir: Option<&Path>) -> bool {
+    if !sub_path(root, "/run/systemd/system").is_dir() {
+        return false;
+    }
+    let Some(xdg) = xdg_runtime_dir else {
+        return false;
+    };
+    xdg.join("systemd/private").exists() || xdg.join("bus").exists()
+}
 
 pub fn is_candidate_app_unit(unit: &str) -> bool {
     let lower = unit.trim().to_ascii_lowercase();
@@ -60,8 +86,21 @@ pub async fn get_transient_desktop_app_units(unit_names: &[String]) -> HashSet<S
     ];
     args.extend(candidates.iter().cloned());
 
+    let bin = {
+        #[cfg(test)]
+        {
+            TEST_SYSTEMCTL_BIN
+                .with(|b| b.borrow().clone())
+                .map(|p| p.into_os_string())
+                .unwrap_or_else(|| std::ffi::OsString::from("systemctl"))
+        }
+        #[cfg(not(test))]
+        {
+            std::ffi::OsString::from("systemctl")
+        }
+    };
     let run_cmd = async {
-        let mut cmd = crate::exec::new_tokio_command("systemctl");
+        let mut cmd = crate::exec::new_tokio_command(bin);
         cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -85,8 +124,21 @@ pub async fn query_failed_units(user_mode: bool) -> Result<Vec<String>, String> 
         args.insert(0, "--user");
     }
 
+    let bin = {
+        #[cfg(test)]
+        {
+            TEST_SYSTEMCTL_BIN
+                .with(|b| b.borrow().clone())
+                .map(|p| p.into_os_string())
+                .unwrap_or_else(|| std::ffi::OsString::from("systemctl"))
+        }
+        #[cfg(not(test))]
+        {
+            std::ffi::OsString::from("systemctl")
+        }
+    };
     let run_cmd = async {
-        let mut cmd = crate::exec::new_tokio_command("systemctl");
+        let mut cmd = crate::exec::new_tokio_command(bin);
         cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

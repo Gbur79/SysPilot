@@ -181,11 +181,16 @@ if [[ -n "$mutants_target" ]] || (( mutants_diff )); then
     mut_out=""
     mut_rc=0
     if [[ -n "$mutants_target" ]]; then
-        mut_out=$(cargo mutants --in-place --no-Auto-Update -p syspilot-core -f "$mutants_target" -- --lib 2>&1) || mut_rc=$?
-        if [[ "$mut_out" == *"unrecognized"* || "$mut_out" == *"unexpected argument"* ]]; then
-            mut_rc=0
-            mut_out=$(cargo mutants --in-place -p syspilot-core -f "$mutants_target" -- --lib 2>&1) || mut_rc=$?
+        mut_pkg="syspilot-core"
+        mut_test_args=(--lib)
+        if [[ "$mutants_target" == *"syspilot-tray"* ]]; then
+            mut_pkg="syspilot-tray"
+            mut_test_args=(--bin syspilot-tray)
+        elif [[ "$mutants_target" == *"syspilot-gui"* ]]; then
+            mut_pkg="syspilot-gui"
+            mut_test_args=(--bin syspilot-gui)
         fi
+        mut_out=$(cargo mutants --in-place -p "$mut_pkg" -f "$mutants_target" -- "${mut_test_args[@]}" 2>&1) || mut_rc=$?
     else
         diff_tmp=$(mktemp "/tmp/syspilot-mutants-diff.XXXXXX")
         git diff HEAD > "$diff_tmp"
@@ -193,7 +198,7 @@ if [[ -n "$mutants_target" ]] || (( mutants_diff )); then
         rm -f "$diff_tmp"
     fi
     rm -rf "$target_dir/mutants.out" "$target_dir/mutants.out.old"
-    summary_line=$(echo "$mut_out" | grep -E "mutants tested|Found 0 mutants" | tail -n 1 | tr '|' '_')
+    summary_line=$(echo "$mut_out" | grep -E "mutants tested|Found 0 mutants" | tail -n 1 | tr '|' '_' || true)
     if (( mut_rc != 0 )); then
         echo "$mut_out" > "$err_log"
         if (( quiet )); then

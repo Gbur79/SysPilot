@@ -4,9 +4,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const MAX_STATUS_BYTES: u64 = 1024 * 1024;
+pub const MAX_STATUS_BYTES: u64 = 1_048_576;
 pub const SUPPORTED_SCHEMA_MAJOR: &str = "1";
-pub const STALE_AFTER_SECS: u64 = 6 * 60 * 60;
+pub const STALE_AFTER_SECS: u64 = 21_600;
 pub const CLOCK_SKEW_TOLERANCE_SECS: u64 = 60;
 
 use std::collections::BTreeMap;
@@ -426,7 +426,10 @@ pub fn acquire_single_instance_lock(lock_name: &str) -> bool {
         Err(_) => return true,
     };
 
-    let res = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    const FLOCK_EX_NB: libc::c_int = 6;
+    const _: () = assert!(FLOCK_EX_NB == (libc::LOCK_EX | libc::LOCK_NB));
+
+    let res = unsafe { libc::flock(file.as_raw_fd(), FLOCK_EX_NB) };
     if res != 0 {
         return false;
     }
@@ -480,20 +483,19 @@ pub fn is_stale(modified: Option<SystemTime>) -> bool {
     }
 }
 
+#[allow(clippy::field_reassign_with_default)]
 pub fn read_system_snapshot_or_fallback(path: &Path) -> SystemSnapshot {
     match read_system_snapshot(path) {
         Ok(snapshot) => snapshot,
         Err(err) => {
             let modified = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
-            SystemSnapshot {
-                status: "UNKNOWN".into(),
-                cache_stale: is_stale(modified),
-                modified,
-                source_error: Some(err),
-                os: detect_os(),
-                kernel: detect_kernel(),
-                ..Default::default()
-            }
+            let mut fallback = SystemSnapshot::default();
+            fallback.cache_stale = is_stale(modified);
+            fallback.modified = modified;
+            fallback.source_error = Some(err);
+            fallback.os = detect_os();
+            fallback.kernel = detect_kernel();
+            fallback
         }
     }
 }
@@ -506,9 +508,6 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
 
     if !metadata.is_file() {
         return Err("status is not a regular file".into());
-    }
-    if metadata.len() > MAX_STATUS_BYTES {
-        return Err(format!("status exceeds {MAX_STATUS_BYTES} bytes"));
     }
 
     let mut bytes = Vec::with_capacity(metadata.len().min(MAX_STATUS_BYTES) as usize);

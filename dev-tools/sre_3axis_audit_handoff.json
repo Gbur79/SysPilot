@@ -1,0 +1,84 @@
+{
+  "schema": "syspilot-sre-3axis-audit-handoff/v2",
+  "generated_at": "2026-11-08T11:44:00Z",
+  "project_root": "/home/gbur/Projects/sysPilot",
+  "current_version": "2.1.1",
+  "release_policy": "HOLD_GITHUB_PUSH_UNTIL_STAGE_4_COMPLETE",
+  "certified_metrics_after_stage_3": {
+    "workspace_tests": "82/82 (core: 55, tray: 17, gui: 10)",
+    "cli_tests": "13/13",
+    "mutants_certified_modules": {
+      "MOD-CORE-05 (sentinels.rs)": "33/33 caught (4 unviable, 0 missed)",
+      "MOD-CORE-06 (firewall.rs)": "17/17 caught (0 missed)",
+      "MOD-CORE-07 (release.rs)": "34/34 caught (0 missed)",
+      "MOD-CORE-08 (services.rs)": "25/25 caught (0 missed)",
+      "MOD-CORE-09 (orphans.rs)": "22/22 caught (0 missed)",
+      "MOD-CORE-10 (firmware.rs)": "42/42 caught (0 missed)",
+      "MOD-CORE-11 (security.rs)": "19/19 caught (0 missed)",
+      "MOD-CORE-12 (triage.rs)": "110/110 caught (1 unviable, 0 missed)",
+      "MOD-CORE-13 (models.rs)": "77/77 caught (1 unviable, 0 missed)",
+      "MOD-TRAY-01 (syspilot-tray/src/tray.rs)": "41/41 caught (14 unviable, 0 missed)"
+    },
+    "executor_sessions": [
+      "7521661e-73d2-4424-b019-f83d83acfc70 (TX-SYSPILOT-3AXIS-STAGE1-001)",
+      "0e2ee087-5571-4aee-a359-0920e9fb8785 (TX-SYSPILOT-3AXIS-STAGE2-001)",
+      "964f241e-f8e2-4352-9dcf-59b4d6fc6c52 (TX-SYSPILOT-3AXIS-STAGE2-002)",
+      "a6ced97d-9dc6-4d40-96d7-ffa900a6f84a (TX-SYSPILOT-3AXIS-STAGE3-001)",
+      "6250bfcb-822d-4c90-ae10-24add0d1924c (TX-SYSPILOT-3AXIS-STAGE3-002)"
+    ],
+    "cargo_mutants_binary": "/home/gbur/.local/bin/cargo-mutants (v27.1.0)"
+  },
+  "key_sre_lessons_learned": [
+    "Never use '..Default::default()' struct update syntax in production structs in syspilot-core or syspilot-tray; cargo-mutants generates 'delete field <f> from struct' mutants which are equivalent when field values equal Default.",
+    "verify-rust.sh supports per-crate mutation testing (--mutants crates/syspilot-core/... or crates/syspilot-tray/... or crates/syspilot-gui/...) and git diff mutation testing (--mutants-diff -q).",
+    "Context7 verified (Slint v1.18.1): TextInput / LineEdit / TextEdit provide built-in select-all(), copy(), and clear-selection() functions that copy text directly to the native Wayland/X11 system clipboard with 0 subprocess forks."
+  ],
+  "audit_stages_roadmap": [
+    {
+      "stage": "STAGE_1_P1_SUBPROCESS_ELIMINATION",
+      "status": "CERTIFIED [Argon]",
+      "modules": ["MOD-CORE-06 (firewall.rs)", "MOD-CORE-07 (release.rs)"]
+    },
+    {
+      "stage": "STAGE_2_P2_HERMETIC_ROOT_AND_MUTANTS",
+      "status": "CERTIFIED [Argon]",
+      "modules": ["MOD-CORE-10 (firmware.rs)", "MOD-CORE-09 (orphans.rs)", "MOD-CORE-08 (services.rs)", "MOD-CORE-11 (security.rs)"]
+    },
+    {
+      "stage": "STAGE_3_P3_CORE_MODELS_AND_TRAY_RUNTIME",
+      "status": "CERTIFIED [Argon]",
+      "modules": ["MOD-CORE-05 (sentinels.rs)", "MOD-CORE-12 (triage.rs)", "MOD-CORE-13 (models.rs)", "MOD-TRAY-01 (syspilot-tray/src/tray.rs)"]
+    },
+    {
+      "stage": "STAGE_4_PATCH_027_TAB03_REDESIGN",
+      "status": "READY_TO_EXECUTE",
+      "modules": [
+        {
+          "id": "MOD-CORE-14_GUI-01",
+          "files": [
+            "crates/syspilot-core/src/copilot.rs",
+            "crates/syspilot-gui/src/main.rs",
+            "crates/syspilot-gui/ui/appwindow.slint",
+            "DEVELOPMENT_PROPOSALS.md",
+            "AUDIT_MATRIX.md"
+          ],
+          "target_design": [
+            "1. In crates/syspilot-core/src/copilot.rs:",
+            "   - Add pure-Rust zero-subprocess build_ai_telemetry_markdown_at(root: &Path, status_path: &Path) -> String and build_ai_telemetry_markdown() -> String that formats a concise, token-lean Markdown diagnostic report (OS, Kernel, GPU, Flight Status, Reboot Safety, Gaming/Vulkan Readiness, Updates, Failed Services, Root Disk, Firewall, Orphans, .pacnew count) with 0 subprocesses (assert_eq!(crate::exec::spawn_count(), 0)).",
+            "   - Add pure-Rust discover_user_playbooks_at(dir: &Path) -> Vec<UserPlaybook> and discover_user_playbooks() scanning ~/.config/syspilot/playbooks.d/*.sh (sorted deterministically, executable check, bounded count).",
+            "   - Audit copilot.rs with cargo-mutants so new pure functions achieve 0 survived mutants.",
+            "2. In crates/syspilot-gui/ui/appwindow.slint & crates/syspilot-gui/src/main.rs:",
+            "   - Replace Tab 03 free-form chatbot input with '03 SRE TACTICAL PLAYBOOKS' + Passive AI Telemetry Export in BOTH skins:",
+            "   - LCARS Skin (is_lcars_skin == true, zero emojis, Antonio font): Left spine button '03  PLAYBOOKS'; Pod Header 'POD 01 // 03 SRE TACTICAL PLAYBOOKS'; top control bar with 'COPY SRE TELEMETRY FOR AI' (using hidden TextInput { width: 0px; height: 0px; opacity: 0; text: root.sre_telemetry_export; } calling select-all(); copy(); clear-selection();) and 'INTERACTIVE AI SHELL'; 5 LcarsMaintenanceRow tactical playbooks (01 // PROTON Wine/Proton Shader & Prefix Hygiene, 02 // AUDIO PipeWire & WirePlumber Audio Stack Reset, 03 // PACDIFF Configuration Drift Reviewer (.pacnew), 04 // FAF Forged Alliance Forever Runner Repair, 05 // CUSTOM User Playbooks from ~/.config/syspilot/playbooks.d/) plus telemetry preview console.",
+            "   - Classic Cyberpunk Skin (!is_lcars_skin): Tab button '🛡  03 SRE Tactical Playbooks'; Passive AI Telemetry bar with '[ 📋 Copy SRE Telemetry for AI ]' ActionButton and '💻 Interactive AI Shell'; 5 MaintenanceCard playbooks + telemetry preview Card.",
+            "   - Connect playbook actions in crates/syspilot-gui/src/main.rs to deterministic terminal tasks (trigger_shell_task / trigger_task_with_post_triage) and copy_telemetry_clicked callback.",
+            "3. Finalization Gates after Stage 4:",
+            "   - Run Post-Implementation Audit (git diff + ./dev-tools/verify-rust.sh --mutants-diff -q).",
+            "   - Update DEVELOPMENT_PROPOSALS.md (PATCH-027 -> [IMPLEMENTED]) and AUDIT_MATRIX.md (MOD-CORE-14 & MOD-GUI-01 -> CERTIFIED).",
+            "   - Synchronize version if bumping (Cargo.toml == CHANGELOG.md == bin/syspilot == packaging/PKGBUILD), run Dual-Skin Runtime Smoke Test (skin=lcars and skin=classic), build single release LTO (./dev-tools/build-and-install.sh), and git push."
+          ]
+        }
+      ]
+    }
+  ]
+}

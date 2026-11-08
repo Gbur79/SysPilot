@@ -1,6 +1,38 @@
+#[cfg(test)]
+use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::time::SystemTime;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SENTINELS_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static TEST_SENTINELS_STATE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn set_test_sentinels_overrides(root: Option<PathBuf>, state: Option<PathBuf>) {
+    TEST_SENTINELS_ROOT.with(|r| *r.borrow_mut() = root);
+    TEST_SENTINELS_STATE.with(|s| *s.borrow_mut() = state);
+}
+
+fn active_sentinels_root() -> std::path::PathBuf {
+    #[cfg(test)]
+    if let Some(root) = TEST_SENTINELS_ROOT.with(|r| r.borrow().clone()) {
+        return root;
+    }
+    std::path::PathBuf::from("/")
+}
+
+fn active_sentinels_state() -> std::path::PathBuf {
+    #[cfg(test)]
+    if let Some(state) = TEST_SENTINELS_STATE.with(|s| s.borrow().clone()) {
+        return state;
+    }
+    crate::models::state_base()
+}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SentinelStatus {
@@ -15,7 +47,7 @@ pub struct SentinelStatus {
 }
 
 pub fn check_reboot_pending() -> bool {
-    check_reboot_pending_at(Path::new("/"))
+    check_reboot_pending_at(&active_sentinels_root())
 }
 
 pub fn check_reboot_pending_at(root: &Path) -> bool {
@@ -36,7 +68,8 @@ pub fn check_reboot_pending_at(root: &Path) -> bool {
 }
 
 pub fn check_pacman_lock() -> (bool, bool) {
-    check_pacman_lock_at(Path::new("/var/lib/pacman/db.lck"))
+    let root = active_sentinels_root();
+    check_pacman_lock_at(&crate::sys_root::sub_path(&root, "/var/lib/pacman/db.lck"))
 }
 
 pub fn check_pacman_lock_at(lock_path: &Path) -> (bool, bool) {
@@ -46,6 +79,14 @@ pub fn check_pacman_lock_at(lock_path: &Path) -> (bool, bool) {
 
     let proc_dir = if lock_path.starts_with("/var/lib/pacman") {
         std::path::PathBuf::from("/proc")
+    } else if let Some(root) = lock_path
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .filter(|_| lock_path.ends_with("var/lib/pacman/db.lck"))
+    {
+        root.join("proc")
     } else {
         lock_path
             .parent()
@@ -56,13 +97,11 @@ pub fn check_pacman_lock_at(lock_path: &Path) -> (bool, bool) {
     // 1. Fast-path: Check PID inside db.lck if written by ALPM
     let mut active = false;
     if let Ok(content) = fs::read_to_string(lock_path) {
-        if let Ok(pid) = content.trim().parse::<i32>() {
-            if pid > 0 {
-                let comm_path = proc_dir.join(format!("{pid}/comm"));
-                if let Ok(comm) = fs::read_to_string(comm_path) {
-                    if matches!(comm.trim(), "pacman" | "yay" | "paru" | "pamac-daemon") {
-                        active = true;
-                    }
+        if let Ok(pid) = content.trim().parse::<u32>() {
+            let comm_path = proc_dir.join(format!("{pid}/comm"));
+            if let Ok(comm) = fs::read_to_string(comm_path) {
+                if matches!(comm.trim(), "pacman" | "yay" | "paru" | "pamac-daemon") {
+                    active = true;
                 }
             }
         }
@@ -99,35 +138,11 @@ pub fn check_pacman_lock_at(lock_path: &Path) -> (bool, bool) {
 }
 
 pub fn get_disk_stats(path: &str) -> Option<(u8, f32)> {
-    use std::ffi::CString;
-    use std::mem::MaybeUninit;
-
-    let c_path = CString::new(path).ok()?;
-    let mut stat = MaybeUninit::<libc::statvfs>::uninit();
-
-    let res = unsafe { libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) };
-    if res != 0 {
-        return None;
-    }
-
-    let stat = unsafe { stat.assume_init() };
-    let block_size = stat.f_frsize as f64;
-    let total_bytes = stat.f_blocks as f64 * block_size;
-    let avail_bytes = stat.f_bavail as f64 * block_size;
-
-    if total_bytes <= 0.0 {
-        return None;
-    }
-
-    let used_bytes = total_bytes - avail_bytes;
-    let used_pct = ((used_bytes / total_bytes) * 100.0).clamp(0.0, 100.0) as u8;
-    let avail_gb = (avail_bytes / (1024.0 * 1024.0 * 1024.0)) as f32;
-
-    Some((used_pct, avail_gb))
+    crate::triage::get_disk_usage(path).map(|d| (d.used_pct, d.free_gb))
 }
 
 pub fn get_pacman_db_mtime() -> Option<SystemTime> {
-    get_pacman_db_mtime_at(Path::new("/"))
+    get_pacman_db_mtime_at(&active_sentinels_root())
 }
 
 pub fn get_pacman_db_mtime_at(root: &Path) -> Option<SystemTime> {
@@ -137,7 +152,11 @@ pub fn get_pacman_db_mtime_at(root: &Path) -> Option<SystemTime> {
 }
 
 pub fn get_summary_mtime() -> Option<SystemTime> {
-    let summary_path = crate::models::state_base().join("system-health/summary.json");
+    get_summary_mtime_at(&active_sentinels_state())
+}
+
+pub fn get_summary_mtime_at(state_dir: &Path) -> Option<SystemTime> {
+    let summary_path = state_dir.join("system-health/summary.json");
     fs::metadata(summary_path).and_then(|m| m.modified()).ok()
 }
 

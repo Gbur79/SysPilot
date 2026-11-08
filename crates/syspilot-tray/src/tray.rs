@@ -14,7 +14,7 @@ pub struct SysPilotTray {
     pub gamemode_active: bool,
     syspilot: Option<PathBuf>,
     exit_tx: mpsc::Sender<()>,
-    last_gui_spawn: Option<Instant>,
+    pub(crate) last_gui_spawn: Option<Instant>,
 }
 
 impl SysPilotTray {
@@ -41,7 +41,7 @@ impl SysPilotTray {
         if let Some(u) = &self.updates {
             // If snapshot was refreshed to 0 (e.g. after upgrade),
             // while internal cache holds older package count, authoritative state is clean (0).
-            if self.snapshot.updates_total == 0 && u.total() > 0 {
+            if self.snapshot.updates_total == 0 {
                 (0, 0)
             } else {
                 (u.total(), u.core_count)
@@ -51,26 +51,26 @@ impl SysPilotTray {
         }
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     fn action_gui(&self, label: &str) -> MenuItem<Self> {
         use ksni::menu::StandardItem;
         let executable = self.syspilot.clone();
-        StandardItem {
-            label: label.into(),
-            enabled: executable.is_some(),
-            activate: Box::new(move |_| {
-                if let Some(path) = executable.as_deref() {
-                    if let Err(error) = spawn_detached_gui(path) {
-                        eprintln!("SysPilot: {error}");
-                    }
-                } else {
-                    eprintln!("SysPilot: menu action failed: executable not found");
+        let mut item = StandardItem::default();
+        item.label = label.into();
+        item.enabled = executable.is_some();
+        item.activate = Box::new(move |_| {
+            if let Some(path) = executable.as_deref() {
+                if let Err(error) = spawn_detached_gui(path) {
+                    eprintln!("SysPilot: {error}");
                 }
-            }),
-            ..Default::default()
-        }
-        .into()
+            } else {
+                eprintln!("SysPilot: menu action failed: executable not found");
+            }
+        });
+        item.into()
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     fn action(
         &self,
         label: &str,
@@ -79,21 +79,26 @@ impl SysPilotTray {
     ) -> MenuItem<Self> {
         use ksni::menu::StandardItem;
         let executable = self.syspilot.clone();
-        StandardItem {
-            label: label.into(),
-            enabled: executable.is_some(),
-            activate: Box::new(move |_| {
-                if let Some(path) = executable.as_deref() {
-                    if let Err(error) = spawn_terminal_command(path, args, title) {
-                        eprintln!("SysPilot: {error}");
-                    }
-                } else {
-                    eprintln!("SysPilot: terminal action '{title}' failed: executable not found");
+        let mut item = StandardItem::default();
+        item.label = label.into();
+        item.enabled = executable.is_some();
+        item.activate = Box::new(move |_| {
+            if let Some(path) = executable.as_deref() {
+                if let Err(error) = spawn_terminal_command(path, args, title) {
+                    eprintln!("SysPilot: {error}");
                 }
-            }),
-            ..Default::default()
-        }
-        .into()
+            } else {
+                eprintln!("SysPilot: terminal action '{title}' failed: executable not found");
+            }
+        });
+        item.into()
+    }
+}
+
+pub fn is_gui_spawn_debounced(last_spawn: Option<Instant>, now: Instant) -> bool {
+    match last_spawn {
+        Some(last) => now.saturating_duration_since(last) < Duration::from_millis(1500),
+        None => false,
     }
 }
 
@@ -113,12 +118,9 @@ impl Tray for SysPilotTray {
     }
 
     fn status(&self) -> Status {
-        let (total_updates, _) = self.effective_updates();
-
         if self.sentinels.pacman_orphaned_lock
             || self.sentinels.reboot_pending
             || self.snapshot.has_data_problem()
-            || total_updates > 0
             || !matches!(
                 self.snapshot.effective_status(),
                 "ALL_CLEAR" | "FLIGHT_READY"
@@ -131,10 +133,8 @@ impl Tray for SysPilotTray {
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
-        if let Some(last) = self.last_gui_spawn {
-            if last.elapsed() < Duration::from_millis(1500) {
-                return;
-            }
+        if is_gui_spawn_debounced(self.last_gui_spawn, Instant::now()) {
+            return;
         }
         if let Some(path) = self.syspilot.as_deref() {
             if let Err(error) = spawn_detached_gui(path) {
@@ -152,11 +152,6 @@ impl Tray for SysPilotTray {
             return "dialog-error".into();
         }
         if self.sentinels.reboot_pending || self.snapshot.reboot_pending {
-            return "dialog-warning".into();
-        }
-        let (total_updates, _) = self.effective_updates();
-
-        if total_updates > 0 {
             return "dialog-warning".into();
         }
         if self.snapshot.has_data_problem() {
@@ -224,6 +219,7 @@ impl Tray for SysPilotTray {
         }
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     fn menu(&self) -> Vec<MenuItem<Self>> {
         use ksni::menu::StandardItem;
 
@@ -250,13 +246,20 @@ impl Tray for SysPilotTray {
         };
         let exit_tx = self.exit_tx.clone();
 
-        vec![
-            StandardItem {
-                label: header,
-                enabled: false,
-                ..Default::default()
+        let mut header_item = StandardItem::default();
+        header_item.label = header;
+        header_item.enabled = false;
+
+        let mut exit_item = StandardItem::default();
+        exit_item.label = "Exit SysPilot".into();
+        exit_item.activate = Box::new(move |_| {
+            if exit_tx.try_send(()).is_err() {
+                eprintln!("SysPilot: exit signal channel full or closed");
             }
-            .into(),
+        });
+
+        vec![
+            header_item.into(),
             MenuItem::Separator,
             self.action_gui("✈ Open SysPilot Dashboard"),
             self.action("🔍 Full System Diagnostic", &["-a"], "SysPilot Audit"),
@@ -267,16 +270,7 @@ impl Tray for SysPilotTray {
                 "SysPilot AI Copilot",
             ),
             MenuItem::Separator,
-            StandardItem {
-                label: "Exit SysPilot".into(),
-                activate: Box::new(move |_| {
-                    if exit_tx.try_send(()).is_err() {
-                        eprintln!("SysPilot: exit signal channel full or closed");
-                    }
-                }),
-                ..Default::default()
-            }
-            .into(),
+            exit_item.into(),
         ]
     }
 }

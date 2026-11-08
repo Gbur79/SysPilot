@@ -1,9 +1,24 @@
 use crate::models::OrphanStatus;
+use crate::sys_root::sub_path;
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::time::timeout;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PACMAN_BIN: RefCell<Option<Option<PathBuf>>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn set_test_pacman_bin(bin: Option<Option<PathBuf>>) {
+    TEST_PACMAN_BIN.with(|b| *b.borrow_mut() = bin);
+}
 
 pub const ORPHAN_SENSITIVE_PATTERNS: &[(&str, &[&str])] = &[
     (
@@ -112,8 +127,8 @@ pub const ORPHAN_SENSITIVE_PATTERNS: &[(&str, &[&str])] = &[
 ];
 
 pub fn glob_match(pattern: &str, text: &str) -> bool {
-    if pattern.starts_with('*') && pattern.ends_with('*') && pattern.len() >= 2 {
-        text.contains(&pattern[1..pattern.len() - 1])
+    if let Some(inner) = pattern.strip_prefix('*').and_then(|s| s.strip_suffix('*')) {
+        text.contains(inner)
     } else if let Some(suffix) = pattern.strip_prefix('*') {
         text.ends_with(suffix)
     } else if let Some(prefix) = pattern.strip_suffix('*') {
@@ -133,6 +148,20 @@ pub fn orphan_sensitive_tag(package: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+pub fn list_local_pacman_db_entries_at(root: &Path) -> Vec<String> {
+    let db_dir = sub_path(root, "/var/lib/pacman/local");
+    let Ok(entries) = std::fs::read_dir(db_dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    names
 }
 
 pub async fn query_pacman_package_names(
@@ -196,13 +225,14 @@ pub fn classify_orphans(
 ) -> OrphanStatus {
     let strict_ok = strict_pkgs.is_ok();
     let extended_ok = extended_pkgs.is_ok();
+    let tiering_complete = strict_ok && extended_ok;
 
     let strict_set: BTreeSet<String> = strict_pkgs.unwrap_or_default().into_iter().collect();
     let extended_set: BTreeSet<String> = extended_pkgs.unwrap_or_default().into_iter().collect();
 
     let candidate_set: BTreeSet<String> = strict_set.union(&extended_set).cloned().collect();
 
-    let optional_set: BTreeSet<String> = if strict_ok && extended_ok {
+    let optional_set: BTreeSet<String> = if tiering_complete {
         extended_set.difference(&strict_set).cloned().collect()
     } else {
         BTreeSet::new()
@@ -228,7 +258,7 @@ pub fn classify_orphans(
     }
 
     let checked = strict_ok;
-    let query_status = if strict_ok && extended_ok {
+    let query_status = if tiering_complete {
         "CLEAN".to_string()
     } else if strict_ok {
         "PARTIAL".to_string()
@@ -245,7 +275,7 @@ pub fn classify_orphans(
 
     let message = if !checked {
         "Orphan query unavailable: pacman query error".to_string()
-    } else if tier1.is_empty() && tier2.is_empty() && tier3.is_empty() {
+    } else if candidate_set.is_empty() {
         "No orphan packages detected".to_string()
     } else {
         format!(
@@ -261,7 +291,7 @@ pub fn classify_orphans(
         query_status,
         severity,
         affects_flight_status,
-        tiering_complete: strict_ok && extended_ok,
+        tiering_complete,
         count: strict_set.len(),
         packages: strict_set.into_iter().collect(),
         optional_count: optional_set.len(),
@@ -280,31 +310,41 @@ pub fn classify_orphans(
 }
 
 pub async fn check_orphan_packages() -> OrphanStatus {
-    let pacman_path = match crate::updater::find_executable("pacman") {
-        Some(p) => p,
-        None => {
-            return OrphanStatus {
-                checked: false,
-                query_status: "ERROR".into(),
-                severity: "WARN".into(),
-                affects_flight_status: true,
-                tiering_complete: false,
-                count: 0,
-                packages: Vec::new(),
-                optional_count: 0,
-                optional_packages: Vec::new(),
-                candidate_count: 0,
-                tier1_count: 0,
-                tier1_packages: Vec::new(),
-                tier2_count: 0,
-                tier2_packages: Vec::new(),
-                tier3_count: 0,
-                tier3_packages: Vec::new(),
-                tier3_tags: BTreeMap::new(),
-                unclassified_packages: Vec::new(),
-                message: "Orphan query unavailable: pacman executable not found".into(),
-            };
+    let pacman_opt = {
+        #[cfg(test)]
+        {
+            TEST_PACMAN_BIN
+                .with(|b| b.borrow().clone())
+                .unwrap_or_else(|| crate::updater::find_executable("pacman"))
         }
+        #[cfg(not(test))]
+        {
+            crate::updater::find_executable("pacman")
+        }
+    };
+
+    let Some(pacman_path) = pacman_opt else {
+        return OrphanStatus {
+            checked: false,
+            query_status: "ERROR".into(),
+            severity: "WARN".into(),
+            affects_flight_status: true,
+            tiering_complete: false,
+            count: 0,
+            packages: Vec::new(),
+            optional_count: 0,
+            optional_packages: Vec::new(),
+            candidate_count: 0,
+            tier1_count: 0,
+            tier1_packages: Vec::new(),
+            tier2_count: 0,
+            tier2_packages: Vec::new(),
+            tier3_count: 0,
+            tier3_packages: Vec::new(),
+            tier3_tags: BTreeMap::new(),
+            unclassified_packages: Vec::new(),
+            message: "Orphan query unavailable: pacman executable not found".into(),
+        };
     };
 
     let strict = query_pacman_package_names(&pacman_path, "-Qdtq", 3).await;

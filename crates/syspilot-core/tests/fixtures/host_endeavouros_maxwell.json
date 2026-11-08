@@ -1,0 +1,64 @@
+{
+  "os_release": {
+    "NAME": "EndeavourOS",
+    "PRETTY_NAME": "EndeavourOS",
+    "ID": "endeavouros",
+    "ID_LIKE": "arch",
+    "BUILD_ID": "rolling",
+    "ANSI_COLOR": "38;2;23;147;209",
+    "HOME_URL": "https://endeavouros.com",
+    "DOCUMENTATION_URL": "https://discovery.endeavouros.com",
+    "SUPPORT_URL": "https://forum.endeavouros.com",
+    "BUG_REPORT_URL": "https://forum.endeavouros.com/c/general-system/endeavouros-installation",
+    "PRIVACY_POLICY_URL": "https://endeavouros.com/privacy-policy-2",
+    "LOGO": "endeavouros"
+  },
+  "kernel": "7.2.14-zen1-1-zen",
+  "modules_dir": {
+    "running_kernel_dir_exists": true,
+    "has_modules_dep": true
+  },
+  "pci_display_devices": [
+    {
+      "bdf": "0000:01:00.0",
+      "class": "0x030000",
+      "vendor": "0x10de",
+      "device": "0x13c2",
+      "driver": "nvidia"
+    }
+  ],
+  "vulkan_icd": [
+    {
+      "file": "nouveau_icd.json",
+      "content": {
+        "ICD": {
+          "api_version": "1.4.354",
+          "library_path": "libvulkan_nouveau.so"
+        },
+        "file_format_version": "1.0.1"
+      }
+    },
+    {
+      "file": "nvidia_icd.json",
+      "content": {
+        "file_format_version": "1.0.1",
+        "ICD": {
+          "library_path": "libGLX_nvidia.so.0",
+          "api_version": "1.4.312"
+        }
+      }
+    }
+  ],
+  "libraries": {
+    "/usr/lib/libGLX_nvidia.so.0": true,
+    "/usr/lib/libvulkan.so": true,
+    "/usr/lib32/libGLX_nvidia.so.0": true,
+    "/usr/lib32/libvulkan.so": true
+  },
+  "nvidia_proc": {
+    "version": "NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.196.07  Wed Oct  7 19:57:28 UTC 2026\nGCC version:  gcc version 16.2.1 20260810 (GCC)",
+    "gpus": {
+      "0000:01:00.0": "Model: \t\t NVIDIA GeForce GTX 970\nIRQ:   \t\t 37\nGPU UUID: \t GPU-356ec071-1dcc-9409-dff1-27e123e1bf54\nVideo BIOS: \t 84.04.36.00.f1\nBus Type: \t PCIe\nDMA Size: \t 40 bits\nDMA Mask: \t 0xffffffffff\nBus Location: \t 0000:01:00.0\nDevice Minor: \t 0\nGPU Excluded:\t No"
+    }
+  }
+}

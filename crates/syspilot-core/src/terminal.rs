@@ -153,7 +153,7 @@ pub fn build_terminal(
     args: &[&str],
     title: &str,
 ) -> Command {
-    let mut command = Command::new(terminal);
+    let mut command = crate::exec::new_std_command(terminal);
     let stem = Path::new(name)
         .file_name()
         .and_then(|s| s.to_str())
@@ -209,7 +209,7 @@ pub fn spawn_detached_gui(executable: &Path) -> Result<(), String> {
             executable.display()
         ));
     }
-    match Command::new(executable)
+    match crate::exec::new_std_command(executable)
         .arg("--gui")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

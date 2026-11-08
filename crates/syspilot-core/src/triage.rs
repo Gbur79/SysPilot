@@ -10,33 +10,64 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::mem::MaybeUninit;
 use std::path::Path;
-use std::process::Stdio;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::process::Command;
-use tokio::time::timeout;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-pub async fn check_pacnew_files() -> Vec<String> {
-    let run_cmd = async {
-        let mut cmd = Command::new("find");
-        cmd.args(["/etc", "-maxdepth", "4", "-name", "*.pacnew"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        cmd.output().await
+pub fn find_pacnew_files_at(root: &Path) -> Vec<String> {
+    let etc_root = crate::sys_root::sub_path(root, "/etc");
+    let mut results = Vec::new();
+    walk_pacnew_dir(root, &etc_root, 1, 4, &mut results);
+    results.sort();
+    results
+}
+
+fn walk_pacnew_dir(
+    root: &Path,
+    dir: &Path,
+    current_depth: usize,
+    max_depth: usize,
+    results: &mut Vec<String>,
+) {
+    if current_depth > max_depth {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        // Gracefully skip 0700 root-only directories (e.g. /etc/sudoers.d, /etc/polkit-1/rules.d)
+        return;
     };
 
-    match timeout(Duration::from_millis(1500), run_cmd).await {
-        Ok(Ok(output)) if output.status.success() => {
-            let stdout_str = String::from_utf8_lossy(&output.stdout);
-            stdout_str
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect()
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        // Never follow symlinks to prevent infinite loops or escaping /etc
+        if file_type.is_symlink() {
+            continue;
         }
-        _ => Vec::new(),
+        let path = entry.path();
+        if file_type.is_dir() {
+            if current_depth < max_depth {
+                walk_pacnew_dir(root, &path, current_depth + 1, max_depth, results);
+            }
+        } else if file_type.is_file() {
+            let name = entry.file_name();
+            if name.to_string_lossy().ends_with(".pacnew") {
+                let logical_path = if root == Path::new("/") {
+                    path.to_string_lossy().to_string()
+                } else if let Ok(stripped) = path.strip_prefix(root) {
+                    format!("/{}", stripped.to_string_lossy())
+                } else {
+                    path.to_string_lossy().to_string()
+                };
+                results.push(logical_path);
+            }
+        }
     }
+}
+
+pub async fn check_pacnew_files() -> Vec<String> {
+    tokio::task::spawn_blocking(|| find_pacnew_files_at(Path::new("/")))
+        .await
+        .unwrap_or_default()
 }
 
 pub fn get_disk_usage(path: &str) -> Option<DiskUsage> {
@@ -371,8 +402,10 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let security = check_security_vulnerabilities(!effective_check_pkgs).await;
     let firmware = check_firmware_updates(!effective_check_pkgs).await;
     let firewall = check_host_firewall().await;
+    let reboot_safety = crate::reboot_safety::check_reboot_safety();
+    let gaming_readiness = crate::gaming::check_gaming_readiness();
 
-    let (status, status_reasons, informational_reasons) =
+    let (mut status, mut status_reasons, mut informational_reasons) =
         compute_flight_status(FlightStatusInputs {
             failed: &failed_services,
             disk: &disk,
@@ -384,6 +417,25 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
             firmware: &firmware,
             firewall: &firewall,
         });
+
+    if reboot_safety.black_screen_risk {
+        status = "ACTION_REQUIRED".into();
+        for issue in reboot_safety.issues.iter().rev() {
+            status_reasons.insert(0, format!("CRITICAL REBOOT RISK: {issue}"));
+        }
+    }
+    if gaming_readiness.applicable && !gaming_readiness.ready {
+        if status == "FLIGHT_READY" || status == "ALL_CLEAR" {
+            status = "PRE_FLIGHT_ATTENTION".into();
+        }
+        for warn in &gaming_readiness.warnings {
+            status_reasons.push(format!("Gaming Readiness: {warn}"));
+        }
+    } else if gaming_readiness.applicable {
+        for warn in &gaming_readiness.warnings {
+            informational_reasons.push(format!("Gaming Telemetry: {warn}"));
+        }
+    }
 
     let pacnew = PacnewStatus {
         count: pacnew_list.len(),
@@ -433,6 +485,8 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
         firmware: Some(firmware),
         firewall: Some(firewall),
         app_update,
+        reboot_safety: Some(reboot_safety),
+        gaming_readiness: Some(gaming_readiness),
     };
 
     let _ = write_status_json_atomic(&status_path, &payload);

@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use crate::firewall::parse_firewalld_conf_zone;
 use crate::firmware::parse_fwupd_devices;
 use crate::models::*;
@@ -285,6 +287,8 @@ fn test_write_and_read_status_json_atomic() {
         firmware: None,
         firewall: None,
         app_update: None,
+        reboot_safety: None,
+        gaming_readiness: None,
     };
 
     write_status_json_atomic(&tmp_file, &payload).unwrap();
@@ -550,6 +554,8 @@ fn test_dynamic_kernel_and_os_fallback() {
         firmware: None,
         firewall: None,
         app_update: None,
+        reboot_safety: None,
+        gaming_readiness: None,
     };
     write_status_json_atomic(&tmp_file, &payload).unwrap();
 
@@ -1026,6 +1032,8 @@ fn test_concurrent_atomic_status_writes() {
                     firmware: None,
                     firewall: None,
                     app_update: None,
+                    reboot_safety: None,
+                    gaming_readiness: None,
                 };
                 write_status_json_atomic(&p, &payload)
                     .expect("Concurrent atomic write must succeed");
@@ -1330,4 +1338,317 @@ fn test_detect_gpu_zero_fork() {
         gpu.chars().all(|c| !c.is_alphabetic() || c.is_uppercase()),
         "GPU descriptor must be uppercase: {gpu}"
     );
+}
+
+#[test]
+fn test_sub_path_prevents_absolute_path_replacement_trap() {
+    use std::path::{Path, PathBuf};
+
+    let mock_root = Path::new("/tmp/syspilot-mock-root");
+    assert_eq!(
+        crate::sys_root::sub_path(mock_root, "/etc/os-release"),
+        PathBuf::from("/tmp/syspilot-mock-root/etc/os-release")
+    );
+    assert_eq!(
+        crate::sys_root::sub_path(mock_root, "///proc/sys/kernel/osrelease"),
+        PathBuf::from("/tmp/syspilot-mock-root/proc/sys/kernel/osrelease")
+    );
+    assert_eq!(
+        crate::sys_root::sub_path(Path::new("/"), "/etc/os-release"),
+        PathBuf::from("/etc/os-release")
+    );
+}
+
+#[test]
+fn test_mock_rig_five_archetypes_universalism() {
+    use crate::mock_rig::MockRig;
+    use crate::models::{detect_gpu_at, detect_kernel_at, detect_os_at};
+    use crate::sentinels::check_reboot_pending_at;
+
+    // 1. Arch + AMD Radeon
+    let amd = MockRig::arch_amd_radeon();
+    assert_eq!(detect_os_at(amd.root()), "Arch Linux");
+    assert_eq!(detect_kernel_at(amd.root()), "6.12.1-arch1-1");
+    assert_eq!(
+        detect_gpu_at(amd.root()),
+        "AMD/ATI GPU (0X1002:0X744C) • DRIVER: AMDGPU"
+    );
+    assert!(!check_reboot_pending_at(amd.root()));
+
+    // 2. EndeavourOS + NVIDIA Maxwell DKMS
+    let nv = MockRig::endeavouros_nvidia_dkms();
+    assert_eq!(detect_os_at(nv.root()), "EndeavourOS");
+    assert_eq!(detect_kernel_at(nv.root()), "7.2.14-zen1-1-zen");
+    assert_eq!(
+        detect_gpu_at(nv.root()),
+        "NVIDIA GEFORCE GTX 970 • DRIVER 580.95.05"
+    );
+    assert!(!check_reboot_pending_at(nv.root()));
+
+    // 3. CachyOS + Intel Iris Xe Hybrid Laptop
+    let laptop = MockRig::cachyos_intel_hybrid_laptop();
+    assert_eq!(detect_os_at(laptop.root()), "CachyOS");
+    assert_eq!(detect_kernel_at(laptop.root()), "6.12.2-cachyos");
+    assert_eq!(
+        detect_gpu_at(laptop.root()),
+        "INTEL GPU (0X8086:0X46A6) • DRIVER: I915"
+    );
+    assert!(!check_reboot_pending_at(laptop.root()));
+
+    // 4. Broken Reboot State (running kernel 7.2.14 missing from /usr/lib/modules)
+    let broken = MockRig::broken_reboot_state();
+    assert!(
+        check_reboot_pending_at(broken.root()),
+        "Missing /usr/lib/modules/<running_kernel> must flag reboot_pending = true"
+    );
+
+    // 5. Headless Minimal VM (/usr/lib/os-release fallback, no 0x03 display controller)
+    let vm = MockRig::headless_minimal_vm();
+    assert_eq!(detect_os_at(vm.root()), "Arch Linux ARM / VM");
+    assert_eq!(detect_kernel_at(vm.root()), "6.6.60-1-lts");
+    assert_eq!(detect_gpu_at(vm.root()), "DEFAULT DISPLAY ADAPTER");
+    assert!(!check_reboot_pending_at(vm.root()));
+}
+
+#[test]
+fn test_golden_host_fixture_schema() {
+    use crate::mock_rig::MockRig;
+    use crate::models::{detect_gpu_at, detect_kernel_at, detect_os_at};
+    use crate::sentinels::check_reboot_pending_at;
+
+    let fixture_str = include_str!("../tests/fixtures/host_endeavouros_maxwell.json");
+    let json: serde_json::Value =
+        serde_json::from_str(fixture_str).expect("Valid JSON host fixture");
+
+    assert!(
+        json.get("os_release").and_then(|v| v.get("NAME")).is_some(),
+        "Fixture must have os_release.NAME"
+    );
+    assert!(
+        json.get("kernel").and_then(|v| v.as_str()).is_some(),
+        "Fixture must have kernel version string"
+    );
+    let pci = json
+        .get("pci_display_devices")
+        .and_then(|v| v.as_array())
+        .expect("pci_display_devices array");
+    assert!(
+        !pci.is_empty(),
+        "Fixture must contain at least 1 PCI display device"
+    );
+    assert!(pci[0].get("vendor").is_some());
+    assert!(pci[0].get("device").is_some());
+    assert!(
+        json.get("vulkan_icd").and_then(|v| v.as_array()).is_some(),
+        "Fixture must contain vulkan_icd array"
+    );
+    assert!(
+        json.get("libraries").is_some(),
+        "Fixture must contain libraries map"
+    );
+
+    let rig = MockRig::from_host_fixture(fixture_str);
+    crate::exec::reset_spawn_count();
+    assert_eq!(detect_os_at(rig.root()), "EndeavourOS");
+    let expected_kernel = json.get("kernel").and_then(|v| v.as_str()).unwrap();
+    assert_eq!(detect_kernel_at(rig.root()), expected_kernel);
+    let gpu_desc = detect_gpu_at(rig.root());
+    assert!(gpu_desc.contains("NVIDIA GEFORCE GTX 970"));
+    assert!(gpu_desc.contains("DRIVER"));
+    assert!(!check_reboot_pending_at(rig.root()));
+
+    let safety = crate::reboot_safety::check_reboot_safety_at(rig.root());
+    assert!(!safety.black_screen_risk);
+
+    let gaming = crate::gaming::check_gaming_readiness_at(rig.root());
+    assert!(gaming.applicable);
+    assert!(gaming.ready);
+    assert!(gaming.vulkan_64_ready);
+    assert!(gaming.vulkan_32_ready);
+
+    assert_eq!(crate::exec::spawn_count(), 0);
+}
+
+#[test]
+fn test_find_pacnew_files_at_survives_permission_denied_and_symlinks() {
+    use crate::mock_rig::MockRig;
+    use std::fs::{self, Permissions};
+    use std::os::unix::fs::PermissionsExt;
+
+    let rig = MockRig::empty();
+    rig.write("/etc/pacman.conf.pacnew", "mock");
+    rig.write("/etc/pacman.d/mirrorlist.pacnew", "mock");
+    rig.write("/etc/a/b/c/d/too_deep.pacnew", "mock");
+
+    let sudoers = rig.sub("/etc/sudoers.d");
+    fs::create_dir_all(&sudoers).unwrap();
+    fs::set_permissions(&sudoers, Permissions::from_mode(0o000)).unwrap();
+
+    rig.symlink("/etc", "/etc/loop_link");
+
+    crate::exec::reset_spawn_count();
+    let files = crate::triage::find_pacnew_files_at(rig.root());
+
+    // Restore permissions so TempDir cleanup succeeds
+    let _ = fs::set_permissions(&sudoers, Permissions::from_mode(0o700));
+
+    assert_eq!(
+        files,
+        vec![
+            "/etc/pacman.conf.pacnew".to_string(),
+            "/etc/pacman.d/mirrorlist.pacnew".to_string()
+        ]
+    );
+    assert_eq!(crate::exec::spawn_count(), 0);
+}
+
+#[test]
+fn test_killer_features_reboot_safety_and_gaming_across_five_archetypes() {
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    use crate::mock_rig::MockRig;
+
+    crate::exec::reset_spawn_count();
+
+    // 1. Arch AMD Radeon
+    {
+        let rig = MockRig::arch_amd_radeon();
+        let safety = crate::reboot_safety::check_reboot_safety_at(rig.root());
+        assert!(!safety.black_screen_risk);
+        assert!(!safety.reboot_pending);
+        assert_eq!(safety.active_gpu_drivers, vec!["amdgpu"]);
+
+        let gaming = crate::gaming::check_gaming_readiness_at(rig.root());
+        assert!(gaming.applicable);
+        assert!(gaming.ready);
+        assert!(gaming.vulkan_64_ready);
+        assert!(gaming.vulkan_32_ready);
+        assert!(!gaming.hybrid_gpu_detected);
+    }
+
+    // 2. EndeavourOS NVIDIA Maxwell DKMS
+    {
+        let rig = MockRig::endeavouros_nvidia_dkms();
+        let safety = crate::reboot_safety::check_reboot_safety_at(rig.root());
+        assert!(!safety.black_screen_risk);
+        assert!(!safety.reboot_pending);
+        assert_eq!(safety.active_gpu_drivers, vec!["nvidia"]);
+
+        let gaming = crate::gaming::check_gaming_readiness_at(rig.root());
+        assert!(gaming.applicable);
+        assert!(gaming.ready);
+        assert!(gaming.vulkan_64_ready);
+        assert!(gaming.vulkan_32_ready);
+    }
+
+    // 3. CachyOS Intel Hybrid Laptop
+    {
+        let rig = MockRig::cachyos_intel_hybrid_laptop();
+        let safety = crate::reboot_safety::check_reboot_safety_at(rig.root());
+        assert!(!safety.black_screen_risk);
+        assert!(!safety.reboot_pending);
+        assert_eq!(safety.active_gpu_drivers, vec!["i915"]);
+
+        let gaming = crate::gaming::check_gaming_readiness_at(rig.root());
+        assert!(gaming.applicable);
+        assert!(gaming.ready);
+        assert!(gaming.vulkan_64_ready);
+        assert!(gaming.vulkan_32_ready);
+        assert!(gaming.hybrid_gpu_detected);
+        assert_eq!(gaming.dgpu_runtime_status.as_deref(), Some("suspended"));
+        assert!(gaming.on_battery);
+        assert_eq!(gaming.cpu_governor.as_deref(), Some("powersave"));
+    }
+
+    // 4. Broken Reboot State
+    {
+        let rig = MockRig::broken_reboot_state();
+        let safety = crate::reboot_safety::check_reboot_safety_at(rig.root());
+        assert!(safety.black_screen_risk);
+        assert!(safety.reboot_pending);
+        assert!(safety.modules_dep_missing);
+        assert!(safety.initramfs_empty);
+        assert!(!safety.missing_gpu_modules.is_empty());
+
+        let gaming = crate::gaming::check_gaming_readiness_at(rig.root());
+        assert!(gaming.applicable);
+        assert!(!gaming.ready);
+        assert!(gaming.vulkan_64_ready);
+        assert!(!gaming.vulkan_32_ready);
+        assert!(!gaming.warnings.is_empty());
+    }
+
+    // 5. Headless Minimal VM
+    {
+        let rig = MockRig::headless_minimal_vm();
+        let safety = crate::reboot_safety::check_reboot_safety_at(rig.root());
+        assert!(!safety.black_screen_risk);
+        assert!(!safety.reboot_pending);
+        assert!(safety.active_gpu_drivers.is_empty());
+
+        let gaming = crate::gaming::check_gaming_readiness_at(rig.root());
+        assert!(!gaming.applicable);
+        assert!(gaming.ready);
+    }
+
+    assert_eq!(crate::exec::spawn_count(), 0);
+}
+
+#[test]
+fn test_adversarial_orphan_kernel_dir_builtin_module_and_foreign_icd() {
+    use crate::gaming::check_gaming_readiness_at;
+    use crate::mock_rig::MockRig;
+    use crate::reboot_safety::check_reboot_safety_at;
+
+    // 1. Start from MockRig::endeavouros_nvidia_dkms();
+    //    Mark valid kernel 7.2.14-zen1-1-zen with vmlinuz.
+    //    Create a dead leftover directory 6.1.0-old-orphan/extramodules with no vmlinuz/modules.dep/nvidia.ko.
+    //    Assert safety ignores orphan and reports !black_screen_risk and installed_kernels == vec!["7.2.14-zen1-1-zen"].
+    let rig = MockRig::endeavouros_nvidia_dkms();
+    rig.write(
+        "/usr/lib/modules/7.2.14-zen1-1-zen/vmlinuz",
+        b"mock vmlinuz",
+    );
+    std::fs::create_dir_all(rig.sub("/usr/lib/modules/6.1.0-old-orphan/extramodules")).unwrap();
+
+    let safety = check_reboot_safety_at(rig.root());
+    assert!(!safety.black_screen_risk);
+    assert_eq!(safety.installed_kernels, vec!["7.2.14-zen1-1-zen"]);
+
+    // 2. Delete /usr/lib32/libGLX_nvidia.so.0 and inject foreign radeon_icd.i686.json + libvulkan_radeon.so.
+    //    Assert check_gaming_readiness_at is NOT fooled by radeon_icd.i686.json on active NVIDIA rig.
+    std::fs::remove_file(rig.sub("/usr/lib32/libGLX_nvidia.so.0")).unwrap();
+    rig.write(
+        "/usr/share/vulkan/icd.d/radeon_icd.i686.json",
+        r#"{"ICD":{"api_version":"1.3.295","library_path":"/usr/lib32/libvulkan_radeon.so"}}"#,
+    );
+    rig.write("/usr/lib32/libvulkan_radeon.so", b"ELF32");
+
+    let gaming = check_gaming_readiness_at(rig.root());
+    assert!(gaming.vulkan_64_ready);
+    assert!(!gaming.vulkan_32_ready);
+    assert!(!gaming.ready);
+
+    // 3. Create a custom kernel rig with i915 listed in modules.builtin and no separate .ko.zst file.
+    //    Assert !check_reboot_safety_at(custom_rig.root()).black_screen_risk.
+    let custom_rig = MockRig::empty();
+    let kver = "6.13.0-custom";
+    custom_rig.write("/proc/sys/kernel/osrelease", format!("{kver}\n"));
+    custom_rig.write("/etc/os-release", "NAME=\"Arch Linux\"\n");
+    custom_rig.write("/sys/bus/pci/devices/0000:00:02.0/class", "0x030000\n");
+    std::fs::create_dir_all(custom_rig.sub("/sys/bus/pci/drivers/i915")).unwrap();
+    custom_rig.symlink(
+        "/sys/bus/pci/drivers/i915",
+        "/sys/bus/pci/devices/0000:00:02.0/driver",
+    );
+    custom_rig.write(&format!("/usr/lib/modules/{kver}/modules.dep"), "");
+    custom_rig.write(
+        &format!("/usr/lib/modules/{kver}/modules.builtin"),
+        "kernel/drivers/gpu/drm/i915/i915.ko\n",
+    );
+
+    let custom_safety = check_reboot_safety_at(custom_rig.root());
+    assert!(!custom_safety.black_screen_risk);
+    assert!(custom_safety.missing_gpu_modules.is_empty());
 }

@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.1.0] - 2026-11-07
 
+### Added & Hardened / Mega SRE Verification Tooling, Zero-Root Guard & Killer Features #1–#2 (`PATCH-026`)
+- **Killer Feature #1 — Universal Reboot & Kernel/DKMS Module Safety Guard (`crates/syspilot-core/src/reboot_safety.rs`)**:
+  - Pure-Rust, zero-subprocess verification of `/usr/lib/modules/<kver>/` (`modules.dep`, `modules.builtin`, and `.ko`/`.ko.zst` module files with 4-byte `zstd` magic header validation) for all active PCI class `0x03` GPU drivers (`nvidia`, `amdgpu`, `i915`, `xe`, `nouveau`).
+  - Filters out dead leftover directories from uninstalled kernels (requiring `vmlinuz`, `pkgbase`, `modules.builtin`, or `kernel/`) and detects 0-byte `/boot/initramfs-*.img` files when `/boot` is user-readable.
+  - Escalates Flight Status to `ACTION_REQUIRED` (`CRITICAL REBOOT RISK`) before a broken kernel or DKMS upgrade causes a black screen upon reboot.
+- **Killer Feature #2 — Zero-Subprocess Gaming & FPS Readiness Probe (`crates/syspilot-core/src/gaming.rs`)**:
+  - Pure-Rust, zero-subprocess verification of 64-bit and 32-bit Vulkan ICD manifests (`/usr/share/vulkan/icd.d/*.json`) and shared libraries in `/usr/lib/` and `/usr/lib32/`, matched against the active PCI GPU driver (`icd_matches_active_drivers`).
+  - Handles both Arch Linux's shared `nvidia_icd.json` relative library layout (`libGLX_nvidia.so.0`) and Mesa RADV/ANV split `.x86_64.json`/`.i686.json` manifests.
+  - Tracks CPU frequency `scaling_governor`, hybrid iGPU+dGPU `power/runtime_status`, and laptop battery throttling (`Discharging`), while gracefully skipping headless VMs.
+- **Zero-Subprocess `.pacnew` Scanner (`crates/syspilot-core/src/triage.rs`)**:
+  - Replaced `Command::new("find")` in `check_pacnew_files()` with pure-Rust `find_pacnew_files_at(root)` (max depth 4, symlink-loop safe), fixing a bug where `0700` root-only directories in `/etc` caused `find` to exit non-zero and discard discovered `.pacnew` files.
+- **High-Assurance SRE Verification Suite & Arch Trust Triad**:
+  - Enforced `libc::getuid() == 0` startup refusal in `syspilot-tray` and `syspilot-gui`.
+  - Added compile-time (`clippy.toml`), static (`dev-tools/lint-universalism.sh`), and runtime (`crates/syspilot-core/src/exec.rs` `spawn_count()`) subprocess gates.
+  - Added `crates/syspilot-core/src/sys_root.rs` (`sub_path`), 5-archetype `MockRig` (`crates/syspilot-core/src/mock_rig.rs`), `dev-tools/dump-fixture.sh` (`host_endeavouros_maxwell.json`), and `/proc/<pid>/smaps_rollup` resource budget benchmark (`dev-tools/bench-footprint.sh`: `Private_Dirty <= 1536 kB`, `Pss <= 4500 kB`). Workspace tests expanded to `71/71 PASS`.
+
 ### Added & Hardened / Star Trek Okuda 1987 LCARS Dual-Skin Architecture & SRE Universalism (`BP-ARGON-SYSPILOT-UNIVERSALISM-MAINTAIN-H630`)
 - **Star Trek Okuda 1987 LCARS Dual-Skin Cockpit (`crates/syspilot-gui/ui`)**:
   - Complete, faithful recreation of Michael Okuda's iconic 1987 Star Trek LCARS interface language alongside the classic modern dark cyberpunk theme.

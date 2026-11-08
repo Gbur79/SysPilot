@@ -68,6 +68,9 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
   - Immediate detection of un-rebooted kernel upgrades by monitoring `/usr/lib/modules/<version>`.
   - Non-blocking disk space queries using `libc::statvfs` directly without invoking external shell binaries.
   - Intelligent pacman lock monitor: distinguishes active package manager operations from orphaned `/var/lib/pacman/db.lck` files.
+- **Universal Post-Update Reboot & Kernel/DKMS Safety Guard (`reboot_safety.rs`):** Zero-subprocess inspection of `/usr/lib/modules/<version>` (`modules.dep`, `modules.builtin`, `.ko`/`.ko.zst` zstd header verification) for active PCI `0x03` GPU drivers (`nvidia`, `amdgpu`, `i915`, `xe`), escalating to `ACTION_REQUIRED` (`CRITICAL REBOOT RISK`) before a broken kernel/DKMS update causes a black screen on reboot.
+- **Zero-Subprocess Gaming & Vulkan Readiness Probe (`gaming.rs`):** Instant verification of driver-matched 64-bit and 32-bit Vulkan ICDs (`/usr/lib` and `/usr/lib32` for Steam/Proton), CPU `scaling_governor`, hybrid GPU `runtime_status`, and battery power state with zero external subprocesses.
+- **Arch Trust Triad (Zero-Root Invariant):** Hard `libc::getuid() == 0` refusal in both `syspilot-tray` and `syspilot-gui`; all mutating maintenance operations run transparently in the user's interactive terminal.
 - **Asynchronous Package Update Intelligence:**
   - Evaluates pending official repository updates (`checkupdates` isolated in `/tmp`) and AUR packages (`yay`/`paru`).
   - Distinguishes **Core System Updates** (kernel, systemd, glibc, dracut, grub, mesa, nvidia) from regular packages.
@@ -251,7 +254,10 @@ sysPilot/
 │   ├── playbooks/               # Battle-tested recipes (FAF, Proton, Audio, Pacnew)
 │   └── quirks/                  # Generic hardware & architecture quirks
 ├── dev-tools/
+│   ├── bench-footprint.sh       # SRE /proc/<pid>/smaps_rollup footprint & resource benchmark
 │   ├── build-and-install.sh     # One-step test, compile & install helper
+│   ├── dump-fixture.sh          # SRE host telemetry & mock rig fixture dumper
+│   ├── lint-universalism.sh     # Zero-subprocess & zero-root universalism linter
 │   ├── test-cli.sh              # SRE hermetic CLI & packaging test suite
 │   └── verify-rust.sh           # SRE hermetic verification script
 ├── autostart/

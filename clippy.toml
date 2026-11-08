@@ -1,0 +1,4 @@
+disallowed-methods = [
+    { path = "std::process::Command::new", reason = "Use syspilot_core::exec::new_std_command to enforce subprocess tracking and allowlist" },
+    { path = "tokio::process::Command::new", reason = "Use syspilot_core::exec::new_tokio_command to enforce subprocess tracking and allowlist" },
+]

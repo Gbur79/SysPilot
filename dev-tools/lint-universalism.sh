@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# [SRE-TOOLING: Universalism & Zero-Root Invariant Linter for SysPilot]
+set -Eeuo pipefail
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+project_root=$(cd -- "$script_dir/.." && pwd -P)
+export PROJECT_ROOT="$project_root"
+
+python3 - "$@" << 'EOF'
+import os
+import sys
+
+quiet = "-q" in sys.argv or "--quiet" in sys.argv
+
+project_root = os.environ.get("PROJECT_ROOT", os.path.realpath("."))
+crates_dir = os.path.join(project_root, "crates")
+check_roots_guards = True
+for i, arg in enumerate(sys.argv):
+    if arg == "--target-dir" and i + 1 < len(sys.argv):
+        crates_dir = os.path.realpath(sys.argv[i + 1])
+        check_roots_guards = False
+
+
+forbidden_subprocesses = [
+    "glxinfo", "vulkaninfo", "lspci", "xrandr",
+    "nvidia-settings", "pkexec", "sudo", "busctl", "find"
+]
+
+forbidden_rig_bias = [
+    "192.168.1.1", "/home/gbur", "MSI Z97", "/boot/efi/EFI"
+]
+
+def is_excluded_file(rel_path):
+    base = os.path.basename(rel_path)
+    if base in ["tests.rs", "mock_rig.rs"]:
+        return True
+    if "/tests/" in rel_path or rel_path.endswith("_test.rs"):
+        return True
+    return False
+
+violations = []
+
+for root, dirs, files in os.walk(crates_dir):
+    for f in sorted(files):
+        if not f.endswith(".rs"):
+            continue
+        full_path = os.path.join(root, f)
+        rel_path = os.path.relpath(full_path, project_root)
+        if is_excluded_file(rel_path):
+            continue
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
+                for line_no, line in enumerate(fh, 1):
+                    if "syspilot-lint:allow" in line:
+                        continue
+                    # Check rig bias
+                    for bias in forbidden_rig_bias:
+                        if bias in line:
+                            violations.append(f"{rel_path}:{line_no}: Forbidden rig-bias pattern '{bias}'")
+                    # Check subprocesses
+                    for proc in forbidden_subprocesses:
+                        if f'Command::new("{proc}")' in line or f'Command::new(&"{proc}")' in line:
+                            violations.append(f"{rel_path}:{line_no}: Forbidden subprocess invocation '{proc}'")
+                        elif proc != "sudo" and f'"{proc}"' in line:
+                            violations.append(f"{rel_path}:{line_no}: Forbidden heavy subprocess pattern '{proc}'")
+                    if os.path.basename(rel_path) != "exec.rs" and "Command::new(" in line:
+                        violations.append(f"{rel_path}:{line_no}: Direct Command::new is forbidden outside exec.rs; use syspilot_core::exec::{{new_tokio_command, new_std_command}}")
+        except Exception as e:
+            violations.append(f"{rel_path}: read error: {e}")
+
+# Check getuid() == 0 guard in tray and gui main.rs
+if check_roots_guards:
+    for main_rel in ["crates/syspilot-tray/src/main.rs", "crates/syspilot-gui/src/main.rs"]:
+        main_path = os.path.join(project_root, main_rel)
+        if not os.path.exists(main_path):
+            violations.append(f"{main_rel}: file not found")
+            continue
+        with open(main_path, "r", encoding="utf-8") as fh:
+            content = fh.read()
+        if "libc::getuid() == 0" not in content and "getuid() == 0" not in content:
+            violations.append(f"{main_rel}: missing getuid() == 0 zero-root guard")
+
+if violations:
+    first_viol = violations[0].replace("|", "_")
+    if quiet:
+        print(f"LINT_UNIVERSALISM: FAIL | {first_viol}")
+    else:
+        print("LINT_UNIVERSALISM: FAIL")
+        for v in violations:
+            print(f"  {v}")
+    sys.exit(1)
+else:
+    if quiet:
+        print("LINT_UNIVERSALISM: PASS")
+    else:
+        print("LINT_UNIVERSALISM: PASS | All crates pass universalism and zero-root checks.")
+    sys.exit(0)
+EOF

@@ -161,6 +161,11 @@ fn try_spawn_triage_and_updater(in_flight: &Arc<AtomicBool>, handle: Handle<SysP
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if unsafe { libc::getuid() == 0 } {
+        eprintln!("FATAL: SysPilot tray daemon must not be executed as root (UID 0).");
+        std::process::exit(1);
+    }
+
     if !syspilot_core::acquire_single_instance_lock(".tray.lock") {
         return Ok(());
     }

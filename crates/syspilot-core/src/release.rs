@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::process::Command;
 use tokio::time::timeout;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -97,7 +96,7 @@ pub fn write_cached_release(cache_path: &Path, info: &CachedReleaseInfo) -> std:
 
 pub async fn fetch_latest_github_release() -> Result<GitHubRelease, String> {
     let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
-    let mut cmd = Command::new("curl");
+    let mut cmd = crate::exec::new_tokio_command("curl");
     cmd.args([
         "-sS",
         "--fail",
@@ -173,7 +172,7 @@ pub async fn check_upstream_release(force_refresh: bool) -> Option<GitHubRelease
 
 pub fn detect_install_origin() -> InstallOrigin {
     if let Ok(exe) = std::env::current_exe() {
-        if let Ok(output) = std::process::Command::new("pacman")
+        if let Ok(output) = crate::exec::new_std_command("pacman")
             .args(["-Qo", &exe.to_string_lossy()])
             .output()
         {
@@ -183,7 +182,7 @@ pub fn detect_install_origin() -> InstallOrigin {
         }
     }
     if std::path::Path::new("/usr/bin/syspilot").exists() {
-        if let Ok(output) = std::process::Command::new("pacman")
+        if let Ok(output) = crate::exec::new_std_command("pacman")
             .args(["-Qo", "/usr/bin/syspilot"])
             .output()
         {

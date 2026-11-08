@@ -4,7 +4,6 @@ use std::fs;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::time::timeout;
 
 pub fn default_firmware_timeout() -> Duration {
@@ -140,7 +139,7 @@ pub async fn check_firmware_updates(skip: bool) -> StatusFirmware {
     };
 
     let run_cmd = async {
-        let mut cmd = Command::new(fwupd_bin);
+        let mut cmd = crate::exec::new_tokio_command(fwupd_bin);
         cmd.args(["get-updates", "--no-unreported-check", "--json"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

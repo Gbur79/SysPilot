@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::time::timeout;
 
 pub const ORPHAN_SENSITIVE_PATTERNS: &[(&str, &[&str])] = &[
@@ -142,7 +141,7 @@ pub async fn query_pacman_package_names(
     timeout_secs: u64,
 ) -> Result<Vec<String>, String> {
     let run_cmd = async {
-        let mut cmd = Command::new(pacman_path);
+        let mut cmd = crate::exec::new_tokio_command(pacman_path);
         cmd.arg(query_flag)
             .env("LC_ALL", "C")
             .stdin(Stdio::null())

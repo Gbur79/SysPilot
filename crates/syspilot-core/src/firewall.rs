@@ -3,7 +3,6 @@ use std::fs;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::time::timeout;
 
 pub fn parse_firewalld_conf_zone(conf_content: &str) -> Option<String> {
@@ -21,7 +20,7 @@ pub fn parse_firewalld_conf_zone(conf_content: &str) -> Option<String> {
 
 pub async fn check_systemd_service_active(service: &str) -> bool {
     let run_cmd = async {
-        let mut cmd = Command::new("systemctl");
+        let mut cmd = crate::exec::new_tokio_command("systemctl");
         cmd.args(["is-active", service])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

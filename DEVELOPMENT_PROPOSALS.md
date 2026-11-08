@@ -616,6 +616,28 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 
 ---
 
+### PATCH-026: [IMPLEMENTED] High-Assurance SRE Tooling Suite, Arch Trust Triad (Zero-Root Guard), Universal Reboot & Kernel/DKMS Module Guard (`reboot_safety.rs`), and Zero-Subprocess Gaming Readiness Probe (`gaming.rs`)
+* **Status:** `[IMPLEMENTED]` *(Cross-Model Architectural Review: `408c0e1f`, `0246c885` [Argon], Claude Opus 5.5 + Live Recon `de8cda85` | Executed by `eos-executor` sessions `9613b632`, `f9cee70a`, `5ff8404b`, `86362026`, `547056ef`)*
+* **Data zgłoszenia / wdrożenia:** 2026-11-07 / 2026-11-08
+* **Źródło:** Strategic Community Pivot & Forum Incident Triage (EndeavourOS Post #82290 — User Trust, Low-End Hardware Optimization & Gaming FPS Health)
+* **Wdrożone komponenty:**
+  1. **Arch Trust Triad (Zero-Root Invariant):** Blokada uruchomieniowa `libc::getuid() == 0` w `syspilot-tray` i `syspilot-gui` weryfikowana statycznie przez `dev-tools/lint-universalism.sh`.
+  2. **Potrójna Blokada Subprocesów (`clippy.toml` + `exec.rs` + `lint-universalism.sh`):** Zakaz wywoływania `Command::new` poza centralnym modułem `crates/syspilot-core/src/exec.rs` z atomowym licznikiem `SUBPROCESS_SPAWN_COUNT` (`exec::spawn_count() == 0` w testach sond). Zastąpienie `Command::new("find")` w `triage.rs` czystą funkcją `find_pacnew_files_at(root)` odporną na katalogi `0700` w `/etc` oraz pętle symlinków.
+  3. **Poligon Uniwersalizmu (`sys_root.rs`, `mock_rig.rs`, `dump-fixture.sh`):** Funkcja `sub_path(root, abs_path)` chroniąca przed pułapką `Path::join`, `MockRig` z 5 archetypami sprzętowymi/dystrybucyjnymi (Arch+AMD RDNA3, EOS+NVIDIA Maxwell DKMS, CachyOS+Intel Hybrid Laptop, Broken Reboot State, Headless VM) oraz `MockRig::from_host_fixture` materializujący rzeczywisty zrzut `host_endeavouros_maxwell.json`.
+  4. **Benchmark Zasobów (`dev-tools/bench-footprint.sh`):** Weryfikacja `/proc/$pid/smaps_rollup` (`Private_Dirty <= 1536 kB`, `Pss <= 4500 kB`), liczby wątków (`<= 8`) i deskryptorów plików (`<= 22`) z izolacją `XDG_STATE_HOME` i pomiarem właściwego PID potomnego pod `dbus-run-session`.
+  5. **Killer Feature #1 — Strażnik Bezpiecznego Rebootu (`crates/syspilot-core/src/reboot_safety.rs`):** Bezprocesowa weryfikacja `/usr/lib/modules/<kver>/` (`modules.dep`, `modules.builtin`, fizyczne pliki `.ko`/`.ko.zst` z weryfikacją nagłówka magic `zstd` `[0x28, 0xb5, 0x2f, 0xfd]`, odporność na martwe katalogi po odinstalowanych kernelach) oraz obrazów `/boot/initramfs-*.img` pod kątem brakujących modułów aktywnego sterownika GPU PCI `0x03` (`black_screen_risk` podnoszący status do `ACTION_REQUIRED`).
+  6. **Killer Feature #2 — Zero-Subprocess Gaming & FPS Readiness Probe (`crates/syspilot-core/src/gaming.rs`):** Bezprocesowa weryfikacja 64-bit i 32-bit Vulkan ICD oraz bibliotek `/usr/lib` i `/usr/lib32` dopasowanych do aktywnego sterownika PCI (`icd_matches_active_drivers`, obsługa współdzielonego `nvidia_icd.json` na Archu oraz osobnych `.i686.json` dla Mesa/RADV/ANV), odczyt `scaling_governor`, statusu hybrydowego dGPU oraz pracy na baterii.
+* **Weryfikacja (`PROOF-EXEC-001`):** `dev-tools/verify-rust.sh -q` ➔ `RUST_VERIFY: PASS | TESTS: core: 46 | tray: 16 | gui: 9 | Total: 71/71 | CLIPPY: CLEAN | FMT: CLEAN | LINT: CLEAN | TARGET: syspilot-workspace` (`exec::spawn_count() == 0`, `Private_Dirty: 680 kB`, `Pss: 3534 kB`).
+
+---
+
+### PATCH-027: [DRAFT / RFC] Tab 03 Strategic Pivot — Deterministic SRE Tactical Playbooks & Passive AI Telemetry Export
+* **Status:** `[DRAFT / RFC]` *(Approved Design — Scheduled for Next Session)*
+* **Zakres:** Wycofanie czatbota z Tab 03 w GUI (`crates/syspilot-gui/ui/appwindow.slint`) i zastąpienie go deterministycznymi, modułowymi playbookami SRE (`03 SRE TACTICAL PLAYBOOKS`: Wine/Proton shader & prefix hygiene, PipeWire reset, `pacdiff` reviewer, `paccache` prune), dynamicznym loaderem skryptów użytkownika z `~/.config/syspilot/playbooks.d/` oraz pasywnym przyciskiem `[ 📋 Copy SRE Telemetry for AI ]`.
+* **Status Weryfikacji:** `NOT YET IMPLEMENTED`.
+
+---
+
 ## Clerical Inbox
 
 This bounded section records untriaged observations from active testing. Entries here

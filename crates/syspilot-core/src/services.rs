@@ -2,7 +2,6 @@ use crate::models::FailedServicesStatus;
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::time::timeout;
 
 pub fn is_candidate_app_unit(unit: &str) -> bool {
@@ -62,7 +61,7 @@ pub async fn get_transient_desktop_app_units(unit_names: &[String]) -> HashSet<S
     args.extend(candidates.iter().cloned());
 
     let run_cmd = async {
-        let mut cmd = Command::new("systemctl");
+        let mut cmd = crate::exec::new_tokio_command("systemctl");
         cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -87,7 +86,7 @@ pub async fn query_failed_units(user_mode: bool) -> Result<Vec<String>, String> 
     }
 
     let run_cmd = async {
-        let mut cmd = Command::new("systemctl");
+        let mut cmd = crate::exec::new_tokio_command("systemctl");
         cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

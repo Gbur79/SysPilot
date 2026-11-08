@@ -135,7 +135,7 @@ pub async fn check_official_updates() -> (u32, u32, Vec<String>) {
     };
 
     let timeout_dur = default_checkupdates_timeout();
-    let cmd = Command::new(&checkupdates);
+    let cmd = crate::exec::new_tokio_command(&checkupdates);
     let output = match run_command_with_timeout(cmd, timeout_dur).await {
         Ok(out) => out,
         Err(_) => return (0, 0, Vec::new()),
@@ -149,7 +149,7 @@ pub async fn check_official_updates() -> (u32, u32, Vec<String>) {
             let lock_path = PathBuf::from(format!("/tmp/checkup-db-{uid}/db.lck"));
             if lock_path.exists() && !is_process_running("checkupdates") {
                 let _ = std::fs::remove_file(lock_path);
-                let retry_cmd = Command::new(&checkupdates);
+                let retry_cmd = crate::exec::new_tokio_command(&checkupdates);
                 if let Ok(retry) = run_command_with_timeout(retry_cmd, timeout_dur).await {
                     if retry.status.success() {
                         return parse_checkupdates_stdout(&retry.stdout);
@@ -195,7 +195,7 @@ pub async fn check_aur_updates() -> u32 {
         return 0;
     };
 
-    let mut cmd = Command::new(helper);
+    let mut cmd = crate::exec::new_tokio_command(helper);
     cmd.args(args);
     let output = match run_command_with_timeout(cmd, default_checkupdates_timeout()).await {
         Ok(out) => out,
@@ -241,7 +241,7 @@ pub async fn check_standalone_updates() -> u32 {
         return 0;
     };
 
-    let mut cmd = Command::new(sys_health);
+    let mut cmd = crate::exec::new_tokio_command(sys_health);
     cmd.args(["--software", "--json"]);
     let output = match run_command_with_timeout(cmd, default_standalone_timeout()).await {
         Ok(out) => out,

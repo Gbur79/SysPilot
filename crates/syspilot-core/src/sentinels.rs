@@ -15,11 +15,16 @@ pub struct SentinelStatus {
 }
 
 pub fn check_reboot_pending() -> bool {
+    check_reboot_pending_at(Path::new("/"))
+}
+
+pub fn check_reboot_pending_at(root: &Path) -> bool {
     // 1. Check running kernel modules directory
-    if let Ok(release) = fs::read_to_string("/proc/sys/kernel/osrelease") {
+    let osrelease_path = crate::sys_root::sub_path(root, "/proc/sys/kernel/osrelease");
+    if let Ok(release) = fs::read_to_string(osrelease_path) {
         let release = release.trim();
         if !release.is_empty() {
-            let modules_path = Path::new("/usr/lib/modules").join(release);
+            let modules_path = crate::sys_root::sub_path(root, "/usr/lib/modules").join(release);
             if !modules_path.exists() {
                 return true;
             }
@@ -27,7 +32,7 @@ pub fn check_reboot_pending() -> bool {
     }
 
     // 2. Fallback: check standard reboot-required marker
-    Path::new("/var/run/reboot-required").exists()
+    crate::sys_root::sub_path(root, "/var/run/reboot-required").exists()
 }
 
 pub fn check_pacman_lock() -> (bool, bool) {
@@ -120,7 +125,11 @@ pub fn get_disk_stats(path: &str) -> Option<(u8, f32)> {
 }
 
 pub fn get_pacman_db_mtime() -> Option<SystemTime> {
-    fs::metadata("/var/lib/pacman/local")
+    get_pacman_db_mtime_at(Path::new("/"))
+}
+
+pub fn get_pacman_db_mtime_at(root: &Path) -> Option<SystemTime> {
+    fs::metadata(crate::sys_root::sub_path(root, "/var/lib/pacman/local"))
         .and_then(|m| m.modified())
         .ok()
 }

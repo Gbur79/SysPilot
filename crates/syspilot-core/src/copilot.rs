@@ -406,7 +406,7 @@ pub async fn execute_copilot_query_async(
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "bash".to_string());
 
-        let mut command = Command::new(&bash_bin);
+        let mut command = crate::exec::new_tokio_command(&bash_bin);
         command.args(["-c", &format!("{effective_cmd} \"$@\""), "--", trimmed]);
 
         let output = run_command_with_timeout(
@@ -436,7 +436,7 @@ pub async fn execute_copilot_query_async(
     // Check if goose is available, fallback to agy
     if crate::terminal::find_program("goose").is_none() {
         if crate::terminal::find_program("agy").is_some() {
-            let mut command = Command::new("agy");
+            let mut command = crate::exec::new_tokio_command("agy");
             command.args(["-p", trimmed]);
 
             let output = run_command_with_timeout(command, timeout_dur, "agy CLI").await?;
@@ -457,7 +457,7 @@ pub async fn execute_copilot_query_async(
     }
 
     // Run goose with text query or recipe
-    let mut cmd = Command::new("goose");
+    let mut cmd = crate::exec::new_tokio_command("goose");
     cmd.arg("run");
 
     if let Some(recipe_path) = resolve_goose_recipe() {

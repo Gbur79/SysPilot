@@ -70,6 +70,23 @@ if ! clippy_out=$(cargo clippy --locked --all-targets -- -D warnings 2>&1); then
     exit 1
 fi
 
+# 2b. Universalism Linter
+lint_out=""
+if ! lint_out=$("$script_dir/lint-universalism.sh" -q 2>&1); then
+    echo "$lint_out" > "$err_log"
+    if (( quiet )); then
+        echo "RUST_VERIFY: FAIL | TESTS: UNTESTED | CLIPPY: PASS | FMT: PASS | LINT: FAIL | TARGET: syspilot-workspace"
+        echo "DIAG_1: STEP=lint;EXIT=1;TARGET=syspilot-workspace"
+        first_line=$(echo "$lint_out" | head -n 1 | tr '|' '_')
+        echo "DIAG_2: SUMMARY=${first_line:-lint-universalism failed}"
+        echo "FULL_LOG: $err_log"
+    else
+        echo "lint-universalism failed:" >&2
+        echo "$lint_out" >&2
+    fi
+    exit 1
+fi
+
 # 3. Tests
 test_out=""
 if ! test_out=$(cargo test --locked 2>&1); then
@@ -122,9 +139,26 @@ if (( gui_count == 0 )); then
     exit 1
 fi
 
+# 4. Footprint Benchmark
+footprint_out=""
+if ! footprint_out=$("$script_dir/bench-footprint.sh" --smoke -q 2>&1); then
+    echo "$footprint_out" > "$err_log"
+    if (( quiet )); then
+        echo "RUST_VERIFY: FAIL | TESTS: PASS | CLIPPY: PASS | FMT: PASS | FOOTPRINT: FAIL | TARGET: syspilot-workspace"
+        echo "DIAG_1: STEP=footprint;EXIT=1;TARGET=syspilot-workspace"
+        first_line=$(echo "$footprint_out" | head -n 1 | tr '|' '_')
+        echo "DIAG_2: SUMMARY=${first_line:-bench-footprint failed}"
+        echo "FULL_LOG: $err_log"
+    else
+        echo "bench-footprint failed:" >&2
+        echo "$footprint_out" >&2
+    fi
+    exit 1
+fi
+
 if (( quiet )); then
-    echo "RUST_VERIFY: PASS | TESTS: core: ${core_count} | tray: ${tray_count} | gui: ${gui_count} | Total: ${total_tests}/${total_tests} | CLIPPY: CLEAN | FMT: CLEAN | TARGET: syspilot-workspace"
+    echo "RUST_VERIFY: PASS | TESTS: core: ${core_count} | tray: ${tray_count} | gui: ${gui_count} | Total: ${total_tests}/${total_tests} | CLIPPY: CLEAN | FMT: CLEAN | LINT: CLEAN | TARGET: syspilot-workspace"
 else
-    echo "✔ All Rust checks passed: fmt, clippy, and ${total_tests} tests (core: ${core_count}, tray: ${tray_count}, gui: ${gui_count})."
+    echo "✔ All Rust checks passed: fmt, clippy, universalism lint, ${total_tests} tests (core: ${core_count}, tray: ${tray_count}, gui: ${gui_count}), and footprint benchmark."
 fi
 exit 0

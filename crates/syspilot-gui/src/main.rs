@@ -450,6 +450,11 @@ fn compute_maintenance_window_height(count: usize) -> f32 {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if unsafe { libc::getuid() == 0 } {
+        eprintln!("FATAL: SysPilot GUI must not be executed as root (UID 0).");
+        std::process::exit(1);
+    }
+
     if !acquire_single_instance_lock() {
         eprintln!("SysPilot GUI is already running.");
         return Ok(());

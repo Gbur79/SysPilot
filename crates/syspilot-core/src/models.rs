@@ -139,6 +139,10 @@ pub struct StatusJson {
     pub firewall: Option<StatusFirewall>,
     #[serde(default)]
     pub app_update: Option<StatusAppUpdate>,
+    #[serde(default)]
+    pub reboot_safety: Option<crate::reboot_safety::RebootSafetyStatus>,
+    #[serde(default)]
+    pub gaming_readiness: Option<crate::gaming::GamingReadinessStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -358,7 +362,12 @@ impl SystemSnapshot {
 }
 
 pub fn detect_kernel() -> String {
-    if let Ok(content) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
+    detect_kernel_at(Path::new("/"))
+}
+
+pub fn detect_kernel_at(root: &Path) -> String {
+    let osrelease = crate::sys_root::sub_path(root, "/proc/sys/kernel/osrelease");
+    if let Ok(content) = std::fs::read_to_string(osrelease) {
         let trimmed = content.trim();
         if !trimmed.is_empty() {
             return trimmed.to_string();
@@ -368,7 +377,12 @@ pub fn detect_kernel() -> String {
 }
 
 pub fn detect_os() -> String {
-    for path in ["/etc/os-release", "/usr/lib/os-release"] {
+    detect_os_at(Path::new("/"))
+}
+
+pub fn detect_os_at(root: &Path) -> String {
+    for rel in ["/etc/os-release", "/usr/lib/os-release"] {
+        let path = crate::sys_root::sub_path(root, rel);
         if let Ok(content) = std::fs::read_to_string(path) {
             let mut name = None;
             let mut pretty_name = None;
@@ -611,15 +625,23 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
 }
 
 pub fn detect_gpu() -> String {
+    detect_gpu_at(Path::new("/"))
+}
+
+pub fn detect_gpu_at(root: &Path) -> String {
     // 1. Try NVIDIA procfs (official driver telemetry)
-    if let Ok(entries) = std::fs::read_dir("/proc/driver/nvidia/gpus") {
-        for entry in entries.flatten() {
+    let nv_gpus_dir = crate::sys_root::sub_path(root, "/proc/driver/nvidia/gpus");
+    let nv_ver_path = crate::sys_root::sub_path(root, "/proc/driver/nvidia/version");
+    if let Ok(entries) = std::fs::read_dir(nv_gpus_dir) {
+        let mut sorted: Vec<_> = entries.flatten().collect();
+        sorted.sort_by_key(|e| e.file_name());
+        for entry in sorted {
             let info_path = entry.path().join("information");
             if let Ok(content) = std::fs::read_to_string(&info_path) {
                 for line in content.lines() {
                     if let Some(model) = line.strip_prefix("Model:") {
                         let model_trimmed = model.trim();
-                        let driver_suffix = std::fs::read_to_string("/proc/driver/nvidia/version")
+                        let driver_suffix = std::fs::read_to_string(&nv_ver_path)
                             .ok()
                             .and_then(|ver_content| {
                                 ver_content
@@ -636,9 +658,12 @@ pub fn detect_gpu() -> String {
         }
     }
 
-    // 2. Sysfs PCI display controller scan (zero-fork)
-    if let Ok(entries) = std::fs::read_dir("/sys/bus/pci/devices") {
-        for entry in entries.flatten() {
+    // 2. Sysfs PCI display controller scan (zero-fork, deterministic BDF order)
+    let pci_dir = crate::sys_root::sub_path(root, "/sys/bus/pci/devices");
+    if let Ok(entries) = std::fs::read_dir(pci_dir) {
+        let mut sorted: Vec<_> = entries.flatten().collect();
+        sorted.sort_by_key(|e| e.file_name());
+        for entry in sorted {
             let dev_path = entry.path();
             let class_path = dev_path.join("class");
             if let Ok(class_str) = std::fs::read_to_string(&class_path) {

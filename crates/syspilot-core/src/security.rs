@@ -3,7 +3,6 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::time::timeout;
 
 #[derive(Debug, Deserialize)]
@@ -75,7 +74,7 @@ pub async fn check_security_vulnerabilities(skip_network: bool) -> StatusSecurit
     };
 
     let run_cmd = async {
-        let mut cmd = Command::new(audit_bin);
+        let mut cmd = crate::exec::new_tokio_command(audit_bin);
         cmd.args(["-u", "--json"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

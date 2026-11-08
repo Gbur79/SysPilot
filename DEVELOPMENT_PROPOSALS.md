@@ -634,7 +634,22 @@ The original SysPilot GUI suffered from low-contrast card styling with floating 
 ### PATCH-027: [DRAFT / RFC] Tab 03 Strategic Pivot — Deterministic SRE Tactical Playbooks & Passive AI Telemetry Export
 * **Status:** `[DRAFT / RFC]` *(Approved Design — Scheduled for Next Session)*
 * **Zakres:** Wycofanie czatbota z Tab 03 w GUI (`crates/syspilot-gui/ui/appwindow.slint`) i zastąpienie go deterministycznymi, modułowymi playbookami SRE (`03 SRE TACTICAL PLAYBOOKS`: Wine/Proton shader & prefix hygiene, PipeWire reset, `pacdiff` reviewer, `paccache` prune), dynamicznym loaderem skryptów użytkownika z `~/.config/syspilot/playbooks.d/` oraz pasywnym przyciskiem `[ 📋 Copy SRE Telemetry for AI ]`.
+* **Architektura Kopiowania do Schowka (Context7 Slint 1.18):** Schowek realizowany natywnie przez Slint 1.18 API w elemencie `TextInput`: `select-all()`, `copy()`, `clear-selection()` z `0` forków subprocesów (`wl-copy`/`xclip`). Handoff kontraktu utrwalono w `dev-tools/sre_3axis_audit_handoff.json`.
 * **Status Weryfikacji:** `NOT YET IMPLEMENTED`.
+
+---
+
+### PATCH-028: [IMPLEMENTED] 3-Axis SRE Audit (Stages 1–3) — Zero-Subprocess Probes, Hermetic _at(root) Universalism & 100% Mutation Score (cargo-mutants)
+* **Status:** `[IMPLEMENTED]` *(Auditor Argon 3-Axis Audit | Executed by `eos-executor` sessions `7521661e`, `0e2ee087`, `964f241e`, `a6ced97d`, `6250bfcb`, `f5331ce5`)*
+* **Data zgłoszenia / wdrożenia:** 2026-11-08
+* **Wdrożone komponenty:**
+  1. **Etap 1 (Zero-Subprocess Elimination):** Wyeliminowano subprocesy `systemctl` w `firewall.rs` (`check_host_firewall_at(root)`) oraz `pacman -Qo` w `release.rs` (`detect_install_origin_at(root, ...)` na bazie czystego odczytu `/var/lib/pacman/local/syspilot-*`), gwarantując `exec::spawn_count() == 0`.
+  2. **Etap 2 i 3 (Hermetyzacja `*_at(root)` pod 5 Archetypów `MockRig` & 0 Przetrwałych Mutantów):** Sparametryzowano i pokryto testami jednostkowymi (`82/82 PASS`) oraz mutacyjnymi (`cargo-mutants` v27.1.0 — **0 missed mutants**) 10 modułów: `firewall.rs` (`17/17`), `release.rs` (`34/34`), `security.rs` (`19/19`), `orphans.rs` (`22/22`), `firmware.rs` (`42/42`), `services.rs` (`25/25`), `sentinels.rs` (`33/33`), `triage.rs` (`110/110`), `models.rs` (`77/77`) oraz `syspilot-tray/src/tray.rs` (`41/41`).
+  3. **Wnioski Inżynieryjne i Procedury SRE (`MUTANTS-001`, `FLASH-MUTANTS-002`, `BASH-IFS-003`):**
+     - **`MUTANTS-001` (Rust Equivalent-Mutant Prevention):** (a) Zakaz używania `..Default::default()` w produkcyjnych literałach struktur w `syspilot-core` i `syspilot-tray` (eliminuje nieosiągalne mutanty `delete field <f> from struct`); (b) Rozłączne flagi bitowe (`libc::LOCK_EX | libc::LOCK_NB`) należy definiować jako `const` z asercją czasu kompilacji (`const _: () = assert!(...)`), co eliminuje równoważny mutant zamiany `|` na `^`; (c) Unikać nieobserwowalnego `String::with_capacity` dla małych buforów oraz duplikowania ramion `match` zwracających tę samą wartość.
+     - **`FLASH-MUTANTS-002` (Oszczędność Tokenów Modelu Pro):** Czasochłonne przebiegi `./dev-tools/verify-rust.sh --mutants <plik.rs> -q` dla pojedynczych plików należy zlecać subagentowi `eos-executor` (`Model="flash"`) wewnątrz fazy `APPLY`, pozostawiając modelowi `eos-sre-auditor` (`Argon Pro`) wyłącznie pojedynczą weryfikację zbiorczą `--mutants-diff -q` po zakończeniu etapu.
+     - **`BASH-IFS-003` (Odporność `verify-rust.sh` na `IFS=$'\n\t'`):** W skryptach z `IFS=$'\n\t'` i `set -Eeuo pipefail` wieloczłonowe flagi CLI należy przekazywać przez tablice bash (`mut_test_args=(--bin syspilot-tray)`), a potoki `grep` podsumowań zabezpieczać przez `|| true`.
+* **Weryfikacja (`PROOF-EXEC-001`):** `./dev-tools/verify-rust.sh -q` ➔ `RUST_VERIFY: PASS | TESTS: core: 55 | tray: 17 | gui: 10 | Total: 82/82 | CLIPPY: CLEAN | FMT: CLEAN | LINT: CLEAN`.
 
 ---
 

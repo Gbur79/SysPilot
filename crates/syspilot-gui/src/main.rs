@@ -26,6 +26,68 @@ fn format_hardware_info(os: &str, kernel: &str) -> String {
     )
 }
 
+fn format_kernel_telemetry(
+    kernel: &str,
+    snapshot_reboot: bool,
+    safety: &syspilot_core::RebootSafetyStatus,
+) -> (&'static str, (u8, u8, u8), String) {
+    let clean_kernel = if kernel.trim().is_empty() {
+        "UNKNOWN"
+    } else {
+        kernel.trim()
+    };
+    if safety.black_screen_risk {
+        let issue = safety
+            .issues
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("MISSING GPU MODULE / DEPMOD");
+        (
+            "ALERT",
+            (239, 68, 68),
+            format!("REBOOT UNSAFE • {}", issue.to_uppercase()),
+        )
+    } else if snapshot_reboot || safety.reboot_pending {
+        (
+            "REBOOT",
+            (245, 158, 11),
+            "KERNEL REPLACED ON DISK — REBOOT SAFE (MODULES VERIFIED)".to_string(),
+        )
+    } else {
+        (
+            "PASS",
+            (34, 197, 94),
+            format!("RUNNING LINUX {} • MODULES OK", clean_kernel.to_uppercase()),
+        )
+    }
+}
+
+fn format_gpu_telemetry(
+    base_gpu: &str,
+    gaming: &syspilot_core::GamingReadinessStatus,
+) -> (&'static str, (u8, u8, u8), String) {
+    if !gaming.applicable {
+        ("INFO", (56, 189, 248), base_gpu.to_uppercase())
+    } else if !gaming.ready {
+        let suffix = if !gaming.vulkan_64_ready {
+            "VULKAN 64-BIT MISSING"
+        } else {
+            "VULKAN 32-BIT MISSING"
+        };
+        (
+            "WARN",
+            (245, 158, 11),
+            format!("{} • {}", base_gpu.to_uppercase(), suffix),
+        )
+    } else {
+        (
+            "PASS",
+            (34, 197, 94),
+            format!("{} • VULKAN 64/32 OK", base_gpu.to_uppercase()),
+        )
+    }
+}
+
 fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnapshot) {
     if snapshot.has_data_problem() {
         ui.set_has_error(true);
@@ -42,7 +104,12 @@ fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnaps
         ui.set_error_message("".into());
     }
 
-    let eff = snapshot.effective_status();
+    let reboot_safety = syspilot_core::check_reboot_safety();
+    let eff = if reboot_safety.black_screen_risk {
+        "ACTION_REQUIRED"
+    } else {
+        snapshot.effective_status()
+    };
     let (label, color) = if snapshot.has_data_problem() {
         (
             "TELEMETRY DEGRADED",
@@ -67,17 +134,11 @@ fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnaps
     ui.set_overall_status_color(color);
     ui.set_hardware_info(format_hardware_info(&snapshot.os, &snapshot.kernel).into());
 
-    if snapshot.reboot_pending {
-        ui.set_kernel_status("REBOOT".into());
-        ui.set_kernel_color(slint::Color::from_rgb_u8(245, 158, 11));
-        ui.set_kernel_details("KERNEL REPLACED ON DISK — REBOOT REQUIRED".into());
-    } else {
-        ui.set_kernel_status("PASS".into());
-        ui.set_kernel_color(slint::Color::from_rgb_u8(34, 197, 94));
-        ui.set_kernel_details(
-            format!("RUNNING LINUX {} (64-BIT)", snapshot.kernel.to_uppercase()).into(),
-        );
-    }
+    let (k_status, (kr, kg, kb), k_details) =
+        format_kernel_telemetry(&snapshot.kernel, snapshot.reboot_pending, &reboot_safety);
+    ui.set_kernel_status(k_status.into());
+    ui.set_kernel_color(slint::Color::from_rgb_u8(kr, kg, kb));
+    ui.set_kernel_details(k_details.into());
 
     // Root Storage sentinels
     let sentinels = syspilot_core::collect_sentinels();
@@ -121,9 +182,12 @@ fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnaps
         ui.set_failed_services_details("0 FAILED SYSTEMD UNITS".into());
     }
 
-    ui.set_gpu_status("PASS".into());
-    ui.set_gpu_color(slint::Color::from_rgb_u8(34, 197, 94));
-    ui.set_gpu_details(syspilot_core::detect_gpu().into());
+    let gaming = syspilot_core::check_gaming_readiness();
+    let (g_status, (gr, gg, gb), g_details) =
+        format_gpu_telemetry(&syspilot_core::detect_gpu(), &gaming);
+    ui.set_gpu_status(g_status.into());
+    ui.set_gpu_color(slint::Color::from_rgb_u8(gr, gg, gb));
+    ui.set_gpu_details(g_details.into());
 
     if snapshot.security_high_risk > 0 {
         ui.set_cve_status("ALERT".into());
@@ -817,5 +881,96 @@ mod tests {
             "ARCH LINUX // 6.6.10-LTS"
         );
         assert_eq!(format_hardware_info("", ""), "LINUX // UNKNOWN");
+    }
+
+    #[test]
+    fn test_format_kernel_and_gpu_telemetry_for_classic_and_lcars() {
+        // Healthy kernel & modules -> ("PASS", (34, 197, 94), "RUNNING LINUX 7.2.14-ZEN1-1-ZEN • MODULES OK")
+        let healthy_safety = syspilot_core::RebootSafetyStatus {
+            black_screen_risk: false,
+            reboot_pending: false,
+            ..Default::default()
+        };
+        let (status, rgb, text) =
+            format_kernel_telemetry("7.2.14-zen1-1-zen", false, &healthy_safety);
+        assert_eq!(status, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(text, "RUNNING LINUX 7.2.14-ZEN1-1-ZEN • MODULES OK");
+
+        // Safe reboot pending -> ("REBOOT", (245, 158, 11), "KERNEL REPLACED ON DISK — REBOOT SAFE (MODULES VERIFIED)")
+        let reboot_safe = syspilot_core::RebootSafetyStatus {
+            black_screen_risk: false,
+            reboot_pending: true,
+            ..Default::default()
+        };
+        let (status, rgb, text) = format_kernel_telemetry("7.2.14-zen1-1-zen", true, &reboot_safe);
+        assert_eq!(status, "REBOOT");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(
+            text,
+            "KERNEL REPLACED ON DISK — REBOOT SAFE (MODULES VERIFIED)"
+        );
+
+        // Black screen risk -> ("ALERT", (239, 68, 68), "REBOOT UNSAFE • ACTIVE GPU KERNEL MODULE 'NVIDIA' MISSING FOR KERNEL 7.2.15-ZEN1-1-ZEN")
+        let unsafe_safety = syspilot_core::RebootSafetyStatus {
+            black_screen_risk: true,
+            issues: vec![
+                "ACTIVE GPU KERNEL MODULE 'NVIDIA' MISSING FOR KERNEL 7.2.15-ZEN1-1-ZEN"
+                    .to_string(),
+            ],
+            ..Default::default()
+        };
+        let (status, rgb, text) =
+            format_kernel_telemetry("7.2.14-zen1-1-zen", true, &unsafe_safety);
+        assert_eq!(status, "ALERT");
+        assert_eq!(rgb, (239, 68, 68));
+        assert_eq!(
+            text,
+            "REBOOT UNSAFE • ACTIVE GPU KERNEL MODULE 'NVIDIA' MISSING FOR KERNEL 7.2.15-ZEN1-1-ZEN"
+        );
+
+        // GPU with 64/32 Vulkan ready -> ("PASS", (34, 197, 94), "NVIDIA GEFORCE GTX 970 • DRIVER 580.196.07 • VULKAN 64/32 OK")
+        let ready_gpu = syspilot_core::GamingReadinessStatus {
+            applicable: true,
+            ready: true,
+            vulkan_64_ready: true,
+            vulkan_32_ready: true,
+            ..Default::default()
+        };
+        let (status, rgb, text) =
+            format_gpu_telemetry("NVIDIA GeForce GTX 970 • Driver 580.196.07", &ready_gpu);
+        assert_eq!(status, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(
+            text,
+            "NVIDIA GEFORCE GTX 970 • DRIVER 580.196.07 • VULKAN 64/32 OK"
+        );
+
+        // GPU with missing 32-bit Vulkan -> ("WARN", (245, 158, 11), "NVIDIA GEFORCE GTX 970 • DRIVER 580.196.07 • VULKAN 32-BIT MISSING")
+        let missing_32 = syspilot_core::GamingReadinessStatus {
+            applicable: true,
+            ready: false,
+            vulkan_64_ready: true,
+            vulkan_32_ready: false,
+            ..Default::default()
+        };
+        let (status, rgb, text) =
+            format_gpu_telemetry("NVIDIA GeForce GTX 970 • Driver 580.196.07", &missing_32);
+        assert_eq!(status, "WARN");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(
+            text,
+            "NVIDIA GEFORCE GTX 970 • DRIVER 580.196.07 • VULKAN 32-BIT MISSING"
+        );
+
+        // Headless VM (applicable: false) -> ("INFO", (56, 189, 248), "DEFAULT DISPLAY ADAPTER")
+        let non_applicable = syspilot_core::GamingReadinessStatus {
+            applicable: false,
+            ..Default::default()
+        };
+        let (status, rgb, text) = format_gpu_telemetry("Default Display Adapter", &non_applicable);
+        assert_eq!(status, "INFO");
+        assert_eq!(rgb, (56, 189, 248));
+        assert_eq!(text, "DEFAULT DISPLAY ADAPTER");
     }
 }

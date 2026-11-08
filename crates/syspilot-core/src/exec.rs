@@ -1,25 +1,31 @@
+use std::cell::Cell;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static SUBPROCESS_SPAWN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-/// Increments the global subprocess spawn counter.
+thread_local! {
+    static THREAD_SPAWN_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Increments both the global and current-thread subprocess spawn counters.
 #[inline]
 pub fn record_spawn() {
     SUBPROCESS_SPAWN_COUNT.fetch_add(1, Ordering::Relaxed);
+    THREAD_SPAWN_COUNT.with(|c| c.set(c.get().saturating_add(1)));
 }
 
-/// Returns the current subprocess spawn count (for zero-fork assertions in tests).
+/// Returns the current thread's subprocess spawn count (for hermetic zero-fork assertions in parallel tests).
 #[inline]
 pub fn spawn_count() -> usize {
-    SUBPROCESS_SPAWN_COUNT.load(Ordering::Relaxed)
+    THREAD_SPAWN_COUNT.with(|c| c.get())
 }
 
-/// Resets the subprocess spawn counter to zero.
+/// Resets the current thread's subprocess spawn counter to zero.
 #[inline]
 pub fn reset_spawn_count() {
-    SUBPROCESS_SPAWN_COUNT.store(0, Ordering::Relaxed);
+    THREAD_SPAWN_COUNT.with(|c| c.set(0));
 }
 
 pub const ALLOWED_READONLY_BINS: &[&str] = &[

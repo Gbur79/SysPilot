@@ -44,17 +44,23 @@ pub fn check_pacman_lock_at(lock_path: &Path) -> (bool, bool) {
         return (false, false);
     }
 
+    let proc_dir = if lock_path.starts_with("/var/lib/pacman") {
+        std::path::PathBuf::from("/proc")
+    } else {
+        lock_path
+            .parent()
+            .unwrap_or_else(|| Path::new("/"))
+            .join("proc")
+    };
+
     // 1. Fast-path: Check PID inside db.lck if written by ALPM
     let mut active = false;
     if let Ok(content) = fs::read_to_string(lock_path) {
         if let Ok(pid) = content.trim().parse::<i32>() {
             if pid > 0 {
-                let comm_path = format!("/proc/{pid}/comm");
+                let comm_path = proc_dir.join(format!("{pid}/comm"));
                 if let Ok(comm) = fs::read_to_string(comm_path) {
-                    if matches!(
-                        comm.trim(),
-                        "pacman" | "yay" | "paru" | "checkupdates" | "pamac-daemon"
-                    ) {
+                    if matches!(comm.trim(), "pacman" | "yay" | "paru" | "pamac-daemon") {
                         active = true;
                     }
                 }
@@ -64,7 +70,7 @@ pub fn check_pacman_lock_at(lock_path: &Path) -> (bool, bool) {
 
     // 2. Fallback scan if PID not found or process is wrapping ALPM
     if !active {
-        if let Ok(entries) = fs::read_dir("/proc") {
+        if let Ok(entries) = fs::read_dir(&proc_dir) {
             for entry in entries.flatten() {
                 let file_name = entry.file_name();
                 let name_str = file_name.to_string_lossy();
@@ -74,10 +80,7 @@ pub fn check_pacman_lock_at(lock_path: &Path) -> (bool, bool) {
                 let comm_path = entry.path().join("comm");
                 if let Ok(comm) = fs::read_to_string(comm_path) {
                     let comm = comm.trim();
-                    if matches!(
-                        comm,
-                        "pacman" | "yay" | "paru" | "checkupdates" | "pamac-daemon"
-                    ) {
+                    if matches!(comm, "pacman" | "yay" | "paru" | "pamac-daemon") {
                         active = true;
                         break;
                     }
@@ -87,7 +90,6 @@ pub fn check_pacman_lock_at(lock_path: &Path) -> (bool, bool) {
     }
 
     // 3. TOCTOU Defense: Verify lockfile still exists after /proc scan.
-    // If pacman unlinked db.lck while we were scanning, it is not an orphaned lock!
     if !lock_path.exists() {
         return (false, false);
     }

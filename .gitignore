@@ -26,3 +26,21 @@ rust-tray/target/
 /syspilot_*.gif
 mutants.out/
 mutants.out.old/
+
+# ==============================================================================
+# Internal Agent Governance, SRE Working Files & Local Scratchpads
+# DO NOT COMMIT: These files contain local paths, test rig data, and AI agent RFCs.
+# ==============================================================================
+AUDIT_MATRIX.md
+DEVELOPMENT_PROPOSALS.md
+pending-patches.md
+*_PLAN.md
+ROADMAP_STATUS.md
+OBSERVED_ISSUES.md
+crates/**/OBSERVED_ISSUES.md
+
+# Dev tools: AI agent blueprints, handoffs & local asset generators
+dev-tools/*.json
+dev-tools/*-generator.py
+dev-tools/*-mockup*.py
+

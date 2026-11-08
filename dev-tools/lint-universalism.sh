@@ -107,6 +107,22 @@ if check_roots_guards:
                 if not pm or pm.group(1) != cargo_ver:
                     violations.append(f"packaging/PKGBUILD: pkgver '{pm.group(1) if pm else 'NONE'}' does not match Cargo.toml version '{cargo_ver}'")
 
+    # Repository Hygiene Gate (Forbidden internal agent governance files in git index)
+    try:
+        import subprocess
+        tracked_out = subprocess.check_output(["git", "ls-files"], cwd=project_root, text=True, errors="replace")
+        forbidden_exact = {
+            "AUDIT_MATRIX.md", "DEVELOPMENT_PROPOSALS.md", "pending-patches.md",
+            "DECOUPLING_PLAN.md", "RECONSTRUCTION_PLAN.md", "ROADMAP_STATUS.md",
+            "SRE_AUDIT_PLAN.md", "OBSERVED_ISSUES.md"
+        }
+        for item in tracked_out.splitlines():
+            item_base = os.path.basename(item)
+            if item_base in forbidden_exact or item.endswith("/OBSERVED_ISSUES.md") or (item.startswith("dev-tools/") and item.endswith(".json")):
+                violations.append(f"Git tracking violation: '{item}' is an internal SRE/agent file and must not be tracked in git (add to .gitignore).")
+    except Exception as e:
+        pass
+
 if violations:
     first_viol = violations[0].replace("|", "_")
     if quiet:

@@ -130,6 +130,14 @@ pub fn try_acquire_triage_lock(in_flight: &Arc<AtomicBool>) -> Option<TriageGuar
     }
 }
 
+#[inline]
+fn trim_heap() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        let _ = libc::malloc_trim(0);
+    }
+}
+
 fn try_spawn_triage(in_flight: &Arc<AtomicBool>, fast: bool, force_refresh: bool) -> bool {
     let Some(guard) = try_acquire_triage_lock(in_flight) else {
         return false;
@@ -138,6 +146,7 @@ fn try_spawn_triage(in_flight: &Arc<AtomicBool>, fast: bool, force_refresh: bool
     tokio::spawn(async move {
         let _guard = guard;
         let _ = syspilot_core::run_triage(fast, force_refresh).await;
+        trim_heap();
     });
     true
 }
@@ -155,6 +164,7 @@ fn try_spawn_triage_and_updater(in_flight: &Arc<AtomicBool>, handle: Handle<SysP
                 .update(move |tray| tray.updates = Some(updates))
                 .await;
         }
+        trim_heap();
     });
     true
 }
@@ -191,6 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run initial background update check if not in gaming session
     let initial_updates = updater::run_full_update_check(gamemode_active).await;
+    trim_heap();
 
     // Atomic deduplication lock preventing overlapping background triage runs
     let triage_in_flight = Arc::new(AtomicBool::new(false));

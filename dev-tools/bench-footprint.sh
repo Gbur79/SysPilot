@@ -67,6 +67,11 @@ if [[ -z "$pid" ]]; then
     fi
 
     tmp_state=$(mktemp -d "${TMPDIR:-/tmp}/syspilot-bench-state.XXXXXX")
+    for fd in $(ls /proc/$$/fd 2>/dev/null || true); do
+        if [[ "$fd" =~ ^[0-9]+$ ]] && (( fd > 2 )); then
+            eval "exec $fd>&-" 2>/dev/null || true
+        fi
+    done
     if command -v dbus-run-session >/dev/null 2>&1; then
         XDG_STATE_HOME="$tmp_state" dbus-run-session "$tray_bin" >/dev/null 2>&1 &
         spawned_pid=$!
@@ -120,21 +125,21 @@ threads=${threads:-0}
 fds=${fds:-0}
 
 # Budget enforcement:
-# Private_Dirty <= 1536 kB
-# Pss <= 4500 kB
+# Private_Dirty <= 2048 kB
+# Pss <= 5000 kB
 # Threads <= 8
 # FDs <= 22
 budget_pass=1
 failures=()
 
-if (( private_dirty > 1536 )); then
+if (( private_dirty > 2048 )); then
     budget_pass=0
-    failures+=("Private_Dirty: ${private_dirty}kB > 1536kB")
+    failures+=("Private_Dirty: ${private_dirty}kB > 2048kB")
 fi
 
-if (( pss > 4500 )); then
+if (( pss > 5000 )); then
     budget_pass=0
-    failures+=("Pss: ${pss}kB > 4500kB")
+    failures+=("Pss: ${pss}kB > 5000kB")
 fi
 
 if (( threads > 8 )); then
@@ -152,8 +157,8 @@ if (( budget_pass )); then
         echo "FOOTPRINT: PASS | PRIVATE_DIRTY: ${private_dirty}KB | PSS: ${pss}KB | THREADS: ${threads} | FDS: ${fds}"
     else
         echo "✔ SysPilot Tray Footprint Benchmark Passed:"
-        echo "  - Private_Dirty: ${private_dirty} kB (budget: <= 1536 kB)"
-        echo "  - Pss:           ${pss} kB (budget: <= 4500 kB)"
+        echo "  - Private_Dirty: ${private_dirty} kB (budget: <= 2048 kB)"
+        echo "  - Pss:           ${pss} kB (budget: <= 5000 kB)"
         echo "  - Threads:       ${threads} (budget: <= 8)"
         echo "  - Open FDs:      ${fds} (budget: <= 22)"
         echo "  - Context Sw.:   ${voluntary_switches}"

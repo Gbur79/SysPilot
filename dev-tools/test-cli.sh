@@ -67,10 +67,11 @@ pass_step
 # Test 2: Version flags (-v, --version)
 # -----------------------------------------------------------------------------
 current_test="version_flags"
+expected_ver=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$project_root/Cargo.toml" | head -n1)
 out_v=$("$CLI" -v 2>&1) || fail "-v returned non-zero exit code"
-[[ "$out_v" == "syspilot 2.1.0" ]] || fail "-v returned '$out_v', expected 'syspilot 2.1.0'"
+[[ "$out_v" == "syspilot $expected_ver" ]] || fail "-v returned '$out_v', expected 'syspilot $expected_ver'"
 out_ver=$("$CLI" --version 2>&1) || fail "--version returned non-zero exit code"
-[[ "$out_ver" == "syspilot 2.1.0" ]] || fail "--version returned '$out_ver', expected 'syspilot 2.1.0'"
+[[ "$out_ver" == "syspilot $expected_ver" ]] || fail "--version returned '$out_ver', expected 'syspilot $expected_ver'"
 pass_step
 
 # -----------------------------------------------------------------------------
@@ -264,7 +265,7 @@ grep -q "Slice=app.slice" "$service_file" || fail "systemd service missing Slice
 pkgbuild="$project_root/packaging/PKGBUILD"
 [[ -f "$pkgbuild" ]] || fail "packaging/PKGBUILD not found"
 bash -n "$pkgbuild" 2>&1 || fail "bash -n packaging/PKGBUILD failed"
-grep -q "pkgver=2.1.0" "$pkgbuild" || fail "PKGBUILD pkgver mismatch"
+grep -q "pkgver=$expected_ver" "$pkgbuild" || fail "PKGBUILD pkgver mismatch (expected $expected_ver)"
 
 # 11e. Shellcheck validation if available
 shellcheck_status="CLEAN"

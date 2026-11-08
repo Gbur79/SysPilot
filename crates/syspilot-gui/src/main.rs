@@ -279,7 +279,7 @@ fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnaps
         ui.set_self_update_btn_text(format!("Update to v{}", snapshot.app_latest_version).into());
     } else {
         ui.set_has_app_update(false);
-        ui.set_app_update_badge("v2.1.0 LATEST".into());
+        ui.set_app_update_badge(format!("v{} LATEST", env!("CARGO_PKG_VERSION")).into());
         ui.set_self_update_title("SysPilot Suite Self-Update & GitHub Sync".into());
         ui.set_self_update_desc(
             "Synchronizes the SysPilot suite with the latest upstream GitHub release and performs atomic rebuild.".into(),

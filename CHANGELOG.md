@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [2.1.0] - 2026-11-07
+## [2.1.1] - 2026-11-08
 
 ### Added & Hardened / Mega SRE Verification Tooling, Zero-Root Guard & Killer Features #1–#2 (`PATCH-026`)
 - **Killer Feature #1 — Universal Reboot & Kernel/DKMS Module Safety Guard (`crates/syspilot-core/src/reboot_safety.rs`)**:
@@ -18,12 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Pure-Rust, zero-subprocess verification of 64-bit and 32-bit Vulkan ICD manifests (`/usr/share/vulkan/icd.d/*.json`) and shared libraries in `/usr/lib/` and `/usr/lib32/`, matched against the active PCI GPU driver (`icd_matches_active_drivers`).
   - Handles both Arch Linux's shared `nvidia_icd.json` relative library layout (`libGLX_nvidia.so.0`) and Mesa RADV/ANV split `.x86_64.json`/`.i686.json` manifests.
   - Tracks CPU frequency `scaling_governor`, hybrid iGPU+dGPU `power/runtime_status`, and laptop battery throttling (`Discharging`), while gracefully skipping headless VMs.
-- **Zero-Subprocess `.pacnew` Scanner (`crates/syspilot-core/src/triage.rs`)**:
-  - Replaced `Command::new("find")` in `check_pacnew_files()` with pure-Rust `find_pacnew_files_at(root)` (max depth 4, symlink-loop safe), fixing a bug where `0700` root-only directories in `/etc` caused `find` to exit non-zero and discard discovered `.pacnew` files.
+- **Dual-Skin GUI Binding (`Classic Cyberpunk` & `Star Trek LCARS`) (`crates/syspilot-gui/src/main.rs`)**:
+  - Wired `format_kernel_telemetry` and `format_gpu_telemetry` into `update_ui_from_snapshot`, feeding `LcarsTelemetryRow` (`ui/lcars_hud.slint`) and `GridRow` (`ui/dashboard.slint`) with live `REBOOT BLOCKED` / `READY [REBOOT SAFE]` and `VK 64/32 OK | GOV: <gov>` diagnostics.
+- **Zero-Subprocess `.pacnew` Scanner & Daemon Heap Trim (`crates/syspilot-core/src/triage.rs`, `crates/syspilot-tray/src/main.rs`)**:
+  - Replaced `Command::new("find")` in `check_pacnew_files()` with pure-Rust `find_pacnew_files_at(root)` (max depth 4, symlink-loop safe).
+  - Added `libc::malloc_trim(0)` (`trim_heap()`) after background triage runs in `syspilot-tray`, reducing steady-state `Private_Dirty` from `1796 kB` to `~700 kB`.
 - **High-Assurance SRE Verification Suite & Arch Trust Triad**:
   - Enforced `libc::getuid() == 0` startup refusal in `syspilot-tray` and `syspilot-gui`.
-  - Added compile-time (`clippy.toml`), static (`dev-tools/lint-universalism.sh`), and runtime (`crates/syspilot-core/src/exec.rs` `spawn_count()`) subprocess gates.
-  - Added `crates/syspilot-core/src/sys_root.rs` (`sub_path`), 5-archetype `MockRig` (`crates/syspilot-core/src/mock_rig.rs`), `dev-tools/dump-fixture.sh` (`host_endeavouros_maxwell.json`), and `/proc/<pid>/smaps_rollup` resource budget benchmark (`dev-tools/bench-footprint.sh`: `Private_Dirty <= 1536 kB`, `Pss <= 4500 kB`). Workspace tests expanded to `71/71 PASS`.
+  - Added compile-time (`clippy.toml`), static (`dev-tools/lint-universalism.sh` including Version Sync Gate), and thread-local runtime (`crates/syspilot-core/src/exec.rs` `spawn_count()`) subprocess gates.
+  - Added `crates/syspilot-core/src/sys_root.rs` (`sub_path`), 5-archetype `MockRig` (`crates/syspilot-core/src/mock_rig.rs`), `dev-tools/dump-fixture.sh` (`host_endeavouros_maxwell.json`), and `/proc/<pid>/smaps_rollup` resource budget benchmark (`dev-tools/bench-footprint.sh`). Workspace tests expanded to `72/72 PASS`.
+
+## [2.1.0] - 2026-11-07
 
 ### Added & Hardened / Star Trek Okuda 1987 LCARS Dual-Skin Architecture & SRE Universalism (`BP-ARGON-SYSPILOT-UNIVERSALISM-MAINTAIN-H630`)
 - **Star Trek Okuda 1987 LCARS Dual-Skin Cockpit (`crates/syspilot-gui/ui`)**:

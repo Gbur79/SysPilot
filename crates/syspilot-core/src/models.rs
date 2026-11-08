@@ -309,7 +309,7 @@ impl Default for SystemSnapshot {
             firmware_updates: 0,
             firewall_active: false,
             app_update_available: false,
-            app_current_version: "2.1.0".into(),
+            app_current_version: env!("CARGO_PKG_VERSION").into(),
             app_latest_version: String::new(),
             app_release_url: String::new(),
         }
@@ -615,7 +615,7 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
         firewall_active: firewall.active,
         app_update_available: app_update.update_available,
         app_current_version: if app_update.current_version.is_empty() {
-            "2.1.0".into()
+            env!("CARGO_PKG_VERSION").into()
         } else {
             app_update.current_version
         },

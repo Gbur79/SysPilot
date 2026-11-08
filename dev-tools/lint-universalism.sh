@@ -80,6 +80,33 @@ if check_roots_guards:
         if "libc::getuid() == 0" not in content and "getuid() == 0" not in content:
             violations.append(f"{main_rel}: missing getuid() == 0 zero-root guard")
 
+    # Version Synchronization Gate (Cargo.toml == CHANGELOG.md == bin/syspilot == packaging/PKGBUILD)
+    import re
+    cargo_toml = os.path.join(project_root, "Cargo.toml")
+    if os.path.exists(cargo_toml):
+        with open(cargo_toml, "r", encoding="utf-8") as fh:
+            m = re.search(r'^version\s*=\s*"([^"]+)"', fh.read(), re.M)
+        cargo_ver = m.group(1) if m else None
+        if cargo_ver:
+            changelog_path = os.path.join(project_root, "CHANGELOG.md")
+            if os.path.exists(changelog_path):
+                with open(changelog_path, "r", encoding="utf-8") as fh:
+                    cm = re.search(r'^## \[([^\]]+)\]', fh.read(), re.M)
+                if not cm or cm.group(1) != cargo_ver:
+                    violations.append(f"CHANGELOG.md: top release header '{cm.group(1) if cm else 'NONE'}' does not match Cargo.toml version '{cargo_ver}'")
+            cli_path = os.path.join(project_root, "bin/syspilot")
+            if os.path.exists(cli_path):
+                with open(cli_path, "r", encoding="utf-8") as fh:
+                    bm = re.search(r'^readonly VERSION="([^"]+)"', fh.read(), re.M)
+                if not bm or bm.group(1) != cargo_ver:
+                    violations.append(f"bin/syspilot: VERSION '{bm.group(1) if bm else 'NONE'}' does not match Cargo.toml version '{cargo_ver}'")
+            pkgbuild_path = os.path.join(project_root, "packaging/PKGBUILD")
+            if os.path.exists(pkgbuild_path):
+                with open(pkgbuild_path, "r", encoding="utf-8") as fh:
+                    pm = re.search(r'^pkgver=(\S+)', fh.read(), re.M)
+                if not pm or pm.group(1) != cargo_ver:
+                    violations.append(f"packaging/PKGBUILD: pkgver '{pm.group(1) if pm else 'NONE'}' does not match Cargo.toml version '{cargo_ver}'")
+
 if violations:
     first_viol = violations[0].replace("|", "_")
     if quiet:

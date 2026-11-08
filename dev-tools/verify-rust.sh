@@ -18,9 +18,27 @@ else
 fi
 
 quiet=0
-if [[ "${1:-}" == "-q" || "${1:-}" == "--quiet" ]]; then
-    quiet=1
-fi
+mutants_target=""
+mutants_diff=0
+while (( $# > 0 )); do
+    case "$1" in
+        -q|--quiet)
+            quiet=1
+            shift
+            ;;
+        --mutants)
+            mutants_target="${2:?--mutants requires a file path (e.g. crates/syspilot-core/src/firewall.rs)}"
+            shift 2
+            ;;
+        --mutants-diff)
+            mutants_diff=1
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
 
 if [[ ! -d "$target_dir" || (! -f "$target_dir/Cargo.toml" && ! -d "$target_dir/crates") ]]; then
     if (( quiet )); then
@@ -156,9 +174,43 @@ if ! footprint_out=$("$script_dir/bench-footprint.sh" --smoke -q 2>&1); then
     exit 1
 fi
 
+# 5. Optional Surgical Mutation Testing (--mutants <file> or --mutants-diff)
+mutants_tag=""
+if [[ -n "$mutants_target" ]] || (( mutants_diff )); then
+    export PATH="$HOME/.local/bin:$PATH"
+    mut_out=""
+    mut_rc=0
+    if [[ -n "$mutants_target" ]]; then
+        mut_out=$(cargo mutants --in-place --no-Auto-Update -p syspilot-core -f "$mutants_target" -- --lib 2>&1) || mut_rc=$?
+        if [[ "$mut_out" == *"unrecognized"* || "$mut_out" == *"unexpected argument"* ]]; then
+            mut_rc=0
+            mut_out=$(cargo mutants --in-place -p syspilot-core -f "$mutants_target" -- --lib 2>&1) || mut_rc=$?
+        fi
+    else
+        diff_tmp=$(mktemp "/tmp/syspilot-mutants-diff.XXXXXX")
+        git diff HEAD > "$diff_tmp"
+        mut_out=$(cargo mutants --in-place --in-diff "$diff_tmp" -p syspilot-core -- --lib 2>&1) || mut_rc=$?
+        rm -f "$diff_tmp"
+    fi
+    rm -rf "$target_dir/mutants.out" "$target_dir/mutants.out.old"
+    summary_line=$(echo "$mut_out" | grep -E "mutants tested|Found 0 mutants" | tail -n 1 | tr '|' '_')
+    if (( mut_rc != 0 )); then
+        echo "$mut_out" > "$err_log"
+        if (( quiet )); then
+            echo "RUST_VERIFY: FAIL | TESTS: PASS | MUTANTS: FAIL (${summary_line:-missed mutants}) | TARGET: ${mutants_target:-git-diff}"
+            echo "FULL_LOG: $err_log"
+        else
+            echo "cargo mutants failed (survived mutants detected):" >&2
+            echo "$mut_out" >&2
+        fi
+        exit 1
+    fi
+    mutants_tag=" | MUTANTS: PASS (${summary_line:-clean})"
+fi
+
 if (( quiet )); then
-    echo "RUST_VERIFY: PASS | TESTS: core: ${core_count} | tray: ${tray_count} | gui: ${gui_count} | Total: ${total_tests}/${total_tests} | CLIPPY: CLEAN | FMT: CLEAN | LINT: CLEAN | TARGET: syspilot-workspace"
+    echo "RUST_VERIFY: PASS | TESTS: core: ${core_count} | tray: ${tray_count} | gui: ${gui_count} | Total: ${total_tests}/${total_tests} | CLIPPY: CLEAN | FMT: CLEAN | LINT: CLEAN${mutants_tag} | TARGET: syspilot-workspace"
 else
-    echo "✔ All Rust checks passed: fmt, clippy, universalism lint, ${total_tests} tests (core: ${core_count}, tray: ${tray_count}, gui: ${gui_count}), and footprint benchmark."
+    echo "✔ All Rust checks passed: fmt, clippy, universalism lint, ${total_tests} tests (core: ${core_count}, tray: ${tray_count}, gui: ${gui_count}), and footprint benchmark${mutants_tag}."
 fi
 exit 0

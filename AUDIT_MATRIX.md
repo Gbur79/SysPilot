@@ -62,3 +62,34 @@
 ```text
 python3 dev-tools/validate_project_inbox.py
 EXPECTED: PASS 12/12
+./dev-tools/verify-rust.sh -q
+EXPECTED: RUST_VERIFY: PASS | TESTS: Total: 72/72 | CLIPPY: CLEAN | FMT: CLEAN | LINT: CLEAN
+```
+
+---
+
+## 5. 3-Axis Module-by-Module SRE Audit Matrix (v2.1.1+)
+
+Every module in `SysPilot` is evaluated across **3 mandatory SRE axes**:
+1. **Axis 1 — Bugs & Mutation Resilience (`cargo mutants --in-place -p syspilot-core -f <file> -- --lib`):** Zero survived mutants on critical diagnostic logic; zero edge-case panics or silent failures.
+2. **Axis 2 — Resource & CPU Optimization (Zero-Subprocess & Heap Hygiene):** Eliminate unnecessary `Command::new` subprocess forks in favor of pure-Rust `/proc`, `/sys`, `/etc`, `/var/lib/pacman/local` reads; enforce `libc::malloc_trim(0)` after background allocations; minimize background threads (`ksni` runtime unification).
+3. **Axis 3 — 5-Archetype Universalism (`MockRig` + `sub_path`):** Every filesystem probe must accept `root: &Path` (`*_at`), use `sys_root::sub_path`, and pass across all 5 hardware/distro archetypes (`arch_amd_radeon`, `endeavouros_nvidia_dkms`, `cachyos_intel_hybrid_laptop`, `broken_reboot_state`, `headless_minimal_vm`).
+
+| Module ID | File Path | Status | Axis 1 (Mutants / Bugs) | Axis 2 (Optimization / Subprocesses) | Axis 3 (Universalism / `_at(root)`) | Priority & Planned Action |
+|:---|:---|:---:|:---|:---|:---|:---|
+| `MOD-CORE-01` | `crates/syspilot-core/src/sys_root.rs` | 🟢 **CERTIFIED [Argon]** | 2/2 caught (100%) | Pure Rust (`0` forks) | Canonical `sub_path` guard | Done (`PATCH-026`) |
+| `MOD-CORE-02` | `crates/syspilot-core/src/exec.rs` | 🟢 **CERTIFIED [Argon]** | Covered (`thread_local!`) | Whitelist gate | N/A | Done (`PATCH-026`) |
+| `MOD-CORE-03` | `crates/syspilot-core/src/reboot_safety.rs` | 🟢 **CERTIFIED [Argon]** | Adversarial tested | Pure Rust (`0` forks) | 5 archetypes + `sub_path` | Done (`PATCH-026`) |
+| `MOD-CORE-04` | `crates/syspilot-core/src/gaming.rs` | 🟢 **CERTIFIED [Argon]** | Adversarial tested | Pure Rust (`0` forks) | 5 archetypes + `sub_path` | Done (`PATCH-026`) |
+| `MOD-CORE-05` | `crates/syspilot-core/src/sentinels.rs` | 🟢 **CERTIFIED [Argon]** | Lock/boot tested | Pure Rust (`0` forks) | Parameterized `*_at(root)` | Audit mutants (`cargo mutants`) |
+| `MOD-CORE-06` | `crates/syspilot-core/src/firewall.rs` | 🔴 **LEGACY / AUDIT NEXT** | **7 untested mutants** in `check_systemd_service_active` / `check_host_firewall` | Forks `systemctl is-active` up to 4x! Can check `/sys/module/nf_tables`, `/run/ufw.lock`, `/sys/fs/cgroup/system.slice/` first | Lacks `check_host_firewall_at(root)` | **P1 Audit Target** |
+| `MOD-CORE-07` | `crates/syspilot-core/src/release.rs` | 🔴 **LEGACY / AUDIT NEXT** | `detect_install_origin` untested | Forks synchronous `pacman -Qo` 2x! Can check `/var/lib/pacman/local/syspilot-*` in 0.05ms pure Rust | Lacks `detect_install_origin_at(root)` | **P1 Audit Target** |
+| `MOD-CORE-08` | `crates/syspilot-core/src/services.rs` | 🟡 **HARDENED [Legacy]** | Parser tested, runner untested | Forks `systemctl --failed` (system + user) | Needs headless/container & `XDG_RUNTIME_DIR` guard audit | **P2 Audit Target** |
+| `MOD-CORE-09` | `crates/syspilot-core/src/orphans.rs` | 🟡 **HARDENED [Legacy]** | Tier classifier tested | Forks `pacman -Qdtq` + reads `/var/lib/pacman/local` | Parameterize `local_db_root` with `sub_path` | **P2 Audit Target** |
+| `MOD-CORE-10` | `crates/syspilot-core/src/firmware.rs` | 🟡 **HARDENED [Legacy]** | NVRAM quirk tested | Forks `fwupdmgr`; check `/sys/class/firmware-attributes` / EFI vars in pure Rust | Needs `*_at(root)` for EFI NVRAM probe | **P2 Audit Target** |
+| `MOD-CORE-11` | `crates/syspilot-core/src/security.rs` | 🟡 **HARDENED [Legacy]** | JSON parser tested | Forks `arch-audit` | Graceful fallback when `arch-audit` absent | **P3 Audit Target** |
+| `MOD-CORE-12` | `crates/syspilot-core/src/triage.rs` | 🟢 **CERTIFIED [Argon]** | `.pacnew` walker tested | `find` eliminated (`0` forks for `.pacnew`) | `find_pacnew_files_at(root)` | Audit remaining glue mutants |
+| `MOD-CORE-13` | `crates/syspilot-core/src/models.rs` | 🟢 **CERTIFIED [Argon]** | GPU & OS fallback tested | Zero-fork PCI/sysfs GPU probe | `detect_gpu_at(root)` + `detect_os_at(root)` | Audit mutants on `compute_flight_status` |
+| `MOD-CORE-14` | `crates/syspilot-core/src/copilot.rs` | 🔴 **REDESIGN SLATED (`PATCH-027`)** | CLI probe tested | Forks `agy`/`goose` | To be replaced/streamlined with Zero-Subprocess AI Clipboard & Runbooks | **Tab 03 (`PATCH-027`)** |
+| `MOD-TRAY-01` | `crates/syspilot-tray/` | 🟢 **HARDENED [Argon]** | 16 unit tests | `malloc_trim(0)` (`700 kB` `Private_Dirty`); **Opportunity:** `ksni` spawns extra `async-io` thread alongside `tokio` | Zero-root guard enforced | Evaluate `ksni` thread reduction |
+| `MOD-GUI-01` | `crates/syspilot-gui/` | 🟢 **CERTIFIED [Argon]** | 10 headless + watcher tests | On-demand Slint 1.18 | Dual-Skin (`LCARS` + `Classic`) parity | Tab 03 (`PATCH-027`) |

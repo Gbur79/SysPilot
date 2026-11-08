@@ -24,3 +24,5 @@ rust-tray/target/
 *.figcraft
 /syspilot_*.png
 /syspilot_*.gif
+mutants.out/
+mutants.out.old/

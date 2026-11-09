@@ -88,6 +88,19 @@ fn format_gpu_telemetry(
     }
 }
 
+pub fn format_aur_updates(count: u32) -> (&'static str, (u8, u8, u8), String) {
+    if count > 0 {
+        let details = if count == 1 {
+            "1 AUR PACKAGE PENDING".to_string()
+        } else {
+            format!("{count} AUR PACKAGES PENDING")
+        };
+        ("UPDATE", (245, 158, 11), details)
+    } else {
+        ("PASS", (34, 197, 94), "0 AUR PACKAGES PENDING".to_string())
+    }
+}
+
 fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnapshot) {
     if snapshot.has_data_problem() {
         ui.set_has_error(true);
@@ -229,21 +242,10 @@ fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnaps
         ui.set_updates_repo_details("0 OFFICIAL PACKAGES PENDING".into());
     }
 
-    if snapshot.aur_updates > 0 {
-        ui.set_updates_aur_text("WARN".into());
-        ui.set_updates_aur_color(slint::Color::from_rgb_u8(245, 158, 11));
-        ui.set_updates_aur_details(
-            format!(
-                "{} PACKAGES AUDITED (AUR STREAMS CLEAN)",
-                snapshot.aur_updates
-            )
-            .into(),
-        );
-    } else {
-        ui.set_updates_aur_text("PASS".into());
-        ui.set_updates_aur_color(slint::Color::from_rgb_u8(34, 197, 94));
-        ui.set_updates_aur_details("0 AUR PACKAGES PENDING".into());
-    }
+    let (aur_status, (ar, ag, ab), aur_details) = format_aur_updates(snapshot.aur_updates);
+    ui.set_updates_aur_text(aur_status.into());
+    ui.set_updates_aur_color(slint::Color::from_rgb_u8(ar, ag, ab));
+    ui.set_updates_aur_details(aur_details.into());
 
     if snapshot.firmware_updates > 0 {
         ui.set_firmware_status("UPDATE".into());
@@ -972,5 +974,29 @@ mod tests {
         assert_eq!(status, "INFO");
         assert_eq!(rgb, (56, 189, 248));
         assert_eq!(text, "DEFAULT DISPLAY ADAPTER");
+    }
+
+    #[test]
+    fn test_format_aur_updates_zero() {
+        let (status, rgb, text) = format_aur_updates(0);
+        assert_eq!(status, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(text, "0 AUR PACKAGES PENDING");
+    }
+
+    #[test]
+    fn test_format_aur_updates_singular() {
+        let (status, rgb, text) = format_aur_updates(1);
+        assert_eq!(status, "UPDATE");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(text, "1 AUR PACKAGE PENDING");
+    }
+
+    #[test]
+    fn test_format_aur_updates_plural() {
+        let (status, rgb, text) = format_aur_updates(4);
+        assert_eq!(status, "UPDATE");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(text, "4 AUR PACKAGES PENDING");
     }
 }

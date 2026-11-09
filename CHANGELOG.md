@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.3] - 2026-11-09
+
+### Fixed / Hotfix UI Telemetry AUR & Headless Unit Tests (HOTFIX / Without SRE Audit - Approved by Karol)
+- **AUR Telemetry Row Alignment in GUI (`crates/syspilot-gui/src/main.rs`)**:
+  - Eliminated placeholder string copied from initial mockup generator (`PACKAGES AUDITED (AUR STREAMS CLEAN)` with `WARN` status).
+  - Introduced pure mapping function `format_aur_updates(count: u32) -> (&'static str, (u8, u8, u8), String)` returning `UPDATE` status (amber) with `{count} AUR PACKAGES PENDING` (or `1 AUR PACKAGE PENDING`) when `count > 0`, and `PASS` status (green) with `0 AUR PACKAGES PENDING` when `count == 0`.
+- **Headless Unit Tests for Presentation Layer (`crates/syspilot-gui/src/main.rs`)**:
+  - Added deterministic unit tests (`test_format_aur_updates_zero`, `test_format_aur_updates_singular`, `test_format_aur_updates_plural`) verifying status, colors, and labels without requiring a display server.
+- **Deployment Mode**: Emergency production hotfix deployed without full SRE architectural audit (approved directly by project owner due to weekly reasoning model token limits).
+
 ## [2.1.2] - 2026-11-08
 
 ### Hardened & Certified / SRE 3-Axis Audit Stages 1–3 (`AUDIT-3AXIS-STAGES-1-3`)

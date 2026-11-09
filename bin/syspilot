@@ -15,7 +15,7 @@ readonly SCRIPT_DIR
 PROJECT_ROOT=$(dirname -- "$SCRIPT_DIR")
 readonly PROJECT_ROOT
 readonly DEFAULT_DATA_ROOT="/usr/share/syspilot"
-readonly VERSION="2.1.2"
+readonly VERSION="2.1.3"
 
 # Source optional user config if present
 if [[ -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]]; then

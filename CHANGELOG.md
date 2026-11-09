@@ -15,7 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Introduced pure mapping function `format_aur_updates(count: u32) -> (&'static str, (u8, u8, u8), String)` returning `UPDATE` status (amber) with `{count} AUR PACKAGES PENDING` (or `1 AUR PACKAGE PENDING`) when `count > 0`, and `PASS` status (green) with `0 AUR PACKAGES PENDING` when `count == 0`.
 - **Headless Unit Tests for Presentation Layer (`crates/syspilot-gui/src/main.rs`)**:
   - Added deterministic unit tests (`test_format_aur_updates_zero`, `test_format_aur_updates_singular`, `test_format_aur_updates_plural`) verifying status, colors, and labels without requiring a display server.
-- **Deployment Mode**: Emergency production hotfix deployed without full SRE architectural audit (approved directly by project owner due to weekly reasoning model token limits).
 
 ## [2.1.2] - 2026-11-08
 

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.1.3] - 2026-11-09
 
-### Fixed / Hotfix UI Telemetry AUR & Headless Unit Tests (HOTFIX / Without SRE Audit - Approved by Karol)
+### Fixed / Hotfix UI Telemetry AUR & Headless Unit Tests
 - **AUR Telemetry Row Alignment in GUI (`crates/syspilot-gui/src/main.rs`)**:
   - Eliminated placeholder string copied from initial mockup generator (`PACKAGES AUDITED (AUR STREAMS CLEAN)` with `WARN` status).
   - Introduced pure mapping function `format_aur_updates(count: u32) -> (&'static str, (u8, u8, u8), String)` returning `UPDATE` status (amber) with `{count} AUR PACKAGES PENDING` (or `1 AUR PACKAGE PENDING`) when `count > 0`, and `PASS` status (green) with `0 AUR PACKAGES PENDING` when `count == 0`.

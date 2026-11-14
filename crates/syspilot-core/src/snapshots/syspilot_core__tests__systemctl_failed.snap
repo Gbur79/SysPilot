@@ -1,0 +1,8 @@
+---
+source: crates/syspilot-core/src/tests.rs
+expression: failed
+---
+[
+  "backup.service",
+  "app-firefox@1000.service"
+]

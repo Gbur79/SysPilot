@@ -1,0 +1,18 @@
+---
+source: crates/syspilot-core/src/tests.rs
+expression: qi
+---
+[
+  {
+    "name": "bash",
+    "version": "5.3.20-1",
+    "description": "The GNU Bourne Again shell",
+    "install_reason": "Installed as a dependency for another package"
+  },
+  {
+    "name": "systemd",
+    "version": "262.2-1",
+    "description": "system and service manager",
+    "install_reason": "Installed as a dependency for another package"
+  }
+]

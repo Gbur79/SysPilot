@@ -1,0 +1,61 @@
+import { Theme } from "../theme.slint";
+
+export component AlertBannerPattern inherits Rectangle {
+    in property <bool> is_lcars_skin: true;
+    in property <bool> active: false;
+    in property <string> badge_text: "ATTENTION";
+    in property <string> message: "";
+
+    property <color> accent_color: root.is_lcars_skin ? Theme.okuda-amber : Theme.status-amber;
+
+    vertical-stretch: 0;
+    height: root.active ? 36px : 0px;
+    visible: root.active;
+    background: root.accent_color.transparentize(85%);
+    border-radius: root.is_lcars_skin ? 0px : Theme.radius-sm;
+    border-width: 1px;
+    border-color: root.accent_color.transparentize(40%);
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+        alignment: start;
+
+        // Badge pill
+        Rectangle {
+            background: root.accent_color;
+            border-radius: root.is_lcars_skin ? 4px : Theme.radius-sm;
+            horizontal-stretch: 0;
+            vertical-stretch: 0;
+            height: 22px;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                alignment: center;
+
+                Text {
+                    text: root.badge_text;
+                    color: Theme.pure-black;
+                    font-size: 11px;
+                    font-weight: 800;
+                    font-family: root.is_lcars_skin ? "Antonio" : "Inter";
+                    letter-spacing: root.is_lcars_skin ? 0.5px : 0px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Message text
+        Text {
+            text: root.message;
+            color: Theme.text-primary;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+    }
+}

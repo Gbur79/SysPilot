@@ -1,0 +1,15 @@
+Id=app-firefox@1000.service
+Transient=yes
+Slice=app.slice
+
+Id=app-org.chromium.Chromium-1234.scope
+Transient=yes
+Slice=app.slice
+
+Id=pipewire.service
+Transient=no
+Slice=
+
+Id=backup.service
+Transient=no
+Slice=app.slice

@@ -1,0 +1,8 @@
+---
+source: crates/syspilot-core/src/tests.rs
+expression: transient_units
+---
+[
+  "app-firefox@1000.service",
+  "app-org.chromium.Chromium-1234.scope"
+]

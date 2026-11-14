@@ -118,6 +118,39 @@ pub async fn get_transient_desktop_app_units(unit_names: &[String]) -> HashSet<S
     }
 }
 
+pub fn parse_systemctl_failed_units(stdout: &str) -> Result<Vec<String>, String> {
+    let mut units = Vec::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("failed to ")
+            || lower.starts_with("error:")
+            || lower.starts_with("system has not been booted")
+        {
+            return Err(format!("systemctl error on stdout: {trimmed}"));
+        }
+        let cleaned = trimmed
+            .strip_prefix('●')
+            .map(|s| s.trim_start())
+            .unwrap_or(trimmed);
+        let mut parts = cleaned.split_whitespace();
+        let Some(unit) = parts.next() else {
+            return Err(format!("malformed systemctl unit line: {trimmed}"));
+        };
+        let Some(_load_state) = parts.next() else {
+            return Err(format!("malformed systemctl unit line: {trimmed}"));
+        };
+        if !unit.contains('.') {
+            return Err(format!("malformed systemctl unit line: {trimmed}"));
+        }
+        units.push(unit.to_string());
+    }
+    Ok(units)
+}
+
 pub async fn query_failed_units(user_mode: bool) -> Result<Vec<String>, String> {
     let mut args = vec!["--failed", "--no-legend", "--plain"];
     if user_mode {
@@ -151,11 +184,7 @@ pub async fn query_failed_units(user_mode: bool) -> Result<Vec<String>, String> 
         Ok(Ok(output)) => {
             if output.status.success() {
                 let stdout_str = String::from_utf8_lossy(&output.stdout);
-                let units = stdout_str
-                    .lines()
-                    .filter_map(|line| line.split_whitespace().next().map(|s| s.to_string()))
-                    .collect();
-                Ok(units)
+                parse_systemctl_failed_units(&stdout_str)
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                 let err_msg = if stderr.is_empty() {

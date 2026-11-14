@@ -2062,7 +2062,7 @@ async fn test_stage2_firmware_hermetic_and_mutants() {
     set_test_fwupd_overrides(None, None);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn test_stage2_security_hermetic_and_mutants() {
     use crate::security::{
         check_security_vulnerabilities, default_security_timeout, set_test_arch_audit_bin,
@@ -3315,4 +3315,247 @@ fn test_stage3_models_mutants() {
     snap.cache_stale = false;
     snap.source_error = Some("err".into());
     assert!(snap.has_data_problem());
+}
+
+#[tokio::test]
+async fn test_exec_lc_all_c_isolation() {
+    let std_cmd = crate::exec::new_std_command("/usr/bin/true");
+    assert!(
+        std_cmd
+            .get_envs()
+            .any(|(k, v)| k == "LC_ALL" && v == Some(std::ffi::OsStr::new("C")))
+    );
+
+    let user_cmd = crate::exec::new_std_command_user_locale("/usr/bin/true");
+    assert!(!user_cmd.get_envs().any(|(k, _)| k == "LC_ALL"));
+
+    let out_std = crate::exec::new_std_command("/usr/bin/printenv")
+        .arg("LC_ALL")
+        .output()
+        .expect("printenv standard command run");
+    assert_eq!(out_std.stdout, b"C\n");
+
+    let out_tokio = crate::exec::new_tokio_command("/usr/bin/printenv")
+        .arg("LC_ALL")
+        .output()
+        .await
+        .expect("printenv tokio command run");
+    assert_eq!(out_tokio.stdout, b"C\n");
+}
+
+#[test]
+fn test_phase4_pure_parsers_insta_snapshots_and_adversarial() {
+    use std::collections::HashSet;
+
+    // 1. checkupdates snapshot
+    let checkup = crate::updater::parse_checkupdates_str(include_str!(
+        "../fixtures/checkupdates_pending.txt"
+    ))
+    .unwrap();
+    insta::assert_json_snapshot!("checkupdates_pending", checkup);
+
+    // 2. yay -Qua snapshot
+    let aur =
+        crate::updater::parse_aur_updates_str(include_str!("../fixtures/yay_qua_pending.txt"))
+            .unwrap();
+    insta::assert_json_snapshot!("yay_qua_pending", aur);
+
+    // 3. systemctl show transient snapshot
+    let cands: HashSet<String> = [
+        "app-firefox@1000.service".to_string(),
+        "app-org.chromium.Chromium-1234.scope".to_string(),
+        "pipewire.service".to_string(),
+        "backup.service".to_string(),
+    ]
+    .into_iter()
+    .collect();
+    let mut transient_units: Vec<String> = crate::services::parse_systemctl_show_transient(
+        include_str!("../fixtures/systemctl_show_transient.txt"),
+        &cands,
+    )
+    .into_iter()
+    .collect();
+    transient_units.sort();
+    insta::assert_json_snapshot!("systemctl_show_transient", transient_units);
+
+    // 4. systemctl failed snapshot
+    let failed = crate::services::parse_systemctl_failed_units(include_str!(
+        "../fixtures/systemctl_failed.txt"
+    ))
+    .unwrap();
+    insta::assert_json_snapshot!("systemctl_failed", failed);
+
+    // 5. pacman -Qi snapshot
+    let qi =
+        crate::orphans::parse_pacman_qi_str(include_str!("../fixtures/pacman_qi.txt")).unwrap();
+    insta::assert_json_snapshot!("pacman_qi", qi);
+
+    // 6. standalone software snapshot
+    let standalone = crate::updater::parse_standalone_updates_str(include_str!(
+        "../fixtures/standalone_software.json"
+    ))
+    .unwrap();
+    insta::assert_json_snapshot!("standalone_software", standalone);
+
+    // Adversarial: Empty "" / whitespace "   \n"
+    assert_eq!(
+        crate::updater::parse_checkupdates_str("").unwrap(),
+        crate::updater::CheckupdatesReport::default()
+    );
+    assert_eq!(
+        crate::updater::parse_checkupdates_str("   \n").unwrap(),
+        crate::updater::CheckupdatesReport::default()
+    );
+    assert_eq!(
+        crate::updater::parse_aur_updates_str("").unwrap(),
+        crate::updater::AurUpdatesReport::default()
+    );
+    assert_eq!(
+        crate::updater::parse_aur_updates_str("   \n").unwrap(),
+        crate::updater::AurUpdatesReport::default()
+    );
+    assert_eq!(
+        crate::services::parse_systemctl_failed_units("").unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        crate::services::parse_systemctl_failed_units("   \n").unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        crate::orphans::parse_pacman_package_list("").unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        crate::orphans::parse_pacman_package_list("   \n").unwrap(),
+        Vec::<String>::new()
+    );
+    assert!(crate::updater::parse_standalone_updates_str("").is_err());
+    assert!(crate::updater::parse_standalone_updates_str("   \n").is_err());
+    assert!(crate::orphans::parse_pacman_qi_str("").is_err());
+    assert!(crate::orphans::parse_pacman_qi_str("   \n").is_err());
+
+    // Adversarial: Error lines on stdout
+    assert_eq!(
+        crate::updater::parse_checkupdates_str("==> error: pkg 1.0 -> 2.0").unwrap_err(),
+        "checkupdates emitted error on stdout: ==> error: pkg 1.0 -> 2.0"
+    );
+    assert_eq!(
+        crate::updater::parse_checkupdates_str("error: pkg 1.0 -> 2.0").unwrap_err(),
+        "checkupdates emitted error on stdout: error: pkg 1.0 -> 2.0"
+    );
+    assert_eq!(
+        crate::updater::parse_aur_updates_str("==> error: a b").unwrap_err(),
+        "AUR update emitted error on stdout: ==> error: a b"
+    );
+    assert_eq!(
+        crate::updater::parse_aur_updates_str("error: a b").unwrap_err(),
+        "AUR update emitted error on stdout: error: a b"
+    );
+    assert_eq!(
+        crate::services::parse_systemctl_failed_units("Failed to load.service dummy").unwrap_err(),
+        "systemctl error on stdout: Failed to load.service dummy"
+    );
+    assert_eq!(
+        crate::services::parse_systemctl_failed_units("error: foo.service dummy").unwrap_err(),
+        "systemctl error on stdout: error: foo.service dummy"
+    );
+    assert_eq!(
+        crate::services::parse_systemctl_failed_units(
+            "System has not been booted with systemd foo.service dummy"
+        )
+        .unwrap_err(),
+        "systemctl error on stdout: System has not been booted with systemd foo.service dummy"
+    );
+    assert_eq!(
+        crate::orphans::parse_pacman_package_list("error:").unwrap_err(),
+        "pacman diagnostic on stdout: error:"
+    );
+    assert_eq!(
+        crate::orphans::parse_pacman_package_list("warning:").unwrap_err(),
+        "pacman diagnostic on stdout: warning:"
+    );
+
+    // Adversarial: Malformed syntax
+    assert!(crate::updater::parse_checkupdates_str("broken-line").is_err());
+    assert!(crate::updater::parse_checkupdates_str("pkg 1.0 -> ").is_err());
+    assert!(crate::updater::parse_aur_updates_str("singleword").is_err());
+    let aur_two_tok = crate::updater::parse_aur_updates_str("pkg 1.0").unwrap();
+    assert_eq!(aur_two_tok.count, 1);
+    assert_eq!(aur_two_tok.packages, vec!["pkg 1.0"]);
+    assert!(crate::services::parse_systemctl_failed_units("badline").is_err());
+    assert!(crate::orphans::parse_pacman_package_list("two words").is_err());
+    assert!(crate::updater::parse_standalone_updates_str("{bad json").is_err());
+    assert!(crate::orphans::parse_pacman_qi_str("Description : missing name").is_err());
+    assert!(crate::orphans::parse_pacman_qi_str("invalidline").is_err());
+    assert_eq!(
+        crate::orphans::parse_pacman_qi_str("Name:\nVersion: 1.0\n").unwrap_err(),
+        "pacman stanza has empty Name or Version"
+    );
+    assert_eq!(
+        crate::orphans::parse_pacman_qi_str("Name: pkg\nVersion:\n").unwrap_err(),
+        "pacman stanza has empty Name or Version"
+    );
+    let tab_pkg =
+        crate::orphans::parse_pacman_qi_str("Name: pkg\nVersion: 1.0\n\tcontinued line\n").unwrap();
+    assert_eq!(tab_pkg.len(), 1);
+    assert_eq!(tab_pkg[0].name, "pkg");
+    let space_pkg =
+        crate::orphans::parse_pacman_qi_str("Name: pkg\nVersion: 1.0\n  continued line\n").unwrap();
+    assert_eq!(space_pkg.len(), 1);
+    assert_eq!(space_pkg[0].name, "pkg");
+
+    // Extra coverage for mutants & edge cases:
+    assert_eq!(
+        crate::orphans::parse_pacman_package_list("  pkg-b \n\npkg-a\npkg-b\n").unwrap(),
+        vec!["pkg-a", "pkg-b"]
+    );
+    assert_eq!(
+        crate::updater::parse_checkupdates_stdout(b"==> ERROR: fail\n"),
+        (0, 0, Vec::new())
+    );
+    let (c, r, pkgs) =
+        crate::updater::parse_checkupdates_stdout(b"linux 1.0 -> 2.0\ncurl 1.0 -> 2.0\n");
+    assert_eq!(c, 1);
+    assert_eq!(r, 1);
+    assert_eq!(pkgs, vec!["linux 1.0 -> 2.0"]);
+
+    // Exercise flatpak.update_available branch in updater::parse_standalone_updates_str
+    let flatpak_json = r#"{
+      "flatpak": { "installed": true, "update_available": true }
+    }"#;
+    let flatpak_report = crate::updater::parse_standalone_updates_str(flatpak_json).unwrap();
+    assert_eq!(flatpak_report.count, 1);
+    assert_eq!(flatpak_report.pending_tools, vec!["flatpak"]);
+}
+
+#[test]
+fn test_spawn_detached_gui_nonexistent() {
+    let res = crate::terminal::spawn_detached_gui(std::path::Path::new("/nonexistent/bin/path"));
+    assert!(res.is_err());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_updater_mock_executables() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let yay_script = write_mock_executable(
+        temp_dir.path(),
+        "mock-yay",
+        "#!/bin/sh\necho 'mock-pkg 1.0 -> 2.0'\n",
+    );
+    let sys_health_script = write_mock_executable(
+        temp_dir.path(),
+        "mock-sys-health",
+        "#!/bin/sh\necho '{\"goose\": {\"update_available\": true}}'\n",
+    );
+
+    crate::updater::set_test_updater_bins(Some(yay_script), Some(sys_health_script));
+
+    let aur = crate::updater::check_aur_updates().await;
+    assert_eq!(aur, 1);
+
+    let standalone = crate::updater::check_standalone_updates().await;
+    assert_eq!(standalone, 1);
+
+    crate::updater::set_test_updater_bins(None, None);
 }

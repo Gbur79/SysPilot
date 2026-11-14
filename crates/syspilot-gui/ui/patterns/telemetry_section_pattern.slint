@@ -1,0 +1,47 @@
+import { Theme } from "../theme.slint";
+import { LcarsPodHeader } from "../components/lcars_pod_header.slint";
+import { LcarsTelemetryRow } from "../components/lcars_telemetry_row.slint";
+import { Card } from "../components/card.slint";
+import { GridRow } from "../components/grid_row.slint";
+
+export component TelemetrySectionPattern inherits VerticalLayout {
+    in property <bool> is_lcars_skin: true;
+    in property <string> section_title: "SECTION";
+    in property <string> row_label: "PROBE";
+    in property <string> row_value: "NOMINAL";
+    in property <string> row_status: "PASS";
+    in property <color> accent_color: Theme.okuda-peach;
+    in property <color> status_color: Theme.status-green;
+
+    vertical-stretch: 0;
+    spacing: 6px;
+
+    if root.is_lcars_skin : VerticalLayout {
+        spacing: 6px;
+        vertical-stretch: 0;
+
+        LcarsPodHeader {
+            title: root.section_title;
+            accent-color: root.accent_color;
+        }
+
+        LcarsTelemetryRow {
+            label: root.row_label;
+            value: root.row_value;
+            status: root.row_status;
+            accent-color: root.accent_color;
+            status-color: root.status_color;
+        }
+    }
+
+    if !root.is_lcars_skin : Card {
+        title: root.section_title;
+
+        GridRow {
+            name: root.row_label;
+            details: root.row_value;
+            status-text: root.row_status;
+            status-color: root.status_color;
+        }
+    }
+}

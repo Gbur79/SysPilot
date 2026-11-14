@@ -1,0 +1,37 @@
+import { AlertBannerPattern } from "alert_banner_pattern.slint";
+import { ActionCallbackPattern } from "action_callback_pattern.slint";
+import { TelemetrySectionPattern } from "telemetry_section_pattern.slint";
+
+export component PatternsShowcase inherits Window {
+    title: "SysPilot Pattern Catalog Showcase";
+    width: 600px;
+    height: 400px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        AlertBannerPattern {
+            is_lcars_skin: true;
+            active: true;
+            badge_text: "SECURITY";
+            message: "1 HIGH-RISK CVE VULNERABILITY PENDING";
+        }
+
+        ActionCallbackPattern {
+            is_lcars_skin: true;
+            busy: false;
+            idle_label: "RUN TRIAGE";
+            busy_label: "ANALYZING...";
+            action_id: "triage";
+        }
+
+        TelemetrySectionPattern {
+            is_lcars_skin: true;
+            section_title: "HARDWARE TELEMETRY";
+            row_label: "GPU ADAPTER";
+            row_value: "NVIDIA GEFORCE GTX 970 • VULKAN 64/32 OK";
+            row_status: "PASS";
+        }
+    }
+}

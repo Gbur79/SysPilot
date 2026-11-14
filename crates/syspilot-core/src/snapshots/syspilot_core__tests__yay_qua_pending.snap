@@ -1,0 +1,11 @@
+---
+source: crates/syspilot-core/src/tests.rs
+expression: aur
+---
+{
+  "count": 2,
+  "packages": [
+    "yay-bin 12.5.0-1 -> 12.5.1-1",
+    "paru-bin 2.1.0-1 -> 2.1.1-1"
+  ]
+}

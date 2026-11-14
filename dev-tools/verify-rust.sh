@@ -180,6 +180,7 @@ if [[ -n "$mutants_target" ]] || (( mutants_diff )); then
     export PATH="$HOME/.local/bin:$PATH"
     mut_out=""
     mut_rc=0
+    summary_line=""
     if [[ -n "$mutants_target" ]]; then
         mut_pkg="syspilot-core"
         mut_test_args=(--lib)
@@ -194,11 +195,55 @@ if [[ -n "$mutants_target" ]] || (( mutants_diff )); then
     else
         diff_tmp=$(mktemp "/tmp/syspilot-mutants-diff.XXXXXX")
         git diff HEAD > "$diff_tmp"
-        mut_out=$(cargo mutants --in-place --in-diff "$diff_tmp" -p syspilot-core -- --lib 2>&1) || mut_rc=$?
+        mapfile -t changed_rs < <(git diff --name-only HEAD -- '*.rs')
+        diff_pkgs=()
+        for f in "${changed_rs[@]}"; do
+            case "$f" in
+                crates/syspilot-core/*) pkg="syspilot-core" ;;
+                crates/syspilot-tray/*) pkg="syspilot-tray" ;;
+                crates/syspilot-gui/*)  pkg="syspilot-gui" ;;
+                *) pkg="" ;;
+            esac
+            if [[ -n "$pkg" ]]; then
+                already_in=0
+                for p in "${diff_pkgs[@]}"; do
+                    if [[ "$p" == "$pkg" ]]; then
+                        already_in=1
+                        break
+                    fi
+                done
+                if (( !already_in )); then
+                    diff_pkgs+=("$pkg")
+                fi
+            fi
+        done
+
+        if (( ${#diff_pkgs[@]} == 0 )); then
+            summary_line="Found 0 mutants in diff"
+            mut_rc=0
+        else
+            for pkg in "${diff_pkgs[@]}"; do
+                pkg_test_args=(--lib)
+                if [[ "$pkg" == "syspilot-tray" ]]; then
+                    pkg_test_args=(--bin syspilot-tray)
+                elif [[ "$pkg" == "syspilot-gui" ]]; then
+                    pkg_test_args=(--bin syspilot-gui)
+                fi
+                pkg_rc=0
+                pkg_out=$(cargo mutants --in-place --in-diff "$diff_tmp" -p "$pkg" -- "${pkg_test_args[@]}" 2>&1) || pkg_rc=$?
+                mut_out="${mut_out}${pkg_out}"$'\n'
+                if (( pkg_rc != 0 )); then
+                    mut_rc=1
+                fi
+                rm -rf "$target_dir/mutants.out" "$target_dir/mutants.out.old"
+            done
+        fi
         rm -f "$diff_tmp"
     fi
     rm -rf "$target_dir/mutants.out" "$target_dir/mutants.out.old"
-    summary_line=$(echo "$mut_out" | grep -E "mutants tested|Found 0 mutants" | tail -n 1 | tr '|' '_' || true)
+    if [[ -z "$summary_line" ]]; then
+        summary_line=$(echo "$mut_out" | grep -E "mutants tested|Found 0 mutants" | paste -sd '; ' - | tr '|' '_' || true)
+    fi
     if (( mut_rc != 0 )); then
         echo "$mut_out" > "$err_log"
         if (( quiet )); then

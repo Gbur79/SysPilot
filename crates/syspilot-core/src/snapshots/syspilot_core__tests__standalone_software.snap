@@ -1,0 +1,11 @@
+---
+source: crates/syspilot-core/src/tests.rs
+expression: standalone
+---
+{
+  "count": 2,
+  "pending_tools": [
+    "goose",
+    "uv"
+  ]
+}

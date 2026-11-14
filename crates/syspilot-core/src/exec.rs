@@ -52,11 +52,27 @@ pub fn is_allowed_readonly_bin(program: impl AsRef<OsStr>) -> bool {
 #[allow(clippy::disallowed_methods)]
 pub fn new_tokio_command(program: impl AsRef<OsStr>) -> tokio::process::Command {
     record_spawn();
-    tokio::process::Command::new(program)
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.env("LC_ALL", "C");
+    cmd
 }
 
 #[allow(clippy::disallowed_methods)]
 pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
+    record_spawn();
+    let mut cmd = std::process::Command::new(program);
+    cmd.env("LC_ALL", "C");
+    cmd
+}
+
+#[allow(clippy::disallowed_methods)]
+pub fn new_tokio_command_user_locale(program: impl AsRef<OsStr>) -> tokio::process::Command {
+    record_spawn();
+    tokio::process::Command::new(program)
+}
+
+#[allow(clippy::disallowed_methods)]
+pub fn new_std_command_user_locale(program: impl AsRef<OsStr>) -> std::process::Command {
     record_spawn();
     std::process::Command::new(program)
 }

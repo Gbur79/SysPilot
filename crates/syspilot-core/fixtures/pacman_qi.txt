@@ -1,0 +1,27 @@
+Name            : bash
+Version         : 5.3.20-1
+Description     : The GNU Bourne Again shell
+Architecture    : x86_64
+URL             : https://www.gnu.org/software/bash/bash.html
+Licenses        : GPL-3.0-or-later
+Groups          : None
+Provides        : sh
+Depends On      : readline  libreadline.so=8-64  glibc  ncurses
+Optional Deps   : bash-completion: for tab completion [installed]
+Install Reason  : Installed as a dependency for another package
+Install Script  : Yes
+Validated By    : Signature
+
+Name            : systemd
+Version         : 262.2-1
+Description     : system and service manager
+Architecture    : x86_64
+URL             : https://www.github.com/systemd/systemd
+Licenses        : LGPL-2.1-or-later  CC0-1.0  GPL-2.0-or-later  MIT-0
+Groups          : None
+Provides        : nss-myhostname  systemd-tools=262.2  udev=262.2
+Optional Deps   : apparmor: additional security features
+                  curl: systemd-journal-upload [installed]
+Install Reason  : Installed as a dependency for another package
+Install Script  : Yes
+Validated By    : Signature

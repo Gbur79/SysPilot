@@ -164,6 +164,93 @@ pub fn list_local_pacman_db_entries_at(root: &Path) -> Vec<String> {
     names
 }
 
+pub fn parse_pacman_package_list(stdout: &str) -> Result<Vec<String>, String> {
+    let mut set = BTreeSet::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("error:") || lower.starts_with("warning:") {
+            return Err(format!("pacman diagnostic on stdout: {trimmed}"));
+        }
+        if trimmed.split_whitespace().count() != 1 {
+            return Err(format!("malformed pacman package token: {trimmed}"));
+        }
+        set.insert(trimmed.to_string());
+    }
+    Ok(set.into_iter().collect())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PacmanPackageInfo {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub install_reason: String,
+}
+
+pub fn parse_pacman_qi_str(stdout: &str) -> Result<Vec<PacmanPackageInfo>, String> {
+    if stdout.trim().is_empty() {
+        return Err("empty pacman -Qi output".to_string());
+    }
+
+    let mut packages = Vec::new();
+    let mut name: Option<String> = None;
+    let mut version: Option<String> = None;
+    let mut description: Option<String> = None;
+    let mut install_reason: Option<String> = None;
+    let mut has_fields = false;
+
+    for line in stdout.lines().chain(std::iter::once("")) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if has_fields {
+                let Some(n) = name.take() else {
+                    return Err("pacman stanza missing Name field".to_string());
+                };
+                let Some(v) = version.take() else {
+                    return Err("pacman stanza missing Version field".to_string());
+                };
+                if n.is_empty() || v.is_empty() {
+                    return Err("pacman stanza has empty Name or Version".to_string());
+                }
+                packages.push(PacmanPackageInfo {
+                    name: n,
+                    version: v,
+                    description: description.take().unwrap_or_default(),
+                    install_reason: install_reason.take().unwrap_or_default(),
+                });
+                has_fields = false;
+            }
+            continue;
+        }
+
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+
+        let Some((key, val)) = trimmed.split_once(':') else {
+            return Err(format!("malformed line in pacman -Qi output: {trimmed}"));
+        };
+        has_fields = true;
+        match key.trim() {
+            "Name" => name = Some(val.trim().to_string()),
+            "Version" => version = Some(val.trim().to_string()),
+            "Description" => description = Some(val.trim().to_string()),
+            "Install Reason" => install_reason = Some(val.trim().to_string()),
+            _ => {}
+        }
+    }
+
+    if packages.is_empty() {
+        return Err("no package stanzas found in pacman -Qi output".to_string());
+    }
+
+    Ok(packages)
+}
+
 pub async fn query_pacman_package_names(
     pacman_path: &Path,
     query_flag: &str,
@@ -186,19 +273,15 @@ pub async fn query_pacman_package_names(
             let stdout_str = String::from_utf8_lossy(&output.stdout);
             let stderr_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
-            let pkgs: Vec<String> = stdout_str
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect();
-
             if output.status.success() {
-                let set: BTreeSet<String> = pkgs.into_iter().collect();
-                return Ok(set.into_iter().collect());
+                return parse_pacman_package_list(&stdout_str);
             }
 
             // pacman returns code 1 when no packages match the filter
-            if output.status.code() == Some(1) && pkgs.is_empty() && stderr_str.is_empty() {
+            if output.status.code() == Some(1)
+                && stdout_str.trim().is_empty()
+                && stderr_str.is_empty()
+            {
                 return Ok(Vec::new());
             }
 

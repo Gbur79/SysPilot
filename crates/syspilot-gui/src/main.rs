@@ -101,249 +101,545 @@ pub fn format_aur_updates(count: u32) -> (&'static str, (u8, u8, u8), String) {
     }
 }
 
-fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnapshot) {
-    if snapshot.has_data_problem() {
-        ui.set_has_error(true);
-        let reason = if let Some(err) = &snapshot.source_error {
-            err.clone()
-        } else if snapshot.cache_stale {
-            format!("Telemetry cache stale (age {})", snapshot.age_label())
-        } else {
-            "Degraded telemetry stream".to_string()
-        };
-        ui.set_error_message(reason.into());
-    } else {
-        ui.set_has_error(false);
-        ui.set_error_message("".into());
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowTone {
+    Pass,
+    Update,
+    Warn,
+    Alert,
+    Info,
+    Offline,
+}
 
-    let reboot_safety = syspilot_core::check_reboot_safety();
-    let eff = if reboot_safety.black_screen_risk {
+impl RowTone {
+    pub const fn rgb(self) -> (u8, u8, u8) {
+        match self {
+            Self::Pass => (34, 197, 94),
+            Self::Update | Self::Warn => (245, 158, 11),
+            Self::Alert => (239, 68, 68),
+            Self::Info => (56, 189, 248),
+            Self::Offline => (100, 116, 139),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowPresentation {
+    pub status: String,
+    pub rgb: (u8, u8, u8),
+    pub details: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfUpdateView {
+    pub available: bool,
+    pub badge: String,
+    pub title: String,
+    pub desc: String,
+    pub btn_text: String,
+}
+
+pub fn format_snapshot_error_banner(snapshot: &syspilot_core::SystemSnapshot) -> (bool, String) {
+    if let Some(err) = &snapshot.source_error {
+        (true, err.clone())
+    } else if snapshot.cache_stale {
+        (
+            true,
+            format!("Telemetry cache stale (age {})", snapshot.age_label()),
+        )
+    } else if snapshot.status == "DEGRADED" {
+        (true, "Degraded telemetry stream".to_string())
+    } else {
+        (false, String::new())
+    }
+}
+
+pub fn format_overall_header(
+    snapshot: &syspilot_core::SystemSnapshot,
+    reboot_safety: &syspilot_core::RebootSafetyStatus,
+) -> (&'static str, &'static str, (u8, u8, u8)) {
+    let eff: &'static str = if reboot_safety.black_screen_risk {
         "ACTION_REQUIRED"
     } else {
-        snapshot.effective_status()
+        match snapshot.effective_status() {
+            "ACTION_REQUIRED" => "ACTION_REQUIRED",
+            "PRE_FLIGHT_ATTENTION" => "PRE_FLIGHT_ATTENTION",
+            _ => "ALL_CLEAR",
+        }
     };
-    let (label, color) = if snapshot.has_data_problem() {
-        (
-            "TELEMETRY DEGRADED",
-            slint::Color::from_rgb_u8(245, 158, 11),
-        )
+    let (label, rgb) = if snapshot.has_data_problem() || snapshot.status == "DEGRADED" {
+        ("TELEMETRY DEGRADED", RowTone::Warn.rgb())
     } else {
         match eff {
-            "ACTION_REQUIRED" => ("RED ALERT", slint::Color::from_rgb_u8(239, 68, 68)),
-            "PRE_FLIGHT_ATTENTION" => ("SYSTEM ATTENTION", slint::Color::from_rgb_u8(245, 158, 11)),
+            "ACTION_REQUIRED" => ("RED ALERT", RowTone::Alert.rgb()),
+            "PRE_FLIGHT_ATTENTION" => ("SYSTEM ATTENTION", RowTone::Warn.rgb()),
             _ => {
                 if snapshot.gaming_mode {
-                    ("GAMEMODE ENGAGED", slint::Color::from_rgb_u8(56, 189, 248))
+                    ("GAMEMODE ENGAGED", RowTone::Info.rgb())
                 } else {
-                    ("SYSTEM OPERATIONAL", slint::Color::from_rgb_u8(34, 197, 94))
+                    ("SYSTEM OPERATIONAL", RowTone::Pass.rgb())
                 }
             }
         }
     };
+    (eff, label, rgb)
+}
 
-    ui.set_overall_status(eff.into());
-    ui.set_overall_status_label(label.into());
-    ui.set_overall_status_color(color);
-    ui.set_hardware_info(format_hardware_info(&snapshot.os, &snapshot.kernel).into());
-
-    let (k_status, (kr, kg, kb), k_details) =
-        format_kernel_telemetry(&snapshot.kernel, snapshot.reboot_pending, &reboot_safety);
-    ui.set_kernel_status(k_status.into());
-    ui.set_kernel_color(slint::Color::from_rgb_u8(kr, kg, kb));
-    ui.set_kernel_details(k_details.into());
-
-    // Root Storage sentinels
-    let sentinels = syspilot_core::collect_sentinels();
-    if sentinels.root_used_pct >= 90 {
-        ui.set_root_status("ALERT".into());
-        ui.set_root_color(slint::Color::from_rgb_u8(239, 68, 68));
-    } else if sentinels.root_used_pct >= 80 {
-        ui.set_root_status("WARN".into());
-        ui.set_root_color(slint::Color::from_rgb_u8(245, 158, 11));
+pub fn format_root_storage(used_pct: u8, avail_gb: f32) -> (&'static str, (u8, u8, u8), String) {
+    let (status, rgb) = if used_pct >= 90 {
+        ("ALERT", RowTone::Alert.rgb())
+    } else if used_pct >= 80 {
+        ("WARN", RowTone::Warn.rgb())
     } else {
-        ui.set_root_status("PASS".into());
-        ui.set_root_color(slint::Color::from_rgb_u8(34, 197, 94));
-    }
-    ui.set_root_details(
-        format!(
-            "{}% USED • {:.1} GB AVAILABLE ON ROOT",
-            sentinels.root_used_pct, sentinels.root_avail_gb
+        ("PASS", RowTone::Pass.rgb())
+    };
+    (
+        status,
+        rgb,
+        format!("{used_pct}% USED • {avail_gb:.1} GB AVAILABLE ON ROOT"),
+    )
+}
+
+pub fn format_firewall_status(active: bool) -> (&'static str, (u8, u8, u8), &'static str) {
+    if active {
+        (
+            "PASS",
+            RowTone::Pass.rgb(),
+            "FIREWALL ACTIVE • PACKET FILTERING ENFORCED",
         )
-        .into(),
-    );
-
-    if snapshot.firewall_active {
-        ui.set_firewall_status("PASS".into());
-        ui.set_firewall_color(slint::Color::from_rgb_u8(34, 197, 94));
-        ui.set_firewall_details("FIREWALL ACTIVE • PACKET FILTERING ENFORCED".into());
     } else {
-        ui.set_firewall_status("INFO".into());
-        ui.set_firewall_color(slint::Color::from_rgb_u8(56, 189, 248));
-        ui.set_firewall_details("PROTECTED BY PERIMETER ROUTER/LAN".into());
-    }
-
-    if snapshot.errors > 0 {
-        ui.set_failed_services_status(format!("{} FAILED", snapshot.errors).into());
-        ui.set_failed_services_color(slint::Color::from_rgb_u8(239, 68, 68));
-        ui.set_failed_services_details(
-            format!("{} DEGRADED SYSTEMD UNITS", snapshot.errors).into(),
-        );
-    } else {
-        ui.set_failed_services_status("PASS".into());
-        ui.set_failed_services_color(slint::Color::from_rgb_u8(34, 197, 94));
-        ui.set_failed_services_details("0 FAILED SYSTEMD UNITS".into());
-    }
-
-    let gaming = syspilot_core::check_gaming_readiness();
-    let (g_status, (gr, gg, gb), g_details) =
-        format_gpu_telemetry(&syspilot_core::detect_gpu(), &gaming);
-    ui.set_gpu_status(g_status.into());
-    ui.set_gpu_color(slint::Color::from_rgb_u8(gr, gg, gb));
-    ui.set_gpu_details(g_details.into());
-
-    if snapshot.security_high_risk > 0 {
-        ui.set_cve_status("ALERT".into());
-        ui.set_cve_color(slint::Color::from_rgb_u8(239, 68, 68));
-        ui.set_cve_details(
-            format!(
-                "{} HIGH-RISK CVE VULNERABILITIES PENDING",
-                snapshot.security_high_risk
-            )
-            .into(),
-        );
-    } else {
-        ui.set_cve_status("PASS".into());
-        ui.set_cve_color(slint::Color::from_rgb_u8(34, 197, 94));
-        ui.set_cve_details("NO UNPATCHED CVE VULNERABILITIES".into());
-    }
-
-    if snapshot.core_updates > 0 {
-        ui.set_updates_core_text("UPDATE".into());
-        ui.set_updates_core_color(slint::Color::from_rgb_u8(245, 158, 11));
-        ui.set_updates_core_details(
-            format!("{} CORE SYSTEM UPDATES PENDING", snapshot.core_updates).into(),
-        );
-    } else {
-        ui.set_updates_core_text("PASS".into());
-        ui.set_updates_core_color(slint::Color::from_rgb_u8(34, 197, 94));
-        ui.set_updates_core_details("0 CORE SYSTEM UPDATES PENDING".into());
-    }
-
-    if snapshot.regular_updates > 0 {
-        ui.set_updates_repo_text("UPDATE".into());
-        ui.set_updates_repo_color(slint::Color::from_rgb_u8(245, 158, 11));
-        ui.set_updates_repo_details(
-            format!("{} OFFICIAL PACKAGES PENDING", snapshot.regular_updates).into(),
-        );
-    } else {
-        ui.set_updates_repo_text("PASS".into());
-        ui.set_updates_repo_color(slint::Color::from_rgb_u8(34, 197, 94));
-        ui.set_updates_repo_details("0 OFFICIAL PACKAGES PENDING".into());
-    }
-
-    let (aur_status, (ar, ag, ab), aur_details) = format_aur_updates(snapshot.aur_updates);
-    ui.set_updates_aur_text(aur_status.into());
-    ui.set_updates_aur_color(slint::Color::from_rgb_u8(ar, ag, ab));
-    ui.set_updates_aur_details(aur_details.into());
-
-    if snapshot.firmware_updates > 0 {
-        ui.set_firmware_status("UPDATE".into());
-        ui.set_firmware_color(slint::Color::from_rgb_u8(245, 158, 11));
-        ui.set_firmware_details(
-            format!(
-                "{} FIRMWARE UPDATES AVAILABLE VIA LVFS",
-                snapshot.firmware_updates
-            )
-            .into(),
-        );
-    } else {
-        ui.set_firmware_status("PASS".into());
-        ui.set_firmware_color(slint::Color::from_rgb_u8(34, 197, 94));
-        ui.set_firmware_details("FIRMWARE SIGNATURES VERIFIED • LVFS CLEAN".into());
-    }
-
-    ui.set_orphans_status("PASS".into());
-    ui.set_orphans_color(slint::Color::from_rgb_u8(34, 197, 94));
-    ui.set_orphans_details("0 ORPHANS DETECTED • PACMAN CACHE TRIMMED".into());
-
-    if snapshot.app_update_available {
-        ui.set_has_app_update(true);
-        ui.set_app_update_badge(format!("v{} AVAILABLE", snapshot.app_latest_version).into());
-        ui.set_self_update_title("SysPilot Suite Self-Update (Update Available)".into());
-        ui.set_self_update_desc(
-            format!(
-                "Upstream v{} is available (current: v{}). Fast-forward git repository and rebuild atomically.",
-                snapshot.app_latest_version, snapshot.app_current_version
-            )
-            .into(),
-        );
-        ui.set_self_update_btn_text(format!("Update to v{}", snapshot.app_latest_version).into());
-    } else {
-        ui.set_has_app_update(false);
-        ui.set_app_update_badge(format!("v{} LATEST", env!("CARGO_PKG_VERSION")).into());
-        ui.set_self_update_title("SysPilot Suite Self-Update & GitHub Sync".into());
-        ui.set_self_update_desc(
-            "Synchronizes the SysPilot suite with the latest upstream GitHub release and performs atomic rebuild.".into(),
-        );
-        ui.set_self_update_btn_text("Check & Update Suite".into());
+        (
+            "INFO",
+            RowTone::Info.rgb(),
+            "PROTECTED BY PERIMETER ROUTER/LAN",
+        )
     }
 }
 
+pub fn format_failed_services(errors: u32) -> (String, (u8, u8, u8), String) {
+    if errors == 0 {
+        (
+            "PASS".to_string(),
+            RowTone::Pass.rgb(),
+            "0 FAILED SYSTEMD UNITS".to_string(),
+        )
+    } else if errors == 1 {
+        (
+            "1 FAILED".to_string(),
+            RowTone::Alert.rgb(),
+            "1 DEGRADED SYSTEMD UNIT".to_string(),
+        )
+    } else {
+        (
+            format!("{errors} FAILED"),
+            RowTone::Alert.rgb(),
+            format!("{errors} DEGRADED SYSTEMD UNITS"),
+        )
+    }
+}
+
+pub fn format_cve_status(high_risk: u32) -> (&'static str, (u8, u8, u8), String) {
+    if high_risk == 0 {
+        (
+            "PASS",
+            RowTone::Pass.rgb(),
+            "NO UNPATCHED CVE VULNERABILITIES".to_string(),
+        )
+    } else if high_risk == 1 {
+        (
+            "ALERT",
+            RowTone::Alert.rgb(),
+            "1 HIGH-RISK CVE VULNERABILITY PENDING".to_string(),
+        )
+    } else {
+        (
+            "ALERT",
+            RowTone::Alert.rgb(),
+            format!("{high_risk} HIGH-RISK CVE VULNERABILITIES PENDING"),
+        )
+    }
+}
+
+pub fn format_core_updates(count: u32) -> (&'static str, (u8, u8, u8), String) {
+    if count == 0 {
+        (
+            "PASS",
+            RowTone::Pass.rgb(),
+            "0 CORE SYSTEM UPDATES PENDING".to_string(),
+        )
+    } else if count == 1 {
+        (
+            "UPDATE",
+            RowTone::Update.rgb(),
+            "1 CORE SYSTEM UPDATE PENDING".to_string(),
+        )
+    } else {
+        (
+            "UPDATE",
+            RowTone::Update.rgb(),
+            format!("{count} CORE SYSTEM UPDATES PENDING"),
+        )
+    }
+}
+
+pub fn format_repo_updates(count: u32) -> (&'static str, (u8, u8, u8), String) {
+    if count == 0 {
+        (
+            "PASS",
+            RowTone::Pass.rgb(),
+            "0 OFFICIAL PACKAGES PENDING".to_string(),
+        )
+    } else if count == 1 {
+        (
+            "UPDATE",
+            RowTone::Update.rgb(),
+            "1 OFFICIAL PACKAGE PENDING".to_string(),
+        )
+    } else {
+        (
+            "UPDATE",
+            RowTone::Update.rgb(),
+            format!("{count} OFFICIAL PACKAGES PENDING"),
+        )
+    }
+}
+
+pub fn format_firmware_updates(count: u32) -> (&'static str, (u8, u8, u8), String) {
+    if count == 0 {
+        (
+            "PASS",
+            RowTone::Pass.rgb(),
+            "FIRMWARE SIGNATURES VERIFIED • LVFS CLEAN".to_string(),
+        )
+    } else if count == 1 {
+        (
+            "UPDATE",
+            RowTone::Update.rgb(),
+            "1 FIRMWARE UPDATE AVAILABLE VIA LVFS".to_string(),
+        )
+    } else {
+        (
+            "UPDATE",
+            RowTone::Update.rgb(),
+            format!("{count} FIRMWARE UPDATES AVAILABLE VIA LVFS"),
+        )
+    }
+}
+
+pub fn format_orphans_row() -> (&'static str, (u8, u8, u8), &'static str) {
+    (
+        "PASS",
+        RowTone::Pass.rgb(),
+        "0 ORPHANS DETECTED • PACMAN CACHE TRIMMED",
+    )
+}
+
+pub fn format_self_update(
+    snapshot: &syspilot_core::SystemSnapshot,
+    pkg_version: &str,
+) -> SelfUpdateView {
+    if snapshot.app_update_available {
+        SelfUpdateView {
+            available: true,
+            badge: format!("v{} AVAILABLE", snapshot.app_latest_version),
+            title: "SysPilot Suite Self-Update (Update Available)".to_string(),
+            desc: format!(
+                "Upstream v{} is available (current: v{}). Fast-forward git repository and rebuild atomically.",
+                snapshot.app_latest_version, snapshot.app_current_version
+            ),
+            btn_text: format!("Update to v{}", snapshot.app_latest_version),
+        }
+    } else {
+        SelfUpdateView {
+            available: false,
+            badge: format!("v{} LATEST", pkg_version),
+            title: "SysPilot Suite Self-Update & GitHub Sync".to_string(),
+            desc: "Synchronizes the SysPilot suite with the latest upstream GitHub release and performs atomic rebuild.".to_string(),
+            btn_text: "Check & Update Suite".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardViewModel {
+    pub has_error: bool,
+    pub error_message: String,
+    pub overall_status: String,
+    pub overall_status_label: String,
+    pub overall_status_rgb: (u8, u8, u8),
+    pub hardware_info: String,
+    pub kernel: RowPresentation,
+    pub root: RowPresentation,
+    pub firewall: RowPresentation,
+    pub failed_services: RowPresentation,
+    pub gpu: RowPresentation,
+    pub cve: RowPresentation,
+    pub updates_core: RowPresentation,
+    pub updates_repo: RowPresentation,
+    pub updates_aur: RowPresentation,
+    pub firmware: RowPresentation,
+    pub orphans: RowPresentation,
+    pub self_update: SelfUpdateView,
+}
+
+impl DashboardViewModel {
+    pub fn from_snapshot_inputs(
+        snapshot: &syspilot_core::SystemSnapshot,
+        reboot_safety: &syspilot_core::RebootSafetyStatus,
+        sentinels: &syspilot_core::SentinelsStatus,
+        gaming: &syspilot_core::GamingReadinessStatus,
+        gpu_name: &str,
+        pkg_version: &str,
+    ) -> Self {
+        let (has_error, error_message) = format_snapshot_error_banner(snapshot);
+        let (overall_status, overall_status_label, overall_status_rgb) =
+            format_overall_header(snapshot, reboot_safety);
+        let hardware_info = format_hardware_info(&snapshot.os, &snapshot.kernel);
+
+        let (k_status, k_rgb, k_details) =
+            format_kernel_telemetry(&snapshot.kernel, snapshot.reboot_pending, reboot_safety);
+        let (root_status, root_rgb, root_details) =
+            format_root_storage(sentinels.root_used_pct, sentinels.root_avail_gb);
+        let (fw_status, fw_rgb, fw_details) = format_firewall_status(snapshot.firewall_active);
+        let (svc_status, svc_rgb, svc_details) = format_failed_services(snapshot.errors);
+        let (gpu_status, gpu_rgb, gpu_details) = format_gpu_telemetry(gpu_name, gaming);
+        let (cve_status, cve_rgb, cve_details) = format_cve_status(snapshot.security_high_risk);
+        let (core_status, core_rgb, core_details) = format_core_updates(snapshot.core_updates);
+        let (repo_status, repo_rgb, repo_details) = format_repo_updates(snapshot.regular_updates);
+        let (aur_status, aur_rgb, aur_details) = format_aur_updates(snapshot.aur_updates);
+        let (fwupd_status, fwupd_rgb, fwupd_details) =
+            format_firmware_updates(snapshot.firmware_updates);
+        let (orph_status, orph_rgb, orph_details) = format_orphans_row();
+        let self_update = format_self_update(snapshot, pkg_version);
+
+        Self {
+            has_error,
+            error_message,
+            overall_status: overall_status.to_string(),
+            overall_status_label: overall_status_label.to_string(),
+            overall_status_rgb,
+            hardware_info,
+            kernel: RowPresentation {
+                status: k_status.to_string(),
+                rgb: k_rgb,
+                details: k_details,
+            },
+            root: RowPresentation {
+                status: root_status.to_string(),
+                rgb: root_rgb,
+                details: root_details,
+            },
+            firewall: RowPresentation {
+                status: fw_status.to_string(),
+                rgb: fw_rgb,
+                details: fw_details.to_string(),
+            },
+            failed_services: RowPresentation {
+                status: svc_status,
+                rgb: svc_rgb,
+                details: svc_details,
+            },
+            gpu: RowPresentation {
+                status: gpu_status.to_string(),
+                rgb: gpu_rgb,
+                details: gpu_details,
+            },
+            cve: RowPresentation {
+                status: cve_status.to_string(),
+                rgb: cve_rgb,
+                details: cve_details,
+            },
+            updates_core: RowPresentation {
+                status: core_status.to_string(),
+                rgb: core_rgb,
+                details: core_details,
+            },
+            updates_repo: RowPresentation {
+                status: repo_status.to_string(),
+                rgb: repo_rgb,
+                details: repo_details,
+            },
+            updates_aur: RowPresentation {
+                status: aur_status.to_string(),
+                rgb: aur_rgb,
+                details: aur_details,
+            },
+            firmware: RowPresentation {
+                status: fwupd_status.to_string(),
+                rgb: fwupd_rgb,
+                details: fwupd_details,
+            },
+            orphans: RowPresentation {
+                status: orph_status.to_string(),
+                rgb: orph_rgb,
+                details: orph_details.to_string(),
+            },
+            self_update,
+        }
+    }
+
+    pub fn from_error(err: &str, pkg_version: &str) -> Self {
+        let offline_row = || RowPresentation {
+            status: "OFFLINE".to_string(),
+            rgb: RowTone::Offline.rgb(),
+            details: "TELEMETRY UNAVAILABLE".to_string(),
+        };
+
+        Self {
+            has_error: true,
+            error_message: err.to_string(),
+            overall_status: "DATA_UNAVAILABLE".to_string(),
+            overall_status_label: "DATA UNAVAILABLE".to_string(),
+            overall_status_rgb: RowTone::Warn.rgb(),
+            hardware_info: "TELEMETRY STREAM DISCONNECTED".to_string(),
+            kernel: offline_row(),
+            root: offline_row(),
+            firewall: offline_row(),
+            failed_services: offline_row(),
+            gpu: offline_row(),
+            cve: offline_row(),
+            updates_core: offline_row(),
+            updates_repo: offline_row(),
+            updates_aur: offline_row(),
+            firmware: offline_row(),
+            orphans: offline_row(),
+            self_update: SelfUpdateView {
+                available: false,
+                badge: format!("v{} LATEST", pkg_version),
+                title: "SysPilot Suite Self-Update & GitHub Sync".to_string(),
+                desc: "Synchronizes the SysPilot suite with the latest upstream GitHub release and performs atomic rebuild.".to_string(),
+                btn_text: "Check & Update Suite".to_string(),
+            },
+        }
+    }
+}
+
+fn apply_dashboard_view_model(ui: &AppWindow, vm: &DashboardViewModel) {
+    ui.set_has_error(vm.has_error);
+    ui.set_error_message(vm.error_message.as_str().into());
+    ui.set_overall_status(vm.overall_status.as_str().into());
+    ui.set_overall_status_label(vm.overall_status_label.as_str().into());
+    ui.set_overall_status_color(slint::Color::from_rgb_u8(
+        vm.overall_status_rgb.0,
+        vm.overall_status_rgb.1,
+        vm.overall_status_rgb.2,
+    ));
+    ui.set_hardware_info(vm.hardware_info.as_str().into());
+
+    ui.set_kernel_status(vm.kernel.status.as_str().into());
+    ui.set_kernel_color(slint::Color::from_rgb_u8(
+        vm.kernel.rgb.0,
+        vm.kernel.rgb.1,
+        vm.kernel.rgb.2,
+    ));
+    ui.set_kernel_details(vm.kernel.details.as_str().into());
+
+    ui.set_root_status(vm.root.status.as_str().into());
+    ui.set_root_color(slint::Color::from_rgb_u8(
+        vm.root.rgb.0,
+        vm.root.rgb.1,
+        vm.root.rgb.2,
+    ));
+    ui.set_root_details(vm.root.details.as_str().into());
+
+    ui.set_firewall_status(vm.firewall.status.as_str().into());
+    ui.set_firewall_color(slint::Color::from_rgb_u8(
+        vm.firewall.rgb.0,
+        vm.firewall.rgb.1,
+        vm.firewall.rgb.2,
+    ));
+    ui.set_firewall_details(vm.firewall.details.as_str().into());
+
+    ui.set_failed_services_status(vm.failed_services.status.as_str().into());
+    ui.set_failed_services_color(slint::Color::from_rgb_u8(
+        vm.failed_services.rgb.0,
+        vm.failed_services.rgb.1,
+        vm.failed_services.rgb.2,
+    ));
+    ui.set_failed_services_details(vm.failed_services.details.as_str().into());
+
+    ui.set_gpu_status(vm.gpu.status.as_str().into());
+    ui.set_gpu_color(slint::Color::from_rgb_u8(
+        vm.gpu.rgb.0,
+        vm.gpu.rgb.1,
+        vm.gpu.rgb.2,
+    ));
+    ui.set_gpu_details(vm.gpu.details.as_str().into());
+
+    ui.set_cve_status(vm.cve.status.as_str().into());
+    ui.set_cve_color(slint::Color::from_rgb_u8(
+        vm.cve.rgb.0,
+        vm.cve.rgb.1,
+        vm.cve.rgb.2,
+    ));
+    ui.set_cve_details(vm.cve.details.as_str().into());
+
+    ui.set_updates_core_text(vm.updates_core.status.as_str().into());
+    ui.set_updates_core_color(slint::Color::from_rgb_u8(
+        vm.updates_core.rgb.0,
+        vm.updates_core.rgb.1,
+        vm.updates_core.rgb.2,
+    ));
+    ui.set_updates_core_details(vm.updates_core.details.as_str().into());
+
+    ui.set_updates_repo_text(vm.updates_repo.status.as_str().into());
+    ui.set_updates_repo_color(slint::Color::from_rgb_u8(
+        vm.updates_repo.rgb.0,
+        vm.updates_repo.rgb.1,
+        vm.updates_repo.rgb.2,
+    ));
+    ui.set_updates_repo_details(vm.updates_repo.details.as_str().into());
+
+    ui.set_updates_aur_text(vm.updates_aur.status.as_str().into());
+    ui.set_updates_aur_color(slint::Color::from_rgb_u8(
+        vm.updates_aur.rgb.0,
+        vm.updates_aur.rgb.1,
+        vm.updates_aur.rgb.2,
+    ));
+    ui.set_updates_aur_details(vm.updates_aur.details.as_str().into());
+
+    ui.set_firmware_status(vm.firmware.status.as_str().into());
+    ui.set_firmware_color(slint::Color::from_rgb_u8(
+        vm.firmware.rgb.0,
+        vm.firmware.rgb.1,
+        vm.firmware.rgb.2,
+    ));
+    ui.set_firmware_details(vm.firmware.details.as_str().into());
+
+    ui.set_orphans_status(vm.orphans.status.as_str().into());
+    ui.set_orphans_color(slint::Color::from_rgb_u8(
+        vm.orphans.rgb.0,
+        vm.orphans.rgb.1,
+        vm.orphans.rgb.2,
+    ));
+    ui.set_orphans_details(vm.orphans.details.as_str().into());
+
+    ui.set_has_app_update(vm.self_update.available);
+    ui.set_app_update_badge(vm.self_update.badge.as_str().into());
+    ui.set_self_update_title(vm.self_update.title.as_str().into());
+    ui.set_self_update_desc(vm.self_update.desc.as_str().into());
+    ui.set_self_update_btn_text(vm.self_update.btn_text.as_str().into());
+}
+
+fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnapshot) {
+    let reboot_safety = syspilot_core::check_reboot_safety();
+    let sentinels = syspilot_core::collect_sentinels();
+    let gaming = syspilot_core::check_gaming_readiness();
+    let gpu_name = syspilot_core::detect_gpu();
+    let vm = DashboardViewModel::from_snapshot_inputs(
+        snapshot,
+        &reboot_safety,
+        &sentinels,
+        &gaming,
+        &gpu_name,
+        env!("CARGO_PKG_VERSION"),
+    );
+    apply_dashboard_view_model(ui, &vm);
+}
+
 fn update_ui_from_error(ui: &AppWindow, err: &str) {
-    ui.set_has_app_update(false);
-    ui.set_has_error(true);
-    ui.set_error_message(err.into());
-    ui.set_overall_status("DATA_UNAVAILABLE".into());
-    ui.set_overall_status_label("DATA UNAVAILABLE".into());
-    ui.set_overall_status_color(slint::Color::from_rgb_u8(245, 158, 11));
-    ui.set_hardware_info("TELEMETRY STREAM DISCONNECTED".into());
-
-    let muted = slint::Color::from_rgb_u8(100, 116, 139);
-
-    ui.set_kernel_status("OFFLINE".into());
-    ui.set_kernel_color(muted);
-    ui.set_kernel_details("TELEMETRY UNAVAILABLE".into());
-
-    ui.set_root_status("OFFLINE".into());
-    ui.set_root_color(muted);
-    ui.set_root_details("TELEMETRY UNAVAILABLE".into());
-
-    ui.set_firewall_status("OFFLINE".into());
-    ui.set_firewall_color(muted);
-    ui.set_firewall_details("TELEMETRY UNAVAILABLE".into());
-
-    ui.set_failed_services_status("OFFLINE".into());
-    ui.set_failed_services_color(muted);
-    ui.set_failed_services_details("TELEMETRY UNAVAILABLE".into());
-
-    ui.set_gpu_status("OFFLINE".into());
-    ui.set_gpu_color(muted);
-    ui.set_gpu_details("TELEMETRY UNAVAILABLE".into());
-
-    ui.set_updates_core_text("OFFLINE".into());
-    ui.set_updates_core_color(muted);
-    ui.set_updates_core_details("TELEMETRY UNAVAILABLE".into());
-
-    ui.set_updates_repo_text("OFFLINE".into());
-    ui.set_updates_repo_color(muted);
-    ui.set_updates_repo_details("TELEMETRY UNAVAILABLE".into());
-
-    ui.set_updates_aur_text("OFFLINE".into());
-    ui.set_updates_aur_color(muted);
-    ui.set_updates_aur_details("TELEMETRY UNAVAILABLE".into());
-
-    ui.set_cve_status("OFFLINE".into());
-    ui.set_cve_color(muted);
-    ui.set_cve_details("TELEMETRY UNAVAILABLE".into());
-
-    ui.set_firmware_status("OFFLINE".into());
-    ui.set_firmware_color(muted);
-    ui.set_firmware_details("TELEMETRY UNAVAILABLE".into());
-
-    ui.set_orphans_status("OFFLINE".into());
-    ui.set_orphans_color(muted);
-    ui.set_orphans_details("TELEMETRY UNAVAILABLE".into());
+    let vm = DashboardViewModel::from_error(err, env!("CARGO_PKG_VERSION"));
+    apply_dashboard_view_model(ui, &vm);
 }
 
 static COPILOT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
@@ -998,5 +1294,559 @@ mod tests {
         assert_eq!(status, "UPDATE");
         assert_eq!(rgb, (245, 158, 11));
         assert_eq!(text, "4 AUR PACKAGES PENDING");
+    }
+
+    #[test]
+    fn test_gui_formatter_permutation_matrix_0_1_n_error() {
+        // format_failed_services (0, 1, N)
+        let (st, rgb, det) = format_failed_services(0);
+        assert_eq!(st, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(det, "0 FAILED SYSTEMD UNITS");
+
+        let (st, rgb, det) = format_failed_services(1);
+        assert_eq!(st, "1 FAILED");
+        assert_eq!(rgb, (239, 68, 68));
+        assert_eq!(det, "1 DEGRADED SYSTEMD UNIT");
+
+        let (st, rgb, det) = format_failed_services(5);
+        assert_eq!(st, "5 FAILED");
+        assert_eq!(rgb, (239, 68, 68));
+        assert_eq!(det, "5 DEGRADED SYSTEMD UNITS");
+
+        // format_cve_status (0, 1, N)
+        let (st, rgb, det) = format_cve_status(0);
+        assert_eq!(st, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(det, "NO UNPATCHED CVE VULNERABILITIES");
+
+        let (st, rgb, det) = format_cve_status(1);
+        assert_eq!(st, "ALERT");
+        assert_eq!(rgb, (239, 68, 68));
+        assert_eq!(det, "1 HIGH-RISK CVE VULNERABILITY PENDING");
+
+        let (st, rgb, det) = format_cve_status(3);
+        assert_eq!(st, "ALERT");
+        assert_eq!(rgb, (239, 68, 68));
+        assert_eq!(det, "3 HIGH-RISK CVE VULNERABILITIES PENDING");
+
+        // format_core_updates (0, 1, N)
+        let (st, rgb, det) = format_core_updates(0);
+        assert_eq!(st, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(det, "0 CORE SYSTEM UPDATES PENDING");
+
+        let (st, rgb, det) = format_core_updates(1);
+        assert_eq!(st, "UPDATE");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(det, "1 CORE SYSTEM UPDATE PENDING");
+
+        let (st, rgb, det) = format_core_updates(4);
+        assert_eq!(st, "UPDATE");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(det, "4 CORE SYSTEM UPDATES PENDING");
+
+        // format_repo_updates (0, 1, N)
+        let (st, rgb, det) = format_repo_updates(0);
+        assert_eq!(st, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(det, "0 OFFICIAL PACKAGES PENDING");
+
+        let (st, rgb, det) = format_repo_updates(1);
+        assert_eq!(st, "UPDATE");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(det, "1 OFFICIAL PACKAGE PENDING");
+
+        let (st, rgb, det) = format_repo_updates(7);
+        assert_eq!(st, "UPDATE");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(det, "7 OFFICIAL PACKAGES PENDING");
+
+        // format_firmware_updates (0, 1, N)
+        let (st, rgb, det) = format_firmware_updates(0);
+        assert_eq!(st, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(det, "FIRMWARE SIGNATURES VERIFIED • LVFS CLEAN");
+
+        let (st, rgb, det) = format_firmware_updates(1);
+        assert_eq!(st, "UPDATE");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(det, "1 FIRMWARE UPDATE AVAILABLE VIA LVFS");
+
+        let (st, rgb, det) = format_firmware_updates(2);
+        assert_eq!(st, "UPDATE");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(det, "2 FIRMWARE UPDATES AVAILABLE VIA LVFS");
+
+        // format_aur_updates (0, 1, N)
+        let (st, rgb, det) = format_aur_updates(0);
+        assert_eq!(st, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(det, "0 AUR PACKAGES PENDING");
+
+        let (st, rgb, det) = format_aur_updates(1);
+        assert_eq!(st, "UPDATE");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(det, "1 AUR PACKAGE PENDING");
+
+        let (st, rgb, det) = format_aur_updates(8);
+        assert_eq!(st, "UPDATE");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(det, "8 AUR PACKAGES PENDING");
+
+        // format_root_storage (0%, 79%, 80%, 89%, 90%, 100%)
+        let (st, rgb, det) = format_root_storage(0, 50.0);
+        assert_eq!(st, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(det, "0% USED • 50.0 GB AVAILABLE ON ROOT");
+
+        let (st, rgb, det) = format_root_storage(79, 25.5);
+        assert_eq!(st, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(det, "79% USED • 25.5 GB AVAILABLE ON ROOT");
+
+        let (st, rgb, det) = format_root_storage(80, 20.0);
+        assert_eq!(st, "WARN");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(det, "80% USED • 20.0 GB AVAILABLE ON ROOT");
+
+        let (st, rgb, det) = format_root_storage(89, 12.0);
+        assert_eq!(st, "WARN");
+        assert_eq!(rgb, (245, 158, 11));
+        assert_eq!(det, "89% USED • 12.0 GB AVAILABLE ON ROOT");
+
+        let (st, rgb, det) = format_root_storage(90, 10.0);
+        assert_eq!(st, "ALERT");
+        assert_eq!(rgb, (239, 68, 68));
+        assert_eq!(det, "90% USED • 10.0 GB AVAILABLE ON ROOT");
+
+        let (st, rgb, det) = format_root_storage(100, 0.1);
+        assert_eq!(st, "ALERT");
+        assert_eq!(rgb, (239, 68, 68));
+        assert_eq!(det, "100% USED • 0.1 GB AVAILABLE ON ROOT");
+
+        // format_firewall_status (true/false)
+        let (st, rgb, det) = format_firewall_status(true);
+        assert_eq!(st, "PASS");
+        assert_eq!(rgb, (34, 197, 94));
+        assert_eq!(det, "FIREWALL ACTIVE • PACKET FILTERING ENFORCED");
+
+        let (st, rgb, det) = format_firewall_status(false);
+        assert_eq!(st, "INFO");
+        assert_eq!(rgb, (56, 189, 248));
+        assert_eq!(det, "PROTECTED BY PERIMETER ROUTER/LAN");
+
+        // format_overall_header
+        let nominal_snap = syspilot_core::SystemSnapshot {
+            status: "ALL_CLEAR".to_string(),
+            cache_stale: false,
+            ..Default::default()
+        };
+        let nominal_safety = syspilot_core::RebootSafetyStatus::default();
+        let (eff, label, rgb) = format_overall_header(&nominal_snap, &nominal_safety);
+        assert_eq!(eff, "ALL_CLEAR");
+        assert_eq!(label, "SYSTEM OPERATIONAL");
+        assert_eq!(rgb, (34, 197, 94));
+
+        let gamemode_snap = syspilot_core::SystemSnapshot {
+            status: "ALL_CLEAR".to_string(),
+            gaming_mode: true,
+            cache_stale: false,
+            ..Default::default()
+        };
+        let (eff, label, rgb) = format_overall_header(&gamemode_snap, &nominal_safety);
+        assert_eq!(eff, "ALL_CLEAR");
+        assert_eq!(label, "GAMEMODE ENGAGED");
+        assert_eq!(rgb, (56, 189, 248));
+
+        let preflight_snap = syspilot_core::SystemSnapshot {
+            status: "PRE_FLIGHT_ATTENTION".to_string(),
+            warnings: 2,
+            cache_stale: false,
+            ..Default::default()
+        };
+        let (eff, label, rgb) = format_overall_header(&preflight_snap, &nominal_safety);
+        assert_eq!(eff, "PRE_FLIGHT_ATTENTION");
+        assert_eq!(label, "SYSTEM ATTENTION");
+        assert_eq!(rgb, (245, 158, 11));
+
+        let action_snap = syspilot_core::SystemSnapshot {
+            status: "ACTION_REQUIRED".to_string(),
+            errors: 1,
+            cache_stale: false,
+            ..Default::default()
+        };
+        let (eff, label, rgb) = format_overall_header(&action_snap, &nominal_safety);
+        assert_eq!(eff, "ACTION_REQUIRED");
+        assert_eq!(label, "RED ALERT");
+        assert_eq!(rgb, (239, 68, 68));
+
+        let black_screen_safety = syspilot_core::RebootSafetyStatus {
+            black_screen_risk: true,
+            ..Default::default()
+        };
+        let (eff, label, rgb) = format_overall_header(&nominal_snap, &black_screen_safety);
+        assert_eq!(eff, "ACTION_REQUIRED");
+        assert_eq!(label, "RED ALERT");
+        assert_eq!(rgb, (239, 68, 68));
+
+        let stale_snap = syspilot_core::SystemSnapshot {
+            status: "ALL_CLEAR".to_string(),
+            cache_stale: true,
+            ..Default::default()
+        };
+        let (eff, label, rgb) = format_overall_header(&stale_snap, &nominal_safety);
+        assert_eq!(eff, "ALL_CLEAR");
+        assert_eq!(label, "TELEMETRY DEGRADED");
+        assert_eq!(rgb, (245, 158, 11));
+
+        let error_snap = syspilot_core::SystemSnapshot {
+            status: "ALL_CLEAR".to_string(),
+            source_error: Some("socket timeout".to_string()),
+            ..Default::default()
+        };
+        let (eff, label, rgb) = format_overall_header(&error_snap, &nominal_safety);
+        assert_eq!(eff, "ALL_CLEAR");
+        assert_eq!(label, "TELEMETRY DEGRADED");
+        assert_eq!(rgb, (245, 158, 11));
+
+        // format_snapshot_error_banner
+        let (has_err, msg) = format_snapshot_error_banner(&error_snap);
+        assert!(has_err);
+        assert_eq!(msg, "socket timeout");
+
+        let (has_err, msg) = format_snapshot_error_banner(&stale_snap);
+        assert!(has_err);
+        assert!(msg.starts_with("Telemetry cache stale"));
+
+        let degraded_snap = syspilot_core::SystemSnapshot {
+            cache_stale: false,
+            source_error: None,
+            status: "DEGRADED".to_string(),
+            ..Default::default()
+        };
+        let (has_err, msg) = format_snapshot_error_banner(&degraded_snap);
+        assert!(has_err);
+        assert_eq!(msg, "Degraded telemetry stream");
+
+        let (has_err, msg) = format_snapshot_error_banner(&nominal_snap);
+        assert!(!has_err);
+        assert_eq!(msg, "");
+
+        // format_self_update
+        let update_snap = syspilot_core::SystemSnapshot {
+            app_update_available: true,
+            app_latest_version: "2.2.0".to_string(),
+            app_current_version: "2.1.3".to_string(),
+            ..Default::default()
+        };
+        let su = format_self_update(&update_snap, "2.1.3");
+        assert!(su.available);
+        assert_eq!(su.badge, "v2.2.0 AVAILABLE");
+        assert_eq!(su.title, "SysPilot Suite Self-Update (Update Available)");
+        assert_eq!(su.btn_text, "Update to v2.2.0");
+
+        let no_update_snap = syspilot_core::SystemSnapshot {
+            app_update_available: false,
+            ..Default::default()
+        };
+        let su = format_self_update(&no_update_snap, "2.1.3");
+        assert!(!su.available);
+        assert_eq!(su.badge, "v2.1.3 LATEST");
+        assert_eq!(su.btn_text, "Check & Update Suite");
+
+        // format_orphans_row
+        let (st, rgb, det) = format_orphans_row();
+        assert_eq!(st, "PASS");
+        assert_eq!(rgb, RowTone::Pass.rgb());
+        assert_eq!(det, "0 ORPHANS DETECTED • PACMAN CACHE TRIMMED");
+
+        // RowTone::rgb
+        assert_eq!(RowTone::Pass.rgb(), (34, 197, 94));
+        assert_eq!(RowTone::Update.rgb(), (245, 158, 11));
+        assert_eq!(RowTone::Warn.rgb(), (245, 158, 11));
+        assert_eq!(RowTone::Alert.rgb(), (239, 68, 68));
+        assert_eq!(RowTone::Info.rgb(), (56, 189, 248));
+        assert_eq!(RowTone::Offline.rgb(), (100, 116, 139));
+    }
+
+    #[test]
+    fn test_dashboard_view_model_snapshot_and_error_permutations() {
+        // 1. Nominal
+        let nominal_snap = syspilot_core::SystemSnapshot {
+            os: "EndeavourOS".to_string(),
+            kernel: "6.12.8-arch1-1".to_string(),
+            status: "ALL_CLEAR".to_string(),
+            firewall_active: true,
+            cache_stale: false,
+            ..Default::default()
+        };
+        let nominal_safety = syspilot_core::RebootSafetyStatus::default();
+        let nominal_sentinels = syspilot_core::SentinelStatus {
+            root_used_pct: 45,
+            root_avail_gb: 120.0,
+            ..Default::default()
+        };
+        let nominal_gaming = syspilot_core::GamingReadinessStatus {
+            applicable: true,
+            ready: true,
+            vulkan_64_ready: true,
+            vulkan_32_ready: true,
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &nominal_snap,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "NVIDIA GeForce GTX 970",
+            "2.1.3",
+        );
+        assert!(!vm.has_error);
+        assert_eq!(vm.overall_status, "ALL_CLEAR");
+        assert_eq!(vm.overall_status_label, "SYSTEM OPERATIONAL");
+        assert_eq!(vm.overall_status_rgb, RowTone::Pass.rgb());
+        assert_eq!(vm.hardware_info, "ENDEAVOUROS // 6.12.8-ARCH1-1");
+        assert_eq!(vm.kernel.status, "PASS");
+        assert_eq!(vm.root.status, "PASS");
+        assert_eq!(vm.firewall.status, "PASS");
+        assert_eq!(vm.failed_services.status, "PASS");
+        assert_eq!(vm.gpu.status, "PASS");
+        assert_eq!(vm.cve.status, "PASS");
+        assert_eq!(vm.updates_core.status, "PASS");
+        assert_eq!(vm.updates_repo.status, "PASS");
+        assert_eq!(vm.updates_aur.status, "PASS");
+        assert_eq!(vm.firmware.status, "PASS");
+        assert_eq!(vm.orphans.status, "PASS");
+        assert!(!vm.self_update.available);
+
+        // 2. Singular
+        let singular_snap = syspilot_core::SystemSnapshot {
+            os: "Arch Linux".to_string(),
+            kernel: "6.12.8-arch1-1".to_string(),
+            status: "PRE_FLIGHT_ATTENTION".to_string(),
+            errors: 1,
+            security_high_risk: 1,
+            core_updates: 1,
+            regular_updates: 1,
+            aur_updates: 1,
+            firmware_updates: 1,
+            app_update_available: true,
+            app_latest_version: "2.2.0".to_string(),
+            app_current_version: "2.1.3".to_string(),
+            cache_stale: false,
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &singular_snap,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "NVIDIA GeForce GTX 970",
+            "2.1.3",
+        );
+        assert_eq!(vm.failed_services.status, "1 FAILED");
+        assert_eq!(vm.failed_services.details, "1 DEGRADED SYSTEMD UNIT");
+        assert_eq!(vm.cve.status, "ALERT");
+        assert_eq!(vm.cve.details, "1 HIGH-RISK CVE VULNERABILITY PENDING");
+        assert_eq!(vm.updates_core.status, "UPDATE");
+        assert_eq!(vm.updates_core.details, "1 CORE SYSTEM UPDATE PENDING");
+        assert_eq!(vm.updates_repo.status, "UPDATE");
+        assert_eq!(vm.updates_repo.details, "1 OFFICIAL PACKAGE PENDING");
+        assert_eq!(vm.updates_aur.status, "UPDATE");
+        assert_eq!(vm.updates_aur.details, "1 AUR PACKAGE PENDING");
+        assert_eq!(vm.firmware.status, "UPDATE");
+        assert_eq!(vm.firmware.details, "1 FIRMWARE UPDATE AVAILABLE VIA LVFS");
+        assert!(vm.self_update.available);
+
+        // 3. Plural
+        let plural_snap = syspilot_core::SystemSnapshot {
+            os: "Arch Linux".to_string(),
+            kernel: "6.12.8-arch1-1".to_string(),
+            status: "ACTION_REQUIRED".to_string(),
+            errors: 4,
+            security_high_risk: 3,
+            core_updates: 5,
+            regular_updates: 12,
+            aur_updates: 7,
+            firmware_updates: 2,
+            cache_stale: false,
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &plural_snap,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "NVIDIA GeForce GTX 970",
+            "2.1.3",
+        );
+        assert_eq!(vm.failed_services.status, "4 FAILED");
+        assert_eq!(vm.failed_services.details, "4 DEGRADED SYSTEMD UNITS");
+        assert_eq!(vm.cve.status, "ALERT");
+        assert_eq!(vm.cve.details, "3 HIGH-RISK CVE VULNERABILITIES PENDING");
+        assert_eq!(vm.updates_core.status, "UPDATE");
+        assert_eq!(vm.updates_core.details, "5 CORE SYSTEM UPDATES PENDING");
+        assert_eq!(vm.updates_repo.status, "UPDATE");
+        assert_eq!(vm.updates_repo.details, "12 OFFICIAL PACKAGES PENDING");
+        assert_eq!(vm.updates_aur.status, "UPDATE");
+        assert_eq!(vm.updates_aur.details, "7 AUR PACKAGES PENDING");
+        assert_eq!(vm.firmware.status, "UPDATE");
+        assert_eq!(vm.firmware.details, "2 FIRMWARE UPDATES AVAILABLE VIA LVFS");
+
+        // 4. Error permutations (source_error, cache_stale, black_screen_risk)
+        let source_err_snap = syspilot_core::SystemSnapshot {
+            source_error: Some("DBus connection lost".to_string()),
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &source_err_snap,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "NVIDIA GeForce GTX 970",
+            "2.1.3",
+        );
+        assert!(vm.has_error);
+        assert_eq!(vm.error_message, "DBus connection lost");
+        assert_eq!(vm.overall_status_label, "TELEMETRY DEGRADED");
+
+        let stale_err_snap = syspilot_core::SystemSnapshot {
+            cache_stale: true,
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &stale_err_snap,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "NVIDIA GeForce GTX 970",
+            "2.1.3",
+        );
+        assert!(vm.has_error);
+        assert!(vm.error_message.starts_with("Telemetry cache stale"));
+
+        let black_screen_safety = syspilot_core::RebootSafetyStatus {
+            black_screen_risk: true,
+            issues: vec!["NVIDIA MODULE NOT FOUND".to_string()],
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &nominal_snap,
+            &black_screen_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "NVIDIA GeForce GTX 970",
+            "2.1.3",
+        );
+        assert_eq!(vm.overall_status, "ACTION_REQUIRED");
+        assert_eq!(vm.overall_status_label, "RED ALERT");
+        assert_eq!(vm.kernel.status, "ALERT");
+
+        // 5. from_error
+        let vm =
+            DashboardViewModel::from_error("telemetry socket timeout", env!("CARGO_PKG_VERSION"));
+        assert!(vm.has_error);
+        assert_eq!(vm.error_message, "telemetry socket timeout");
+        assert_eq!(vm.overall_status, "DATA_UNAVAILABLE");
+        assert_eq!(vm.overall_status_label, "DATA UNAVAILABLE");
+        assert_eq!(vm.overall_status_rgb, RowTone::Warn.rgb());
+        assert_eq!(vm.hardware_info, "TELEMETRY STREAM DISCONNECTED");
+        assert!(!vm.self_update.available);
+
+        let rows = [
+            &vm.kernel,
+            &vm.root,
+            &vm.firewall,
+            &vm.failed_services,
+            &vm.gpu,
+            &vm.cve,
+            &vm.updates_core,
+            &vm.updates_repo,
+            &vm.updates_aur,
+            &vm.firmware,
+            &vm.orphans,
+        ];
+        assert_eq!(rows.len(), 11);
+        for row in rows {
+            assert_eq!(row.status, "OFFLINE");
+            assert_eq!(row.rgb, RowTone::Offline.rgb());
+            assert_eq!(row.details, "TELEMETRY UNAVAILABLE");
+        }
+    }
+
+    struct HeadlessTestPlatform {
+        window: std::rc::Rc<slint::platform::software_renderer::MinimalSoftwareWindow>,
+        start: std::time::Instant,
+    }
+
+    impl slint::platform::Platform for HeadlessTestPlatform {
+        fn create_window_adapter(
+            &self,
+        ) -> Result<std::rc::Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+            Ok(self.window.clone())
+        }
+        fn duration_since_start(&self) -> std::time::Duration {
+            self.start.elapsed()
+        }
+    }
+
+    static INIT_HEADLESS: std::sync::Once = std::sync::Once::new();
+
+    fn init_headless_platform() {
+        INIT_HEADLESS.call_once(|| {
+            let window =
+                slint::platform::software_renderer::MinimalSoftwareWindow::new(Default::default());
+            let _ = slint::platform::set_platform(Box::new(HeadlessTestPlatform {
+                window,
+                start: std::time::Instant::now(),
+            }));
+        });
+    }
+
+    #[test]
+    fn test_headless_appwindow_snapshot_and_error_binding() {
+        init_headless_platform();
+        let ui = AppWindow::new().unwrap();
+
+        let snap = syspilot_core::SystemSnapshot {
+            os: "EndeavourOS".to_string(),
+            kernel: "6.12.8-arch1-1".to_string(),
+            status: "ALL_CLEAR".to_string(),
+            firewall_active: true,
+            cache_stale: false,
+            ..Default::default()
+        };
+
+        update_ui_from_snapshot(&ui, &snap);
+        assert_eq!(ui.get_overall_status().as_str(), "ALL_CLEAR");
+        assert_eq!(ui.get_overall_status_label().as_str(), "SYSTEM OPERATIONAL");
+        assert!(!ui.get_has_error());
+        assert_eq!(ui.get_kernel_status().as_str(), "PASS");
+        assert_eq!(ui.get_firewall_status().as_str(), "PASS");
+        assert_eq!(ui.get_failed_services_status().as_str(), "PASS");
+        assert_eq!(ui.get_cve_status().as_str(), "PASS");
+        assert_eq!(ui.get_updates_core_text().as_str(), "PASS");
+        assert_eq!(ui.get_updates_repo_text().as_str(), "PASS");
+        assert_eq!(ui.get_updates_aur_text().as_str(), "PASS");
+        assert_eq!(ui.get_firmware_status().as_str(), "PASS");
+        assert_eq!(ui.get_orphans_status().as_str(), "PASS");
+
+        update_ui_from_error(&ui, "stream disconnected");
+        assert!(ui.get_has_error());
+        assert_eq!(ui.get_error_message().as_str(), "stream disconnected");
+        assert_eq!(ui.get_overall_status().as_str(), "DATA_UNAVAILABLE");
+        assert_eq!(ui.get_overall_status_label().as_str(), "DATA UNAVAILABLE");
+        assert_eq!(ui.get_kernel_status().as_str(), "OFFLINE");
+        assert_eq!(ui.get_root_status().as_str(), "OFFLINE");
+        assert_eq!(ui.get_firewall_status().as_str(), "OFFLINE");
+        assert_eq!(ui.get_failed_services_status().as_str(), "OFFLINE");
+        assert_eq!(ui.get_gpu_status().as_str(), "OFFLINE");
+        assert_eq!(ui.get_cve_status().as_str(), "OFFLINE");
+        assert_eq!(ui.get_updates_core_text().as_str(), "OFFLINE");
+        assert_eq!(ui.get_updates_repo_text().as_str(), "OFFLINE");
+        assert_eq!(ui.get_updates_aur_text().as_str(), "OFFLINE");
+        assert_eq!(ui.get_firmware_status().as_str(), "OFFLINE");
+        assert_eq!(ui.get_orphans_status().as_str(), "OFFLINE");
     }
 }

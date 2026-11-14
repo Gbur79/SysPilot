@@ -1,0 +1,26 @@
+{
+  "timestamp": "2026-11-14T11:48:02+00:00",
+  "aur": {
+    "helper": "yay",
+    "installed": true,
+    "pending_count": 0,
+    "packages": [],
+    "update_available": false
+  },
+  "flatpak": {
+    "installed": false,
+    "update_available": false
+  },
+  "goose": {
+    "installed": true,
+    "version": "1.57.0",
+    "latest": "1.59.1",
+    "update_available": true
+  },
+  "uv": {
+    "installed": true,
+    "version": "0.13.6",
+    "latest": "0.13.8",
+    "update_available": true
+  }
+}

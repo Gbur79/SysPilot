@@ -46,6 +46,8 @@ pub struct SentinelStatus {
     pub summary_mtime: Option<SystemTime>,
 }
 
+pub type SentinelsStatus = SentinelStatus;
+
 pub fn check_reboot_pending() -> bool {
     check_reboot_pending_at(&active_sentinels_root())
 }

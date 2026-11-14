@@ -1,0 +1,41 @@
+import { Theme } from "../theme.slint";
+import { ActionButton } from "../components/action_button.slint";
+import { LcarsActionButton } from "../components/lcars_action_button.slint";
+
+export component ActionCallbackPattern inherits HorizontalLayout {
+    in property <bool> is_lcars_skin: true;
+    in property <bool> busy: false;
+    in property <string> idle_label: "RUN ACTION";
+    in property <string> busy_label: "RUNNING...";
+    in property <string> action_id: "default";
+    callback action_triggered(string);
+
+    vertical-stretch: 0;
+    height: 44px;
+    alignment: start;
+
+    property <string> current_label: root.busy ? root.busy_label : root.idle_label;
+
+    if root.is_lcars_skin : LcarsActionButton {
+        width: 175px;
+        text: root.current_label;
+        fill-color: root.busy ? Theme.okuda-orange : Theme.okuda-peach;
+        clicked => {
+            if (!root.busy) {
+                root.action_triggered(root.action_id);
+            }
+        }
+    }
+
+    if !root.is_lcars_skin : ActionButton {
+        width: 175px;
+        text: root.current_label;
+        primary: true;
+        action-color: root.busy ? Theme.status-amber : Theme.status-green;
+        clicked => {
+            if (!root.busy) {
+                root.action_triggered(root.action_id);
+            }
+        }
+    }
+}

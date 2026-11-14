@@ -31,6 +31,7 @@ pub fn reset_spawn_count() {
 pub const ALLOWED_READONLY_BINS: &[&str] = &[
     "pacman",
     "checkupdates",
+    "flock",
     "yay",
     "paru",
     "systemctl",

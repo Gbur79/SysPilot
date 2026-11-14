@@ -72,9 +72,9 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
 - **Zero-Subprocess Gaming & Vulkan Readiness Probe (`gaming.rs`):** Instant verification of driver-matched 64-bit and 32-bit Vulkan ICDs (`/usr/lib` and `/usr/lib32` for Steam/Proton), CPU `scaling_governor`, hybrid GPU `runtime_status`, and battery power state with zero external subprocesses.
 - **Arch Trust Triad (Zero-Root Invariant):** Hard `libc::getuid() == 0` refusal in both `syspilot-tray` and `syspilot-gui`; all mutating maintenance operations run transparently in the user's interactive terminal.
 - **Asynchronous Package Update Intelligence:**
-  - Evaluates pending official repository updates (`checkupdates` isolated in `/tmp`) and AUR packages (`yay`/`paru`).
+  - Evaluates pending official repository updates (`checkupdates` isolated via `CHECKUPDATES_DB` under `$XDG_RUNTIME_DIR/syspilot/checkupdates` and inter-process `flock` synchronization) and AUR packages (`yay`/`paru`).
   - Distinguishes **Core System Updates** (kernel, systemd, glibc, dracut, grub, mesa, nvidia) from regular packages.
-  - Auto-heals stale lockfiles in temporary checkupdate databases.
+  - Auto-heals stale lockfiles, enforces graceful process-group termination (`SIGTERM` -> `SIGKILL`), and applies cold-boot failure hysteresis (`UpdateCheckState`).
   - Suspends all background update and disk checks during active gaming sessions (GameMode Freeze).
   - **On-Demand Package Pre-Caching (`[⚡ PRE-CACHE PACKAGES]`):** Interactively pre-downloads multi-gigabyte package archives into `/var/cache/pacman/pkg` prior to initiating the full upgrade, minimizing system lock times.
 - **Security & Vulnerability Intelligence (`arch-audit`):**
@@ -92,7 +92,7 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
   - Ultra-fast native GUI built with Slint 1.18 and dual renderers (FemtoVG OpenGL + software CPU rasterizer fallback).
   - Single instance locking via non-blocking `libc::flock`.
   - Dynamic **Hardware Platform & GPU** telemetry row detecting CPU architecture, GPU model, and active driver stack without hardcoded assumptions.
-  - Responsive status synchronization: zero lag between tray amber warnings and dashboard components.
+  - Responsive status synchronization & dual-skin `ATTENTION` / `RED ALERT` warning banners driven by the semantic `syspilot-core::view` layer (`RowSeverity`, `AttentionView`).
 - **🖖 Star Trek Okuda 1987 LCARS Dual-Skin Cockpit:**
   - **Authentic LCARS 1987 Architecture:** Faithful recreation of Michael Okuda's iconic Star Trek interface design, featuring curved 2D structural elbows, segmented pill pods, authentic color accents (Pumpkin `#ffaa66`, Gold `#ffcc00`, Lavender `#cc99cc`, Ice Blue `#99ccff`, Alert Red `#ef4444`), and typography powered by the embedded Antonio condensed font.
   - **Dynamic Astronomical Stardate Engine:** Built-in real-time mathematical stardate calculator based on the Gregorian UTC calendar ($STARDATE = YEAR + \frac{\text{day of year}}{\text{days in year}} + \frac{\text{seconds since midnight}}{86400.0}$), generating authentic stardates (e.g. `STARDATE 2026.311.64`) updated dynamically every 10 seconds.
@@ -139,10 +139,10 @@ The cockpit is organized into 3 streamlined, high-density tabs with proportional
    - 6) **Hardware Firmware Upgrade (LVFS):** Upgrades firmware for NVMe, UEFI, and attached peripherals via `fwupdmgr`.
    - 7) **Pre-Cache Packages:** Interactively pre-downloads large packages ahead of maintenance without locking pacman.
    - 8) **SysPilot Suite Self-Update & GitHub Sync:** Synchronizes with upstream GitHub releases with 1-click atomic rebuild and restart.
-3. **🤖 AI Copilot (03 AI COPILOT):** Embedded SRE diagnostic console featuring:
-   - 1-click battle-tested playbooks: **FAF Client Repair**, **Steam / Proton Fix**, **Reconcile .pacnew**, and **PipeWire Audio Fix**.
-   - Pluggable multi-agent CLI adapter: Seamlessly routes queries to Google Antigravity CLI (`agy`), Goose, or custom local runners.
-   - Live interactive diagnostic console and terminal launcher.
+3. **🛡 Tactical Playbooks & AI Telemetry (03 PLAYBOOKS):** Deterministic SRE diagnostic hub featuring:
+   - 1-click battle-tested playbooks: **FAF Client Repair**, **Steam / Proton Readiness**, **Reconcile .pacnew**, **PipeWire Audio Fix**, and **Custom User Playbooks** auto-discovered from `~/.config/syspilot/playbooks/*.sh`.
+   - **Passive SRE Telemetry Export (`Copy SRE Telemetry for AI`):** Generates clean zero-subprocess Markdown diagnostics (`build_ai_telemetry_markdown`) and copies them natively via Slint's clipboard (`TextInput`) for pasting into any external AI assistant.
+   - Pluggable multi-agent CLI launcher (`--copilot-shell`): Seamlessly routes interactive sessions to Google Antigravity CLI (`agy`), Goose, or custom local runners.
 
 ---
 
@@ -244,9 +244,9 @@ sysPilot/
 │   ├── syspilot                 # Unified master CLI & GUI runner
 │   └── syspilot-faf-repair      # Deterministic FAF runner & shortcut repair tool
 ├── crates/
-│   ├── syspilot-core/           # Headless triage engine, CVE, LVFS, firewall, terminal & copilot runners
+│   ├── syspilot-core/           # Headless triage engine, semantic view, CVE, LVFS, firewall, terminal & playbooks
 │   ├── syspilot-tray/           # High-performance 24/7 Rust StatusNotifierItem Tray Sentinel (~3.2 MB RAM)
-│   └── syspilot-gui/            # Native Slint Desktop Cockpit (3-tab HUD, Maintenance Suite & AI Copilot)
+│   └── syspilot-gui/            # Native Slint Desktop Cockpit (Dashboard, Maintenance Suite & SRE Playbooks)
 ├── copilot/
 │   ├── recipe.yaml              # Public AI SRE recipe definition
 │   ├── skills/
@@ -263,7 +263,7 @@ sysPilot/
 ├── autostart/
 │   └── syspilot.desktop         # XDG autostart entry for background tray sentinel
 ├── packaging/
-│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.1.1)
+│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.1.4)
 │   └── syspilot.desktop         # Application menu desktop launcher (Exec=syspilot --gui)
 └── systemd/
     └── syspilot-tray.service    # User systemd service for 24/7 Rust Sentinel

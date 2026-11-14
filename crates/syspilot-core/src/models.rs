@@ -145,6 +145,29 @@ pub struct StatusJson {
     pub gaming_readiness: Option<crate::gaming::GamingReadinessStatus>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateCheckState {
+    #[default]
+    Unknown,
+    Ok,
+    Failed,
+    Unavailable,
+}
+
+pub fn de_check_state<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<UpdateCheckState, D::Error> {
+    let opt = Option::<String>::deserialize(d).unwrap_or(None);
+    let state = match opt.as_deref() {
+        Some("ok") => UpdateCheckState::Ok,
+        Some("failed") => UpdateCheckState::Failed,
+        Some("unavailable") => UpdateCheckState::Unavailable,
+        _ => UpdateCheckState::Unknown,
+    };
+    Ok(state)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct StatusUpdates {
     #[serde(default)]
@@ -155,6 +178,10 @@ pub struct StatusUpdates {
     pub regular_count: u32,
     #[serde(default)]
     pub aur_count: u32,
+    #[serde(default, deserialize_with = "de_check_state")]
+    pub check_state: UpdateCheckState,
+    #[serde(default)]
+    pub consecutive_failures: u32,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -234,6 +261,22 @@ pub struct SysHealthMirrors {
     pub arch_age_days: Option<f64>,
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionableRemediation {
+    #[serde(default)]
+    pub check: Option<String>,
+    #[serde(default)]
+    pub severity: Option<String>,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub suggested_fix: Option<String>,
+    #[serde(default)]
+    pub risk: Option<String>,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SysHealth {
     #[serde(default)]
@@ -248,6 +291,10 @@ pub struct SysHealth {
     pub gaming: Option<SysHealthGaming>,
     #[serde(default)]
     pub mirrors: Option<SysHealthMirrors>,
+    #[serde(default)]
+    pub actionable_remediations: Vec<ActionableRemediation>,
+    #[serde(default)]
+    pub parse_error: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -264,12 +311,15 @@ pub struct SysHealthGaming {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SystemSnapshot {
     pub status: String,
+    pub status_reasons: Vec<String>,
     pub errors: u32,
     pub warnings: u32,
     pub updates_total: u32,
     pub core_updates: u32,
     pub regular_updates: u32,
     pub aur_updates: u32,
+    pub updates_check_state: UpdateCheckState,
+    pub updates_consecutive_failures: u32,
     pub reboot_pending: bool,
     pub kernel: String,
     pub os: String,
@@ -278,6 +328,7 @@ pub struct SystemSnapshot {
     pub modified: Option<SystemTime>,
     pub cache_stale: bool,
     pub source_error: Option<String>,
+    pub sys_health_parse_error: Option<String>,
     pub security_high_risk: u32,
     pub firmware_updates: u32,
     pub firewall_active: bool,
@@ -291,12 +342,15 @@ impl Default for SystemSnapshot {
     fn default() -> Self {
         Self {
             status: "UNKNOWN".into(),
+            status_reasons: Vec::new(),
             errors: 0,
             warnings: 0,
             updates_total: 0,
             core_updates: 0,
             regular_updates: 0,
             aur_updates: 0,
+            updates_check_state: UpdateCheckState::Unknown,
+            updates_consecutive_failures: 0,
             reboot_pending: false,
             kernel: "unknown".into(),
             os: "Linux".into(),
@@ -305,6 +359,7 @@ impl Default for SystemSnapshot {
             modified: None,
             cache_stale: true,
             source_error: None,
+            sys_health_parse_error: None,
             security_high_risk: 0,
             firmware_updates: 0,
             firewall_active: false,
@@ -349,6 +404,9 @@ impl SystemSnapshot {
             || self.updates_total > 0
             || self.reboot_pending
             || self.security_high_risk > 0
+            || self.sys_health_parse_error.is_some()
+            || (self.updates_check_state == UpdateCheckState::Failed
+                && self.updates_consecutive_failures >= 2)
         {
             "PRE_FLIGHT_ATTENTION"
         } else {
@@ -551,6 +609,7 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
     }
 
     let health = parsed.sys_health.unwrap_or_default();
+    let sys_health_parse_error = health.parse_error.clone();
     let (errors, warnings, environment, gaming_detected) = if health.available {
         (
             health.errors,
@@ -595,12 +654,15 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
 
     Ok(SystemSnapshot {
         status,
+        status_reasons: parsed.status_reasons,
         errors,
         warnings,
         updates_total: parsed.updates.total,
         core_updates: parsed.updates.core_count,
         regular_updates: parsed.updates.regular_count,
         aur_updates: parsed.updates.aur_count,
+        updates_check_state: parsed.updates.check_state,
+        updates_consecutive_failures: parsed.updates.consecutive_failures,
         reboot_pending: parsed.reboot_pending,
         kernel,
         os,
@@ -609,6 +671,7 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
         modified,
         cache_stale: is_stale(modified),
         source_error: None,
+        sys_health_parse_error,
         security_high_risk: security.high_risk_count,
         firmware_updates: firmware.updates_count,
         firewall_active: firewall.active,

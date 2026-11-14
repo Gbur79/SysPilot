@@ -500,3 +500,136 @@ pub async fn execute_copilot_query_async(
         Ok(stdout)
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserPlaybook {
+    pub name: String,
+    pub filename: String,
+    pub path: PathBuf,
+    pub description: String,
+}
+
+pub fn discover_user_playbooks_at(dir: &Path) -> Vec<UserPlaybook> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    let mut playbooks = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+        let filename = entry.file_name().to_string_lossy().to_string();
+        if !filename.ends_with(".sh") {
+            continue;
+        }
+
+        if !crate::terminal::is_executable(&path) {
+            continue;
+        }
+
+        let name = filename
+            .strip_suffix(".sh")
+            .unwrap_or(&filename)
+            .to_string();
+
+        let mut description = String::new();
+        if let Ok(content) = fs::read_to_string(&path) {
+            for line in content.lines().take(5) {
+                let trimmed = line.trim();
+                if let Some(desc) = trimmed.strip_prefix("# Description:") {
+                    description = desc.trim().to_string();
+                    break;
+                }
+            }
+        }
+
+        playbooks.push(UserPlaybook {
+            name,
+            filename,
+            path,
+            description,
+        });
+    }
+
+    playbooks.sort_by(|a, b| a.filename.cmp(&b.filename));
+    playbooks.truncate(16);
+    playbooks
+}
+
+pub fn discover_user_playbooks() -> Vec<UserPlaybook> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let default_dir = home.join(".config/syspilot/playbooks");
+    discover_user_playbooks_at(&default_dir)
+}
+
+pub fn build_ai_telemetry_markdown_at(root: &Path, status_path: &Path) -> String {
+    let snap = crate::models::read_system_snapshot_or_fallback(status_path);
+    let gpu = crate::models::detect_gpu_at(root);
+    let safety = crate::reboot_safety::check_reboot_safety_at(root);
+    let gaming = crate::gaming::check_gaming_readiness_at(root);
+    let pacnew = crate::triage::find_pacnew_files_at(root);
+
+    let mut md = String::new();
+    md.push_str("### SysPilot AI Telemetry\n");
+    md.push_str(&format!(
+        "- **Flight Status**: {}\n",
+        snap.effective_status()
+    ));
+    md.push_str(&format!(
+        "- **OS**: {} | **Kernel**: {}\n",
+        snap.os, snap.kernel
+    ));
+    md.push_str(&format!("- **GPU**: {}\n", gpu));
+    md.push_str(&format!(
+        "- **Updates**: {} total ({} core, {} regular, {} AUR) [State: {:?}]\n",
+        snap.updates_total,
+        snap.core_updates,
+        snap.regular_updates,
+        snap.aur_updates,
+        snap.updates_check_state
+    ));
+    md.push_str(&format!(
+        "- **Reboot Safety**: Pending={}, BlackScreenRisk={}\n",
+        snap.reboot_pending, safety.black_screen_risk
+    ));
+    if !safety.issues.is_empty() {
+        md.push_str(&format!(
+            "  - Safety Issues: {}\n",
+            safety.issues.join("; ")
+        ));
+    }
+    md.push_str(&format!(
+        "- **Gaming Readiness**: Applicable={}, Ready={}\n",
+        gaming.applicable, gaming.ready
+    ));
+    if !gaming.warnings.is_empty() {
+        md.push_str(&format!(
+            "  - Gaming Warnings: {}\n",
+            gaming.warnings.join("; ")
+        ));
+    }
+    md.push_str(&format!("- **Pacnew Count**: {}\n", pacnew.len()));
+    if !snap.status_reasons.is_empty() {
+        md.push_str(&format!(
+            "- **Status Reasons**: {}\n",
+            snap.status_reasons.join("; ")
+        ));
+    }
+    if let Some(err) = &snap.sys_health_parse_error {
+        md.push_str(&format!("- **SysHealth Parse Error**: {}\n", err));
+    }
+    md
+}
+
+pub fn build_ai_telemetry_markdown() -> String {
+    let status_path = crate::models::get_status_path();
+    build_ai_telemetry_markdown_at(Path::new("/"), &status_path)
+}

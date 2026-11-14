@@ -67,10 +67,7 @@ async fn refresh(
             if changed {
                 handle
                     .update(move |tray| {
-                        tray.snapshot = snapshot;
-                        if tray.snapshot.updates_total == 0 {
-                            tray.updates = None;
-                        }
+                        apply_tray_snapshot_update(tray, snapshot);
                     })
                     .await
                     .is_some()
@@ -92,6 +89,15 @@ async fn refresh(
                 .await
                 .is_some()
         }
+    }
+}
+
+pub(crate) fn apply_tray_snapshot_update(tray: &mut SysPilotTray, snapshot: SystemSnapshot) {
+    tray.snapshot = snapshot;
+    if tray.snapshot.updates_total == 0
+        && tray.snapshot.updates_check_state == syspilot_core::UpdateCheckState::Ok
+    {
+        tray.updates = None;
     }
 }
 
@@ -185,13 +191,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(snapshot) => (snapshot, None),
         Err(error) => {
             let error = bounded_error(error);
-            (
-                SystemSnapshot {
-                    source_error: Some(error.clone()),
-                    ..Default::default()
-                },
-                Some(error),
-            )
+            #[allow(clippy::field_reassign_with_default)]
+            {
+                let mut snap = SystemSnapshot::default();
+                snap.source_error = Some(error.clone());
+                (snap, Some(error))
+            }
         }
     };
 

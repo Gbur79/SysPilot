@@ -188,6 +188,7 @@ fn test_update_summary_total() {
         standalone_count: 1,
         core_packages: vec!["linux".into(), "systemd".into()],
         last_checked: None,
+        check_state: syspilot_core::UpdateCheckState::Ok,
     };
     assert_eq!(summary.total(), 16);
 }
@@ -222,6 +223,7 @@ fn test_effective_updates_cache_invalidation() {
             core_updates: 0,
             status: "ALL_CLEAR".into(),
             cache_stale: false,
+            updates_check_state: syspilot_core::UpdateCheckState::Ok,
             ..Default::default()
         },
         SentinelStatus::default(),
@@ -496,6 +498,7 @@ fn test_stage3_tray_state_machine_and_mutants() {
     // updates = Some(...), but snapshot.updates_total == 0 -> (0, 0)
     tray.snapshot.updates_total = 0;
     tray.snapshot.core_updates = 0;
+    tray.snapshot.updates_check_state = syspilot_core::UpdateCheckState::Ok;
     tray.updates = Some(UpdateSummary {
         core_count: 3,
         regular_count: 5,
@@ -503,6 +506,7 @@ fn test_stage3_tray_state_machine_and_mutants() {
         standalone_count: 0,
         core_packages: vec![],
         last_checked: None,
+        check_state: syspilot_core::UpdateCheckState::Ok,
     });
     assert_eq!(tray.effective_updates(), (0, 0));
 
@@ -770,4 +774,132 @@ fn test_stage3_tray_state_machine_and_mutants() {
         assert!(!audit_item.enabled);
         (audit_item.activate)(&mut tray_no_bin);
     }
+}
+
+#[test]
+fn test_effective_updates_check_state_distinction() {
+    use ksni::Tray;
+    use syspilot_core::models::{SystemSnapshot, UpdateCheckState};
+    use syspilot_core::updater::UpdateSummary;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let mut tray = crate::tray::SysPilotTray::new(
+        SystemSnapshot {
+            updates_total: 0,
+            core_updates: 0,
+            status: "ALL_CLEAR".into(),
+            cache_stale: false,
+            updates_check_state: UpdateCheckState::Failed,
+            updates_consecutive_failures: 2,
+            ..Default::default()
+        },
+        crate::sentinels::SentinelStatus::default(),
+        Some(UpdateSummary {
+            core_count: 1,
+            regular_count: 2,
+            aur_count: 0,
+            standalone_count: 0,
+            core_packages: vec!["linux".into()],
+            last_checked: None,
+            check_state: UpdateCheckState::Failed,
+        }),
+        false,
+        None,
+        tx,
+    );
+
+    // When check_state is Failed (not Ok), snapshot's 0 updates does NOT override cached updates!
+    assert_eq!(tray.effective_updates(), (3, 1));
+
+    // Tooltip and menu surface failure notice
+    let tt = tray.tool_tip();
+    assert_eq!(tt.title, "SysPilot — Official update check failed");
+
+    // Header in menu surfaces failure notice
+    let menu = tray.menu();
+    if let ksni::MenuItem::Standard(ref header) = menu[0] {
+        assert_eq!(header.label, "SysPilot — Official update check failed");
+    } else {
+        panic!("Expected StandardItem for menu header");
+    }
+
+    // Verify (Failed, 1) does NOT show failure notice
+    tray.snapshot.updates_check_state = UpdateCheckState::Failed;
+    tray.snapshot.updates_consecutive_failures = 1;
+    assert_ne!(
+        tray.tool_tip().title,
+        "SysPilot — Official update check failed"
+    );
+    if let ksni::MenuItem::Standard(ref header) = tray.menu()[0] {
+        assert_ne!(header.label, "SysPilot — Official update check failed");
+    }
+
+    // Verify (Ok, 2) does NOT show failure notice
+    tray.snapshot.updates_check_state = UpdateCheckState::Ok;
+    tray.snapshot.updates_consecutive_failures = 2;
+    assert_ne!(
+        tray.tool_tip().title,
+        "SysPilot — Official update check failed"
+    );
+    if let ksni::MenuItem::Standard(ref header) = tray.menu()[0] {
+        assert_ne!(header.label, "SysPilot — Official update check failed");
+    }
+
+    // Now set check_state to Ok: authoritative 0 updates overrides cached updates
+    tray.snapshot.updates_check_state = UpdateCheckState::Ok;
+    tray.snapshot.updates_consecutive_failures = 0;
+    assert_eq!(tray.effective_updates(), (0, 0));
+}
+
+#[test]
+fn test_apply_tray_snapshot_update_cache_invalidation() {
+    use syspilot_core::models::{SystemSnapshot, UpdateCheckState};
+    use syspilot_core::updater::UpdateSummary;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let sample_summary = Some(UpdateSummary {
+        core_count: 1,
+        regular_count: 1,
+        aur_count: 0,
+        standalone_count: 0,
+        core_packages: vec!["linux".into()],
+        last_checked: None,
+        check_state: UpdateCheckState::Ok,
+    });
+
+    let mut tray = crate::tray::SysPilotTray::new(
+        SystemSnapshot::default(),
+        crate::sentinels::SentinelStatus::default(),
+        sample_summary,
+        false,
+        None,
+        tx,
+    );
+
+    // 1. (0, Failed) -> preserves tray.updates
+    let snap_failed = SystemSnapshot {
+        updates_total: 0,
+        updates_check_state: UpdateCheckState::Failed,
+        ..Default::default()
+    };
+    crate::apply_tray_snapshot_update(&mut tray, snap_failed);
+    assert!(tray.updates.is_some());
+
+    // 2. (2, Ok) -> preserves tray.updates
+    let snap_ok_with_updates = SystemSnapshot {
+        updates_total: 2,
+        updates_check_state: UpdateCheckState::Ok,
+        ..Default::default()
+    };
+    crate::apply_tray_snapshot_update(&mut tray, snap_ok_with_updates);
+    assert!(tray.updates.is_some());
+
+    // 3. (0, Ok) -> clears tray.updates to None
+    let snap_ok_zero = SystemSnapshot {
+        updates_total: 0,
+        updates_check_state: UpdateCheckState::Ok,
+        ..Default::default()
+    };
+    crate::apply_tray_snapshot_update(&mut tray, snap_ok_zero);
+    assert!(tray.updates.is_none());
 }

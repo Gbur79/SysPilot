@@ -111,6 +111,19 @@ pub enum RowTone {
     Offline,
 }
 
+impl From<syspilot_core::RowSeverity> for RowTone {
+    fn from(sev: syspilot_core::RowSeverity) -> Self {
+        match sev {
+            syspilot_core::RowSeverity::Pass => Self::Pass,
+            syspilot_core::RowSeverity::Update => Self::Update,
+            syspilot_core::RowSeverity::Warn => Self::Warn,
+            syspilot_core::RowSeverity::Alert => Self::Alert,
+            syspilot_core::RowSeverity::Info => Self::Info,
+            syspilot_core::RowSeverity::Offline => Self::Offline,
+        }
+    }
+}
+
 impl RowTone {
     pub const fn rgb(self) -> (u8, u8, u8) {
         match self {
@@ -282,6 +295,18 @@ pub fn format_core_updates(count: u32) -> (&'static str, (u8, u8, u8), String) {
     }
 }
 
+pub fn format_repo_updates_row(
+    snapshot: &syspilot_core::SystemSnapshot,
+) -> (String, (u8, u8, u8), String) {
+    let state = syspilot_core::format_repo_updates_state(
+        snapshot.regular_updates,
+        snapshot.updates_check_state,
+        snapshot.updates_consecutive_failures,
+    );
+    let rgb = RowTone::from(state.severity).rgb();
+    (state.status, rgb, state.details)
+}
+
 pub fn format_repo_updates(count: u32) -> (&'static str, (u8, u8, u8), String) {
     if count == 0 {
         (
@@ -364,6 +389,9 @@ pub fn format_self_update(
 pub struct DashboardViewModel {
     pub has_error: bool,
     pub error_message: String,
+    pub has_attention: bool,
+    pub attention_badge: String,
+    pub attention_message: String,
     pub overall_status: String,
     pub overall_status_label: String,
     pub overall_status_rgb: (u8, u8, u8),
@@ -392,6 +420,7 @@ impl DashboardViewModel {
         pkg_version: &str,
     ) -> Self {
         let (has_error, error_message) = format_snapshot_error_banner(snapshot);
+        let attention = syspilot_core::compute_attention_view(snapshot, reboot_safety, gaming);
         let (overall_status, overall_status_label, overall_status_rgb) =
             format_overall_header(snapshot, reboot_safety);
         let hardware_info = format_hardware_info(&snapshot.os, &snapshot.kernel);
@@ -405,7 +434,7 @@ impl DashboardViewModel {
         let (gpu_status, gpu_rgb, gpu_details) = format_gpu_telemetry(gpu_name, gaming);
         let (cve_status, cve_rgb, cve_details) = format_cve_status(snapshot.security_high_risk);
         let (core_status, core_rgb, core_details) = format_core_updates(snapshot.core_updates);
-        let (repo_status, repo_rgb, repo_details) = format_repo_updates(snapshot.regular_updates);
+        let (repo_status, repo_rgb, repo_details) = format_repo_updates_row(snapshot);
         let (aur_status, aur_rgb, aur_details) = format_aur_updates(snapshot.aur_updates);
         let (fwupd_status, fwupd_rgb, fwupd_details) =
             format_firmware_updates(snapshot.firmware_updates);
@@ -415,6 +444,9 @@ impl DashboardViewModel {
         Self {
             has_error,
             error_message,
+            has_attention: attention.visible,
+            attention_badge: attention.badge_text,
+            attention_message: attention.message,
             overall_status: overall_status.to_string(),
             overall_status_label: overall_status_label.to_string(),
             overall_status_rgb,
@@ -455,7 +487,7 @@ impl DashboardViewModel {
                 details: core_details,
             },
             updates_repo: RowPresentation {
-                status: repo_status.to_string(),
+                status: repo_status,
                 rgb: repo_rgb,
                 details: repo_details,
             },
@@ -488,6 +520,9 @@ impl DashboardViewModel {
         Self {
             has_error: true,
             error_message: err.to_string(),
+            has_attention: false,
+            attention_badge: String::new(),
+            attention_message: String::new(),
             overall_status: "DATA_UNAVAILABLE".to_string(),
             overall_status_label: "DATA UNAVAILABLE".to_string(),
             overall_status_rgb: RowTone::Warn.rgb(),
@@ -517,6 +552,9 @@ impl DashboardViewModel {
 fn apply_dashboard_view_model(ui: &AppWindow, vm: &DashboardViewModel) {
     ui.set_has_error(vm.has_error);
     ui.set_error_message(vm.error_message.as_str().into());
+    ui.set_has_attention(vm.has_attention);
+    ui.set_attention_badge(vm.attention_badge.as_str().into());
+    ui.set_attention_message(vm.attention_message.as_str().into());
     ui.set_overall_status(vm.overall_status.as_str().into());
     ui.set_overall_status_label(vm.overall_status_label.as_str().into());
     ui.set_overall_status_color(slint::Color::from_rgb_u8(
@@ -642,10 +680,104 @@ fn update_ui_from_error(ui: &AppWindow, err: &str) {
     apply_dashboard_view_model(ui, &vm);
 }
 
-static COPILOT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static LAST_SPAWN_MONO_MS: AtomicU64 = AtomicU64::new(0);
 const SPAWN_DEBOUNCE_WINDOW_MS: u64 = 750;
+
+fn format_custom_playbook_desc(playbooks: &[syspilot_core::UserPlaybook]) -> String {
+    if playbooks.is_empty() {
+        "Executes user tactical scripts discovered in ~/.config/syspilot/playbooks.d/*.sh"
+            .to_string()
+    } else {
+        let first = &playbooks[0];
+        if first.description.is_empty() {
+            format!(
+                "Run playbook '{}' ({} script(s) available)",
+                first.name,
+                playbooks.len()
+            )
+        } else {
+            format!("{}: {}", first.name, first.description)
+        }
+    }
+}
+
+fn update_playbook_telemetry(ui: &AppWindow) {
+    ui.set_sre_telemetry_export(syspilot_core::build_ai_telemetry_markdown().into());
+    let playbooks = syspilot_core::discover_user_playbooks();
+    ui.set_custom_playbook_desc(format_custom_playbook_desc(&playbooks).into());
+}
+
+fn compute_tab_window_height(
+    tab_idx: i32,
+    maintenance_item_count: usize,
+    is_maximized: bool,
+    is_fullscreen: bool,
+) -> Option<f32> {
+    if is_maximized || is_fullscreen {
+        return None;
+    }
+    Some(match tab_idx {
+        1 => compute_maintenance_window_height(maintenance_item_count),
+        2 => 780.0,
+        _ => 590.0,
+    })
+}
+
+fn apply_tab_selection_to_window(ui_inst: &AppWindow, tab_idx: i32) {
+    if tab_idx == 2 {
+        update_playbook_telemetry(ui_inst);
+    }
+    if let Some(target_height) = compute_tab_window_height(
+        tab_idx,
+        ui_inst.get_maintenance_item_count() as usize,
+        ui_inst.window().is_maximized(),
+        ui_inst.window().is_fullscreen(),
+    ) {
+        ui_inst
+            .window()
+            .set_size(slint::LogicalSize::new(1040.0, target_height));
+    }
+}
+
+fn handle_playbook_click<FT, FS, FC>(
+    playbook_id: &str,
+    mut run_terminal: FT,
+    mut run_shell: FS,
+    mut run_custom: FC,
+) where
+    FT: FnMut(&'static [&'static str], &'static str, bool),
+    FS: FnMut(&'static str, &'static str),
+    FC: FnMut(),
+{
+    match playbook_id {
+        "faf" => {
+            run_terminal(&["--faf-repair"], "SysPilot FAF Runner Repair", false);
+        }
+        "proton" => {
+            run_terminal(&["--gaming"], "SysPilot Gaming & Proton Readiness", true);
+        }
+        "pacnew" => {
+            run_shell(
+                "echo '=== SysPilot Configuration Drift (.pacnew) Reviewer ==='; if type -P pacdiff &>/dev/null; then sudo -E pacdiff; else echo 'pacdiff (pacman-contrib) not installed.'; fi",
+                "SysPilot .pacnew Reviewer",
+            );
+        }
+        "audio" => {
+            run_shell(
+                "echo '=== Resetting PipeWire & WirePlumber User Audio Stack ==='; systemctl --user restart pipewire pipewire-pulse wireplumber && sleep 1 && wpctl status",
+                "SysPilot Audio Stack Reset",
+            );
+        }
+        "custom" => {
+            run_custom();
+        }
+        "audit" | "repair" => {
+            run_terminal(&["--audit"], "SysPilot Diagnostic Audit", true);
+        }
+        _ => {}
+    }
+}
 
 fn monotonic_now_ms() -> u64 {
     let mut ts = libc::timespec {
@@ -683,65 +815,12 @@ fn can_spawn_task() -> bool {
     can_spawn_task_with_window(SPAWN_DEBOUNCE_WINDOW_MS)
 }
 
-struct CopilotFlightGuard;
-
-impl Drop for CopilotFlightGuard {
-    fn drop(&mut self) {
-        COPILOT_IN_FLIGHT.store(false, Ordering::Release);
-    }
-}
-
 struct RefreshFlightGuard;
 
 impl Drop for RefreshFlightGuard {
     fn drop(&mut self) {
         REFRESH_IN_FLIGHT.store(false, Ordering::Release);
     }
-}
-
-fn trigger_copilot_query(ui_weak: slint::Weak<AppWindow>, query: String) {
-    let query = query.trim().to_string();
-    if query.is_empty() {
-        return;
-    }
-
-    if COPILOT_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-
-    if let Some(ui) = ui_weak.upgrade() {
-        ui.set_copilot_running(true);
-        ui.set_copilot_console_text(
-            format!(
-                "🚀 Asking SysPilot Copilot:\n> {query}\n\nThinking and gathering system telemetry...",
-            )
-            .into(),
-        );
-    }
-
-    let ui_weak_thread = ui_weak;
-    std::thread::spawn(move || {
-        let _guard = CopilotFlightGuard;
-        let result = syspilot_core::execute_copilot_query(&query);
-        let _ = ui_weak_thread.upgrade_in_event_loop(move |ui| {
-            ui.set_copilot_running(false);
-            match result {
-                Ok(answer) => {
-                    ui.set_copilot_console_text(
-                        format!("🤖 SysPilot Copilot Solution:\n\n{answer}\n").into(),
-                    );
-                }
-                Err(err) => {
-                    ui.set_copilot_console_text(
-                        format!("✖ Copilot Execution Failed:\n\n{err}\n\nTip: You can also use the interactive terminal button above for real-time interaction.").into(),
-                    );
-                }
-            }
-        });
-    });
 }
 
 fn trigger_task_with_post_triage(ui_weak: slint::Weak<AppWindow>, args: &[&str], title: &str) {
@@ -856,18 +935,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_tab_changed(move |tab_idx| {
         syspilot_core::skin::save_last_tab_preference(tab_idx);
         if let Some(ui_inst) = ui_window.upgrade() {
-            if !ui_inst.window().is_maximized() && !ui_inst.window().is_fullscreen() {
-                let target_height = match tab_idx {
-                    1 => compute_maintenance_window_height(
-                        ui_inst.get_maintenance_item_count() as usize
-                    ),
-                    2 => 780.0,
-                    _ => 590.0,
-                };
-                ui_inst
-                    .window()
-                    .set_size(slint::LogicalSize::new(1040.0, target_height));
-            }
+            apply_tab_selection_to_window(&ui_inst, tab_idx);
         }
     });
 
@@ -891,7 +959,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(error) => update_ui_from_error(&ui, &error),
     }
 
-    // Populate Copilot Metadata
+    // Populate Copilot Metadata & SRE Telemetry
     let copilot_info = syspilot_core::get_copilot_info();
     if copilot_info.ready {
         ui.set_copilot_badge_label("COPILOT ONLINE".into());
@@ -899,6 +967,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.set_copilot_badge_label("COPILOT OFFLINE".into());
     }
     ui.set_copilot_status_text(copilot_info.status_line().into());
+    update_playbook_telemetry(&ui);
 
     // Connect Callbacks - Dashboard & General
     let ui_weak = ui.as_weak();
@@ -946,6 +1015,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(snapshot) => update_ui_from_snapshot(&ui_inst, &snapshot),
                         Err(err) => update_ui_from_error(&ui_inst, &err),
                     }
+                    update_playbook_telemetry(&ui_inst);
                     ui_inst.set_is_refreshing(false);
                     ui_inst.set_refresh_label("04  SCAN COMPLETE".into());
 
@@ -1054,26 +1124,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     });
 
-    // Connect Callbacks - AI Copilot
+    // Connect Callbacks - AI Copilot & SRE Tactical Playbooks
     ui.on_copilot_terminal_clicked(|| {
         trigger_terminal_task(&["--copilot-shell"], "SysPilot AI Copilot Interactive");
     });
 
-    let ui_weak_copilot = ui.as_weak();
-    ui.on_copilot_ask_clicked(move |query| {
-        trigger_copilot_query(ui_weak_copilot.clone(), query.to_string());
+    let ui_weak_copy = ui.as_weak();
+    ui.on_copy_telemetry_clicked(move || {
+        if let Some(ui_inst) = ui_weak_copy.upgrade() {
+            ui_inst
+                .set_copilot_status_text("✔ SRE Telemetry copied to clipboard (Markdown)".into());
+            let ui_weak_restore = ui_weak_copy.clone();
+            slint::Timer::single_shot(std::time::Duration::from_millis(2500), move || {
+                if let Some(ui_inst) = ui_weak_restore.upgrade() {
+                    let copilot_info = syspilot_core::get_copilot_info();
+                    ui_inst.set_copilot_status_text(copilot_info.status_line().into());
+                }
+            });
+        }
     });
 
-    let ui_weak_playbook = ui.as_weak();
+    let ui_weak_pb = ui.as_weak();
     ui.on_copilot_playbook_clicked(move |playbook_id| {
-        let query = match playbook_id.as_str() {
-            "faf" => "Diagnose and repair Forged Alliance Forever (FAF): check dependencies (bwrap, 32-bit Vulkan), verify ~/faf-linux runner, run update.sh perform, sync Game.prefs from Steam, ensure desktop shortcuts point to the dynamic runner, or execute 'syspilot --faf-repair'.",
-            "proton" => "Diagnose why a game is failing to launch in Steam under Proton and check missing 32-bit Vulkan/graphics libraries.",
-            "pacnew" => "Check for active .pacnew configuration files and guide me through safe surgical merging.",
-            "audio" => "Audio is crackling or missing sinks in PipeWire/WirePlumber, how do I reset and fix it?",
-            other => other,
-        };
-        trigger_copilot_query(ui_weak_playbook.clone(), query.to_string());
+        let ui_for_pb = ui_weak_pb.clone();
+        handle_playbook_click(
+            playbook_id.as_str(),
+            |args, title, post_triage| {
+                if post_triage {
+                    trigger_task_with_post_triage(ui_for_pb.clone(), args, title);
+                } else {
+                    trigger_terminal_task(args, title);
+                }
+            },
+            |cmd, title| {
+                trigger_shell_task(cmd, title);
+            },
+            || {
+                let playbooks = syspilot_core::discover_user_playbooks();
+                if let Some(first) = playbooks.first() {
+                    let _ = syspilot_core::spawn_terminal_command(&first.path, &[], &first.name);
+                } else {
+                    trigger_shell_task(
+                        "echo 'No executable *.sh playbooks in ~/.config/syspilot/playbooks.d/'",
+                        "SysPilot Custom Playbooks",
+                    );
+                }
+            },
+        );
     });
 
     // Live telemetry file watcher: poll status.json and summary.json mtime every 1s
@@ -1108,11 +1205,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 last_status_mtime = current_status_mtime;
                 last_summary_mtime = current_summary_mtime;
                 let snapshot_res = syspilot_core::read_system_snapshot(&status_path);
-                let dispatch_res =
-                    ui_weak_watcher.upgrade_in_event_loop(move |ui_inst| match snapshot_res {
+                let dispatch_res = ui_weak_watcher.upgrade_in_event_loop(move |ui_inst| {
+                    match snapshot_res {
                         Ok(snapshot) => update_ui_from_snapshot(&ui_inst, &snapshot),
                         Err(err) => update_ui_from_error(&ui_inst, &err),
-                    });
+                    }
+                    update_playbook_telemetry(&ui_inst);
+                });
                 if dispatch_res.is_err() {
                     break;
                 }
@@ -1137,18 +1236,6 @@ mod tests {
     }
 
     #[test]
-    fn test_copilot_flight_guard_raii() {
-        COPILOT_IN_FLIGHT.store(false, Ordering::SeqCst);
-        assert!(!COPILOT_IN_FLIGHT.load(Ordering::SeqCst));
-        {
-            let _guard = CopilotFlightGuard;
-            COPILOT_IN_FLIGHT.store(true, Ordering::SeqCst);
-            assert!(COPILOT_IN_FLIGHT.load(Ordering::SeqCst));
-        }
-        assert!(!COPILOT_IN_FLIGHT.load(Ordering::SeqCst));
-    }
-
-    #[test]
     fn test_refresh_flight_guard_raii() {
         REFRESH_IN_FLIGHT.store(false, Ordering::SeqCst);
         assert!(!REFRESH_IN_FLIGHT.load(Ordering::SeqCst));
@@ -1166,6 +1253,15 @@ mod tests {
         assert_eq!(compute_maintenance_window_height(0), 590.0);
         assert_eq!(compute_maintenance_window_height(10), 740.0);
         assert_eq!(compute_maintenance_window_height(20), 1200.0);
+    }
+
+    #[test]
+    fn test_compute_tab_window_height_branches() {
+        assert_eq!(compute_tab_window_height(0, 10, false, false), Some(590.0));
+        assert_eq!(compute_tab_window_height(1, 10, false, false), Some(740.0));
+        assert_eq!(compute_tab_window_height(2, 10, false, false), Some(780.0));
+        assert_eq!(compute_tab_window_height(0, 10, true, false), None);
+        assert_eq!(compute_tab_window_height(0, 10, false, true), None);
     }
 
     #[test]
@@ -1579,6 +1675,7 @@ mod tests {
             status: "ALL_CLEAR".to_string(),
             firewall_active: true,
             cache_stale: false,
+            updates_check_state: syspilot_core::UpdateCheckState::Ok,
             ..Default::default()
         };
         let nominal_safety = syspilot_core::RebootSafetyStatus::default();
@@ -1600,9 +1697,12 @@ mod tests {
             &nominal_sentinels,
             &nominal_gaming,
             "NVIDIA GeForce GTX 970",
-            "2.1.3",
+            "2.1.4",
         );
         assert!(!vm.has_error);
+        assert!(!vm.has_attention);
+        assert_eq!(vm.attention_badge, "");
+        assert_eq!(vm.attention_message, "");
         assert_eq!(vm.overall_status, "ALL_CLEAR");
         assert_eq!(vm.overall_status_label, "SYSTEM OPERATIONAL");
         assert_eq!(vm.overall_status_rgb, RowTone::Pass.rgb());
@@ -1633,7 +1733,7 @@ mod tests {
             firmware_updates: 1,
             app_update_available: true,
             app_latest_version: "2.2.0".to_string(),
-            app_current_version: "2.1.3".to_string(),
+            app_current_version: "2.1.4".to_string(),
             cache_stale: false,
             ..Default::default()
         };
@@ -1643,8 +1743,10 @@ mod tests {
             &nominal_sentinels,
             &nominal_gaming,
             "NVIDIA GeForce GTX 970",
-            "2.1.3",
+            "2.1.4",
         );
+        assert!(vm.has_attention);
+        assert_eq!(vm.attention_badge, "RED ALERT");
         assert_eq!(vm.failed_services.status, "1 FAILED");
         assert_eq!(vm.failed_services.details, "1 DEGRADED SYSTEMD UNIT");
         assert_eq!(vm.cve.status, "ALERT");
@@ -1679,8 +1781,10 @@ mod tests {
             &nominal_sentinels,
             &nominal_gaming,
             "NVIDIA GeForce GTX 970",
-            "2.1.3",
+            "2.1.4",
         );
+        assert!(vm.has_attention);
+        assert_eq!(vm.attention_badge, "RED ALERT");
         assert_eq!(vm.failed_services.status, "4 FAILED");
         assert_eq!(vm.failed_services.details, "4 DEGRADED SYSTEMD UNITS");
         assert_eq!(vm.cve.status, "ALERT");
@@ -1705,9 +1809,10 @@ mod tests {
             &nominal_sentinels,
             &nominal_gaming,
             "NVIDIA GeForce GTX 970",
-            "2.1.3",
+            "2.1.4",
         );
         assert!(vm.has_error);
+        assert!(!vm.has_attention);
         assert_eq!(vm.error_message, "DBus connection lost");
         assert_eq!(vm.overall_status_label, "TELEMETRY DEGRADED");
 
@@ -1721,9 +1826,10 @@ mod tests {
             &nominal_sentinels,
             &nominal_gaming,
             "NVIDIA GeForce GTX 970",
-            "2.1.3",
+            "2.1.4",
         );
         assert!(vm.has_error);
+        assert!(!vm.has_attention);
         assert!(vm.error_message.starts_with("Telemetry cache stale"));
 
         let black_screen_safety = syspilot_core::RebootSafetyStatus {
@@ -1737,16 +1843,21 @@ mod tests {
             &nominal_sentinels,
             &nominal_gaming,
             "NVIDIA GeForce GTX 970",
-            "2.1.3",
+            "2.1.4",
         );
         assert_eq!(vm.overall_status, "ACTION_REQUIRED");
         assert_eq!(vm.overall_status_label, "RED ALERT");
+        assert!(vm.has_attention);
+        assert_eq!(vm.attention_badge, "RED ALERT");
         assert_eq!(vm.kernel.status, "ALERT");
 
         // 5. from_error
         let vm =
             DashboardViewModel::from_error("telemetry socket timeout", env!("CARGO_PKG_VERSION"));
         assert!(vm.has_error);
+        assert!(!vm.has_attention);
+        assert_eq!(vm.attention_badge, "");
+        assert_eq!(vm.attention_message, "");
         assert_eq!(vm.error_message, "telemetry socket timeout");
         assert_eq!(vm.overall_status, "DATA_UNAVAILABLE");
         assert_eq!(vm.overall_status_label, "DATA UNAVAILABLE");
@@ -1773,6 +1884,134 @@ mod tests {
             assert_eq!(row.rgb, RowTone::Offline.rgb());
             assert_eq!(row.details, "TELEMETRY UNAVAILABLE");
         }
+    }
+
+    #[test]
+    fn test_dashboard_view_model_update_check_state_and_attention_permutations() {
+        let nominal_safety = syspilot_core::RebootSafetyStatus::default();
+        let nominal_sentinels = syspilot_core::SentinelStatus::default();
+        let nominal_gaming = syspilot_core::GamingReadinessStatus {
+            applicable: true,
+            ready: true,
+            ..Default::default()
+        };
+
+        // 1. Unknown update check state
+        let unknown_snap = syspilot_core::SystemSnapshot {
+            updates_check_state: syspilot_core::UpdateCheckState::Unknown,
+            regular_updates: 0,
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &unknown_snap,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "Generic GPU",
+            "2.1.4",
+        );
+        assert_eq!(vm.updates_repo.status, "INFO");
+        assert_eq!(vm.updates_repo.details, "UPDATE CHECK PENDING");
+
+        // 2. Ok update check state (0 updates)
+        let ok_snap = syspilot_core::SystemSnapshot {
+            updates_check_state: syspilot_core::UpdateCheckState::Ok,
+            regular_updates: 0,
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &ok_snap,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "Generic GPU",
+            "2.1.4",
+        );
+        assert_eq!(vm.updates_repo.status, "PASS");
+        assert_eq!(vm.updates_repo.details, "0 OFFICIAL PACKAGES PENDING");
+
+        // 3. Failed update check state with 1 failure (transient)
+        let failed_1_snap = syspilot_core::SystemSnapshot {
+            updates_check_state: syspilot_core::UpdateCheckState::Failed,
+            updates_consecutive_failures: 1,
+            regular_updates: 0,
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &failed_1_snap,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "Generic GPU",
+            "2.1.4",
+        );
+        assert_eq!(vm.updates_repo.status, "INFO");
+        assert_eq!(
+            vm.updates_repo.details,
+            "0 OFFICIAL PACKAGES PENDING (TRANSIENT RETRY)"
+        );
+
+        // 4. Failed update check state with >= 2 failures (warn)
+        let failed_2_snap = syspilot_core::SystemSnapshot {
+            updates_check_state: syspilot_core::UpdateCheckState::Failed,
+            updates_consecutive_failures: 2,
+            regular_updates: 0,
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &failed_2_snap,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "Generic GPU",
+            "2.1.4",
+        );
+        assert_eq!(vm.updates_repo.status, "WARN");
+        assert_eq!(
+            vm.updates_repo.details,
+            "OFFICIAL REPO CHECK FAILED (NETWORK/DB LOCK)"
+        );
+
+        // 5. Attention when warnings > 0
+        let warn_snap = syspilot_core::SystemSnapshot {
+            status: "PRE_FLIGHT_ATTENTION".to_string(),
+            warnings: 3,
+            cache_stale: false,
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &warn_snap,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "Generic GPU",
+            "2.1.4",
+        );
+        assert!(vm.has_attention);
+        assert_eq!(vm.attention_badge, "ATTENTION");
+        assert!(vm.attention_message.contains("3 warning(s)"));
+
+        // 6. Attention when status_reasons is non-empty
+        let reasons_snap = syspilot_core::SystemSnapshot {
+            status: "PRE_FLIGHT_ATTENTION".to_string(),
+            status_reasons: vec!["Root filesystem approaching quota threshold".to_string()],
+            cache_stale: false,
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &reasons_snap,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "Generic GPU",
+            "2.1.4",
+        );
+        assert!(vm.has_attention);
+        assert_eq!(vm.attention_badge, "ATTENTION");
+        assert_eq!(
+            vm.attention_message,
+            "Root filesystem approaching quota threshold"
+        );
     }
 
     struct HeadlessTestPlatform {
@@ -1815,6 +2054,7 @@ mod tests {
             status: "ALL_CLEAR".to_string(),
             firewall_active: true,
             cache_stale: false,
+            updates_check_state: syspilot_core::UpdateCheckState::Ok,
             ..Default::default()
         };
 
@@ -1822,6 +2062,9 @@ mod tests {
         assert_eq!(ui.get_overall_status().as_str(), "ALL_CLEAR");
         assert_eq!(ui.get_overall_status_label().as_str(), "SYSTEM OPERATIONAL");
         assert!(!ui.get_has_error());
+        assert!(!ui.get_has_attention());
+        assert_eq!(ui.get_attention_badge().as_str(), "");
+        assert_eq!(ui.get_attention_message().as_str(), "");
         assert_eq!(ui.get_kernel_status().as_str(), "PASS");
         assert_eq!(ui.get_firewall_status().as_str(), "PASS");
         assert_eq!(ui.get_failed_services_status().as_str(), "PASS");
@@ -1832,8 +2075,42 @@ mod tests {
         assert_eq!(ui.get_firmware_status().as_str(), "PASS");
         assert_eq!(ui.get_orphans_status().as_str(), "PASS");
 
+        // Attention snapshot test
+        let attention_snap = syspilot_core::SystemSnapshot {
+            os: "EndeavourOS".to_string(),
+            kernel: "6.12.8-arch1-1".to_string(),
+            status: "PRE_FLIGHT_ATTENTION".to_string(),
+            warnings: 2,
+            cache_stale: false,
+            ..Default::default()
+        };
+        update_ui_from_snapshot(&ui, &attention_snap);
+        assert!(!ui.get_has_error());
+        assert!(ui.get_has_attention());
+        assert_eq!(ui.get_attention_badge().as_str(), "ATTENTION");
+        assert!(ui.get_attention_message().as_str().contains("2 warning(s)"));
+
+        // SRE Telemetry export test
+        apply_tab_selection_to_window(&ui, 0);
+        assert_eq!(ui.get_sre_telemetry_export().as_str(), "");
+        apply_tab_selection_to_window(&ui, 2);
+        assert!(
+            ui.get_sre_telemetry_export()
+                .as_str()
+                .contains("SysPilot AI Telemetry")
+        );
+        assert!(!ui.get_custom_playbook_desc().as_str().is_empty());
+
+        // Resize AppWindow and toggle is_lcars_skin (true and false) at min-height: 520px
+        ui.window().set_size(slint::LogicalSize::new(960.0, 520.0));
+        ui.set_is_lcars_skin(true);
+        assert!(ui.get_is_lcars_skin());
+        ui.set_is_lcars_skin(false);
+        assert!(!ui.get_is_lcars_skin());
+
         update_ui_from_error(&ui, "stream disconnected");
         assert!(ui.get_has_error());
+        assert!(!ui.get_has_attention());
         assert_eq!(ui.get_error_message().as_str(), "stream disconnected");
         assert_eq!(ui.get_overall_status().as_str(), "DATA_UNAVAILABLE");
         assert_eq!(ui.get_overall_status_label().as_str(), "DATA UNAVAILABLE");
@@ -1848,5 +2125,154 @@ mod tests {
         assert_eq!(ui.get_updates_aur_text().as_str(), "OFFLINE");
         assert_eq!(ui.get_firmware_status().as_str(), "OFFLINE");
         assert_eq!(ui.get_orphans_status().as_str(), "OFFLINE");
+    }
+
+    #[test]
+    fn test_format_custom_playbook_desc() {
+        use std::path::PathBuf;
+        use syspilot_core::UserPlaybook;
+
+        // 1. empty &[]
+        let empty_desc = format_custom_playbook_desc(&[]);
+        assert_eq!(
+            empty_desc,
+            "Executes user tactical scripts discovered in ~/.config/syspilot/playbooks.d/*.sh"
+        );
+
+        // 2. [playbook without description]
+        let pb_no_desc = vec![UserPlaybook {
+            name: "quick_fix".into(),
+            filename: "quick_fix.sh".into(),
+            path: PathBuf::from("/test/quick_fix.sh"),
+            description: "".into(),
+        }];
+        assert_eq!(
+            format_custom_playbook_desc(&pb_no_desc),
+            "Run playbook 'quick_fix' (1 script(s) available)"
+        );
+
+        // 3. [playbook with description]
+        let pb_with_desc = vec![UserPlaybook {
+            name: "proton_clean".into(),
+            filename: "proton_clean.sh".into(),
+            path: PathBuf::from("/test/proton_clean.sh"),
+            description: "Purge stale proton prefix caches".into(),
+        }];
+        assert_eq!(
+            format_custom_playbook_desc(&pb_with_desc),
+            "proton_clean: Purge stale proton prefix caches"
+        );
+    }
+
+    #[test]
+    fn test_handle_playbook_click_all_routes() {
+        let terminal_calls = std::cell::RefCell::new(Vec::new());
+        let shell_calls = std::cell::RefCell::new(Vec::new());
+        let custom_calls = std::cell::Cell::new(0);
+
+        let mut record_terminal =
+            |args: &'static [&'static str], title: &'static str, post_triage: bool| {
+                terminal_calls.borrow_mut().push((args, title, post_triage));
+            };
+        let mut record_shell = |cmd: &'static str, title: &'static str| {
+            shell_calls.borrow_mut().push((cmd, title));
+        };
+        let mut record_custom = || {
+            custom_calls.set(custom_calls.get() + 1);
+        };
+
+        // 1. faf
+        handle_playbook_click(
+            "faf",
+            &mut record_terminal,
+            &mut record_shell,
+            &mut record_custom,
+        );
+        assert_eq!(
+            terminal_calls.borrow_mut().pop(),
+            Some((&["--faf-repair"][..], "SysPilot FAF Runner Repair", false))
+        );
+
+        // 2. proton
+        handle_playbook_click(
+            "proton",
+            &mut record_terminal,
+            &mut record_shell,
+            &mut record_custom,
+        );
+        assert_eq!(
+            terminal_calls.borrow_mut().pop(),
+            Some((
+                &["--gaming"][..],
+                "SysPilot Gaming & Proton Readiness",
+                true
+            ))
+        );
+
+        // 3. pacnew
+        handle_playbook_click(
+            "pacnew",
+            &mut record_terminal,
+            &mut record_shell,
+            &mut record_custom,
+        );
+        let (cmd, title) = shell_calls.borrow_mut().pop().unwrap();
+        assert_eq!(title, "SysPilot .pacnew Reviewer");
+        assert!(cmd.contains("sudo -E pacdiff"));
+
+        // 4. audio
+        handle_playbook_click(
+            "audio",
+            &mut record_terminal,
+            &mut record_shell,
+            &mut record_custom,
+        );
+        let (cmd, title) = shell_calls.borrow_mut().pop().unwrap();
+        assert_eq!(title, "SysPilot Audio Stack Reset");
+        assert!(cmd.contains("systemctl --user restart pipewire"));
+
+        // 5. custom
+        handle_playbook_click(
+            "custom",
+            &mut record_terminal,
+            &mut record_shell,
+            &mut record_custom,
+        );
+        assert_eq!(custom_calls.get(), 1);
+
+        // 6. audit
+        handle_playbook_click(
+            "audit",
+            &mut record_terminal,
+            &mut record_shell,
+            &mut record_custom,
+        );
+        assert_eq!(
+            terminal_calls.borrow_mut().pop(),
+            Some((&["--audit"][..], "SysPilot Diagnostic Audit", true))
+        );
+
+        // 7. repair
+        handle_playbook_click(
+            "repair",
+            &mut record_terminal,
+            &mut record_shell,
+            &mut record_custom,
+        );
+        assert_eq!(
+            terminal_calls.borrow_mut().pop(),
+            Some((&["--audit"][..], "SysPilot Diagnostic Audit", true))
+        );
+
+        // 8. unknown
+        handle_playbook_click(
+            "unknown",
+            &mut record_terminal,
+            &mut record_shell,
+            &mut record_custom,
+        );
+        assert!(terminal_calls.borrow().is_empty());
+        assert!(shell_calls.borrow().is_empty());
+        assert_eq!(custom_calls.get(), 1);
     }
 }

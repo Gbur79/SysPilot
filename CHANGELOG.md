@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.4] - 2026-11-14
+
+### Added & Hardened / SRE Runtime View, Dual-Skin Attention Banners & Tactical Playbooks (`PATCH-029` & `PATCH-027`)
+- **Runtime View & ATTENTION Banners (`PATCH-029`)**:
+  - Introduced `core::view` module (`RowSeverity`, `RowDisplayState`, `AttentionView`) providing unified attention banner telemetry and state calculation across LCARS and Classic skins.
+  - Implemented `checkupdates` runtime isolation and cold-boot hysteresis closing `ISSUE-20261111T201915171104-C3B4`.
+- **Deterministic SRE Tactical Playbooks & Native AI Telemetry Clipboard (`PATCH-027`)**:
+  - Redesigned Tab 03 with 5 deterministic SRE tactical playbooks (`proton`, `audio`, `pacnew`, `faf`, `custom`).
+  - Added native Slint 1.18 clipboard helper for instant SRE telemetry export to AI assistants without external clipboard dependencies.
+  - Implemented user tactical playbooks discovery in `~/.config/syspilot/playbooks/*.sh`.
+
 ## [2.1.3] - 2026-11-09
 
 ### Fixed / Hotfix UI Telemetry AUR & Headless Unit Tests

@@ -1,0 +1,5 @@
+exclude_re = [
+    "^crates/syspilot-gui/src/main\\.rs:\\d+:\\d+: replace main -> Result<\\(\\), Box<dyn std::error::Error>> with ",
+    "^crates/syspilot-tray/src/main\\.rs:\\d+:\\d+: replace main -> Result<\\(\\), Box<dyn std::error::Error>> with ",
+    "^crates/syspilot-tray/src/main\\.rs:\\d+:\\d+: replace refresh -> bool with ",
+]

@@ -4,7 +4,7 @@ use crate::models::*;
 use crate::orphans::check_orphan_packages;
 use crate::security::check_security_vulnerabilities;
 use crate::services::check_failed_services;
-use crate::updater::{check_aur_updates, check_official_updates};
+use crate::updater::check_aur_updates;
 use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::Write;
@@ -190,6 +190,13 @@ pub fn compute_flight_status(inputs: FlightStatusInputs) -> (String, Vec<String>
             let sum = inputs.updates.regular_count + inputs.updates.aur_count;
             status_reasons.push(format!("{sum} package update(s) available"));
         }
+        if inputs.updates.check_state == UpdateCheckState::Failed
+            && inputs.updates.consecutive_failures >= 2
+        {
+            status = "PRE_FLIGHT_ATTENTION".into();
+            status_reasons
+                .push("Official repository update check failed repeatedly (checkupdates)".into());
+        }
         if inputs.reboot_pending {
             status = "PRE_FLIGHT_ATTENTION".into();
             status_reasons.push("Running kernel updated - system reboot pending".into());
@@ -337,6 +344,17 @@ struct SummaryJson {
     environment: Option<SysHealthEnvironment>,
     #[serde(default)]
     gaming: Option<SysHealthGaming>,
+    #[serde(default)]
+    actionable_remediations: Option<Vec<serde_json::Value>>,
+}
+
+pub fn parse_remediations(raw: Option<Vec<serde_json::Value>>) -> Vec<ActionableRemediation> {
+    let Some(list) = raw else {
+        return Vec::new();
+    };
+    list.into_iter()
+        .filter_map(|val| serde_json::from_value::<ActionableRemediation>(val).ok())
+        .collect()
 }
 
 pub fn load_sys_health() -> SysHealth {
@@ -363,6 +381,8 @@ pub fn load_sys_health_at(state_dir: &Path, root: &Path) -> SysHealth {
                                     arch_primary_alive: m.arch_primary_alive,
                                     arch_age_days: m.arch_age_days,
                                 });
+                        let actionable_remediations =
+                            parse_remediations(summary.actionable_remediations);
                         SysHealth {
                             available: true,
                             errors,
@@ -370,15 +390,50 @@ pub fn load_sys_health_at(state_dir: &Path, root: &Path) -> SysHealth {
                             environment: summary.environment,
                             gaming: summary.gaming,
                             mirrors,
+                            actionable_remediations,
+                            parse_error: None,
                         }
                     }
-                    Err(_) => SysHealth::default(),
+                    Err(err) => {
+                        eprintln!("[syspilot-core::triage] parse summary.json failed: {err}");
+                        SysHealth {
+                            available: false,
+                            errors: 0,
+                            warnings: 0,
+                            environment: None,
+                            gaming: None,
+                            mirrors: None,
+                            actionable_remediations: Vec::new(),
+                            parse_error: Some(crate::view::truncate_chars(&err.to_string(), 120)),
+                        }
+                    }
                 }
             }
-            Err(_) => SysHealth::default(),
+            Err(err) => {
+                eprintln!("[syspilot-core::triage] open summary.json failed: {err}");
+                SysHealth {
+                    available: false,
+                    errors: 0,
+                    warnings: 0,
+                    environment: None,
+                    gaming: None,
+                    mirrors: None,
+                    actionable_remediations: Vec::new(),
+                    parse_error: Some(crate::view::truncate_chars(&err.to_string(), 120)),
+                }
+            }
         }
     } else {
-        SysHealth::default()
+        SysHealth {
+            available: false,
+            errors: 0,
+            warnings: 0,
+            environment: None,
+            gaming: None,
+            mirrors: None,
+            actionable_remediations: Vec::new(),
+            parse_error: None,
+        }
     };
 
     let mut env = health.environment.unwrap_or_default();
@@ -406,6 +461,76 @@ pub fn build_status_updates(core: u32, regular: u32, aur: u32) -> StatusUpdates 
         core_count: core,
         regular_count: regular,
         aur_count: aur,
+        check_state: UpdateCheckState::Ok,
+        consecutive_failures: 0,
+    }
+}
+
+pub fn resolve_updates_with_hysteresis(
+    cached: Option<&SystemSnapshot>,
+    check_res: Result<crate::updater::CheckupdatesReport, crate::updater::UpdateCheckError>,
+    aur: u32,
+) -> StatusUpdates {
+    match check_res {
+        Ok(report) => {
+            let core = report.core_count;
+            let regular = report.regular_count;
+            StatusUpdates {
+                total: core + regular + aur,
+                core_count: core,
+                regular_count: regular,
+                aur_count: aur,
+                check_state: UpdateCheckState::Ok,
+                consecutive_failures: 0,
+            }
+        }
+        Err(crate::updater::UpdateCheckError::NotFound) => StatusUpdates {
+            total: aur,
+            core_count: 0,
+            regular_count: 0,
+            aur_count: aur,
+            check_state: UpdateCheckState::Unavailable,
+            consecutive_failures: 0,
+        },
+        Err(crate::updater::UpdateCheckError::Busy) => {
+            let (core, regular, state, failures) = match cached {
+                Some(c) => (
+                    c.core_updates,
+                    c.regular_updates,
+                    c.updates_check_state,
+                    c.updates_consecutive_failures,
+                ),
+                None => (0, 0, UpdateCheckState::Unknown, 0),
+            };
+            StatusUpdates {
+                total: core + regular + aur,
+                core_count: core,
+                regular_count: regular,
+                aur_count: aur,
+                check_state: state,
+                consecutive_failures: failures,
+            }
+        }
+        Err(crate::updater::UpdateCheckError::Timeout(_))
+        | Err(crate::updater::UpdateCheckError::ExecutionFailed(_))
+        | Err(crate::updater::UpdateCheckError::ParseFailed(_)) => {
+            let (core, regular, prev_failures) = match cached {
+                Some(c) => (
+                    c.core_updates,
+                    c.regular_updates,
+                    c.updates_consecutive_failures,
+                ),
+                None => (0, 0, 0),
+            };
+            StatusUpdates {
+                total: core + regular + aur,
+                core_count: core,
+                regular_count: regular,
+                aur_count: aur,
+                check_state: UpdateCheckState::Failed,
+                consecutive_failures: prev_failures.saturating_add(1),
+            }
+        }
     }
 }
 
@@ -436,6 +561,85 @@ pub fn apply_hardware_and_gaming_gates(
     }
 }
 
+pub fn apply_sys_health_gates(
+    status: &mut String,
+    status_reasons: &mut Vec<String>,
+    sys_health: &SysHealth,
+) {
+    if let Some(err) = &sys_health.parse_error {
+        if *status != "ACTION_REQUIRED" {
+            *status = "PRE_FLIGHT_ATTENTION".into();
+        }
+        status_reasons.push(format!("sys-health parse failure: {err}"));
+    }
+
+    if sys_health.errors > 0 {
+        *status = "ACTION_REQUIRED".into();
+        let summaries: Vec<_> = sys_health
+            .actionable_remediations
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.severity.as_deref().unwrap_or(""),
+                    "error" | "critical" | "ERROR" | "CRITICAL"
+                )
+            })
+            .filter_map(|r| r.summary.as_ref().filter(|s| !s.trim().is_empty()))
+            .cloned()
+            .collect();
+        if !summaries.is_empty() {
+            for summary in summaries {
+                status_reasons.push(summary);
+            }
+        } else if let Some(any_s) = sys_health
+            .actionable_remediations
+            .iter()
+            .find_map(|r| r.summary.as_ref().filter(|s| !s.trim().is_empty()))
+        {
+            status_reasons.push(any_s.clone());
+        } else {
+            status_reasons.push(format!(
+                "sys-health reported {} error(s) — run sys-health --audit",
+                sys_health.errors
+            ));
+        }
+    }
+
+    if sys_health.warnings > 0 {
+        if *status != "ACTION_REQUIRED" {
+            *status = "PRE_FLIGHT_ATTENTION".into();
+        }
+        let summaries: Vec<_> = sys_health
+            .actionable_remediations
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.severity.as_deref().unwrap_or(""),
+                    "warn" | "warning" | "WARN" | "WARNING"
+                )
+            })
+            .filter_map(|r| r.summary.as_ref().filter(|s| !s.trim().is_empty()))
+            .cloned()
+            .collect();
+        if !summaries.is_empty() {
+            for summary in summaries {
+                status_reasons.push(summary);
+            }
+        } else if let Some(any_s) = sys_health
+            .actionable_remediations
+            .iter()
+            .find_map(|r| r.summary.as_ref().filter(|s| !s.trim().is_empty()))
+        {
+            status_reasons.push(any_s.clone());
+        } else {
+            status_reasons.push(format!(
+                "sys-health reported {} warning(s) — run sys-health --audit",
+                sys_health.warnings
+            ));
+        }
+    }
+}
+
 pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let status_path = get_status_path();
     let cached = if status_path.is_file() {
@@ -453,18 +657,27 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let reboot_pending = crate::sentinels::check_reboot_pending();
 
     let updates = if effective_check_pkgs {
-        let (core, regular, _pkgs) = check_official_updates().await;
+        let official_res = crate::updater::check_official_updates_detailed().await;
         let aur = check_aur_updates().await;
-        build_status_updates(core, regular, aur)
+        resolve_updates_with_hysteresis(cached.as_ref(), official_res, aur)
     } else if let Some(ref c) = cached {
         StatusUpdates {
             total: c.updates_total,
             core_count: c.core_updates,
             regular_count: c.regular_updates,
             aur_count: c.aur_updates,
+            check_state: c.updates_check_state,
+            consecutive_failures: c.updates_consecutive_failures,
         }
     } else {
-        StatusUpdates::default()
+        StatusUpdates {
+            total: 0,
+            core_count: 0,
+            regular_count: 0,
+            aur_count: 0,
+            check_state: UpdateCheckState::Unknown,
+            consecutive_failures: 0,
+        }
     };
 
     let security = check_security_vulnerabilities(skip_slow_probes).await;
@@ -472,6 +685,7 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let firewall = check_host_firewall().await;
     let reboot_safety = crate::reboot_safety::check_reboot_safety();
     let gaming_readiness = crate::gaming::check_gaming_readiness();
+    let sys_health = load_sys_health();
 
     let (mut status, mut status_reasons, mut informational_reasons) =
         compute_flight_status(FlightStatusInputs {
@@ -493,6 +707,8 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
         &reboot_safety,
         &gaming_readiness,
     );
+
+    apply_sys_health_gates(&mut status, &mut status_reasons, &sys_health);
 
     let pacnew = PacnewStatus {
         count: pacnew_list.len(),
@@ -537,7 +753,7 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
         disk: Some(disk),
         pacnew: Some(pacnew),
         orphans: Some(orphans),
-        sys_health: Some(load_sys_health()),
+        sys_health: Some(sys_health),
         security: Some(security),
         firmware: Some(firmware),
         firewall: Some(firewall),

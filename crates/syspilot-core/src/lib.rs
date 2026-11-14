@@ -15,6 +15,7 @@ pub mod sys_root;
 pub mod terminal;
 pub mod triage;
 pub mod updater;
+pub mod view;
 
 pub use copilot::*;
 pub use exec::*;
@@ -33,6 +34,7 @@ pub use sys_root::*;
 pub use terminal::*;
 pub use triage::*;
 pub use updater::*;
+pub use view::*;
 
 #[cfg(test)]
 pub mod mock_rig;

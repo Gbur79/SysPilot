@@ -282,6 +282,8 @@ fn test_write_and_read_status_json_atomic() {
             core_count: 1,
             regular_count: 1,
             aur_count: 0,
+            check_state: UpdateCheckState::Ok,
+            consecutive_failures: 0,
         },
         failed_services: None,
         disk: None,
@@ -572,6 +574,48 @@ fn test_dynamic_kernel_and_os_fallback() {
 }
 
 static TERMINAL_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct EnvGuard {
+    vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+impl EnvGuard {
+    fn new() -> Self {
+        Self { vars: Vec::new() }
+    }
+
+    fn set(&mut self, key: &'static str, val: impl AsRef<std::ffi::OsStr>) {
+        if !self.vars.iter().any(|(k, _)| *k == key) {
+            self.vars.push((key, std::env::var_os(key)));
+        }
+        unsafe {
+            std::env::set_var(key, val);
+        }
+    }
+
+    #[allow(dead_code)]
+    fn remove(&mut self, key: &'static str) {
+        if !self.vars.iter().any(|(k, _)| *k == key) {
+            self.vars.push((key, std::env::var_os(key)));
+        }
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (k, v) in self.vars.drain(..).rev() {
+            unsafe {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+}
 
 #[test]
 fn test_terminal_slot_bounds_and_underflow_immunity() {
@@ -1027,6 +1071,8 @@ fn test_concurrent_atomic_status_writes() {
                         core_count: 0,
                         regular_count: 0,
                         aur_count: 0,
+                        check_state: UpdateCheckState::Ok,
+                        consecutive_failures: 0,
                     },
                     failed_services: None,
                     disk: None,
@@ -3558,4 +3604,776 @@ async fn test_updater_mock_executables() {
     assert_eq!(standalone, 1);
 
     crate::updater::set_test_updater_bins(None, None);
+}
+
+#[test]
+fn test_truncate_chars_utf8_boundaries() {
+    use crate::view::truncate_chars;
+    // Polish characters: ąćęłńóśźż
+    let s = "Zażółć gęślą jaźń";
+    assert_eq!(truncate_chars(s, 20), "Zażółć gęślą jaźń");
+    assert_eq!(truncate_chars(s, 7), "Zażółć …");
+    assert_eq!(truncate_chars(s, 0), "…");
+
+    // Bullet points and special UTF-8 chars
+    let bullet = "• Bullet item one • Bullet item two";
+    assert_eq!(truncate_chars(bullet, 8), "• Bullet…");
+
+    let empty = "";
+    assert_eq!(truncate_chars(empty, 5), "");
+}
+
+#[test]
+fn test_parse_remediations_and_summary_error() {
+    use crate::triage::{load_sys_health_at, parse_remediations};
+    // 1. null array (None)
+    assert_eq!(parse_remediations(None), Vec::new());
+
+    // 2. null fields
+    let json_null_fields = serde_json::json!([
+        {
+            "check": null,
+            "severity": null,
+            "code": null,
+            "summary": "Fix kernel modules",
+            "suggested_fix": null,
+            "risk": null
+        }
+    ]);
+    let raw: Vec<serde_json::Value> = serde_json::from_value(json_null_fields).unwrap();
+    let remediations = parse_remediations(Some(raw));
+    assert_eq!(remediations.len(), 1);
+    assert_eq!(
+        remediations[0].summary.as_deref(),
+        Some("Fix kernel modules")
+    );
+    assert!(remediations[0].check.is_none());
+
+    // 3. corrupt element alongside valid element
+    let mixed_json = serde_json::json!([
+        "not an object",
+        12345,
+        {
+            "check": "nvidia",
+            "severity": "warn",
+            "summary": "Driver mismatch",
+            "suggested_fix": "reboot",
+            "risk": "low"
+        }
+    ]);
+    let raw_mixed: Vec<serde_json::Value> = serde_json::from_value(mixed_json).unwrap();
+    let mixed_rems = parse_remediations(Some(raw_mixed));
+    assert_eq!(mixed_rems.len(), 1);
+    assert_eq!(mixed_rems[0].check.as_deref(), Some("nvidia"));
+    assert_eq!(mixed_rems[0].summary.as_deref(), Some("Driver mismatch"));
+
+    // 4. parse_error on corrupt summary.json
+    let temp = tempfile::tempdir().unwrap();
+    let health_dir = temp.path().join("system-health");
+    std::fs::create_dir_all(&health_dir).unwrap();
+    std::fs::write(health_dir.join("summary.json"), "{ corrupt json ...").unwrap();
+
+    let loaded = load_sys_health_at(temp.path(), temp.path());
+    assert!(!loaded.available);
+    assert!(loaded.parse_error.is_some());
+}
+
+#[test]
+fn test_map_checkupdates_exit_and_resolve_hysteresis() {
+    use crate::models::{SystemSnapshot, UpdateCheckState};
+    use crate::triage::resolve_updates_with_hysteresis;
+    use crate::updater::{UpdateCheckError, map_checkupdates_exit};
+
+    // 0 -> parse
+    let out = b"linux 6.1.1 -> 6.1.2\nbash 5.1 -> 5.2\n";
+    let rep = map_checkupdates_exit(Some(0), out).unwrap();
+    assert_eq!(rep.core_count, 1);
+    assert_eq!(rep.regular_count, 1);
+
+    // 2 -> empty CheckupdatesReport
+    let rep2 = map_checkupdates_exit(Some(2), b"").unwrap();
+    assert_eq!(rep2.core_count, 0);
+    assert_eq!(rep2.regular_count, 0);
+
+    // 75 -> Busy
+    assert_eq!(
+        map_checkupdates_exit(Some(75), b""),
+        Err(UpdateCheckError::Busy)
+    );
+
+    // 1 -> ExecutionFailed
+    assert_eq!(
+        map_checkupdates_exit(Some(1), b""),
+        Err(UpdateCheckError::ExecutionFailed(
+            "checkupdates exited with status 1".into()
+        ))
+    );
+
+    // None -> terminated by signal
+    assert_eq!(
+        map_checkupdates_exit(None, b""),
+        Err(UpdateCheckError::ExecutionFailed(
+            "checkupdates terminated by signal".into()
+        ))
+    );
+
+    // resolve_updates_with_hysteresis:
+    // A8: Ok -> Ok, failures 0
+    let res_ok = resolve_updates_with_hysteresis(None, Ok(rep), 2);
+    assert_eq!(res_ok.check_state, UpdateCheckState::Ok);
+    assert_eq!(res_ok.consecutive_failures, 0);
+    assert_eq!(res_ok.core_count, 1);
+    assert_eq!(res_ok.regular_count, 1);
+    assert_eq!(res_ok.aur_count, 2);
+    assert_eq!(res_ok.total, 4);
+
+    // NotFound -> Unavailable, failures 0
+    let res_nf = resolve_updates_with_hysteresis(None, Err(UpdateCheckError::NotFound), 3);
+    assert_eq!(res_nf.check_state, UpdateCheckState::Unavailable);
+    assert_eq!(res_nf.consecutive_failures, 0);
+    assert_eq!(res_nf.total, 3);
+
+    // Busy -> preserves cached
+    let snap = SystemSnapshot {
+        core_updates: 3,
+        regular_updates: 4,
+        updates_check_state: UpdateCheckState::Failed,
+        updates_consecutive_failures: 1,
+        ..Default::default()
+    };
+    let res_busy = resolve_updates_with_hysteresis(Some(&snap), Err(UpdateCheckError::Busy), 1);
+    assert_eq!(res_busy.core_count, 3);
+    assert_eq!(res_busy.regular_count, 4);
+    assert_eq!(res_busy.aur_count, 1);
+    assert_eq!(res_busy.total, 8);
+    assert_eq!(res_busy.check_state, UpdateCheckState::Failed);
+    assert_eq!(res_busy.consecutive_failures, 1);
+
+    // Timeout -> preserves core/reg, Failed, failures prev + 1
+    let res_timeout = resolve_updates_with_hysteresis(
+        Some(&snap),
+        Err(UpdateCheckError::Timeout(std::time::Duration::from_secs(5))),
+        2,
+    );
+    assert_eq!(res_timeout.core_count, 3);
+    assert_eq!(res_timeout.regular_count, 4);
+    assert_eq!(res_timeout.check_state, UpdateCheckState::Failed);
+    assert_eq!(res_timeout.consecutive_failures, 2);
+    assert_eq!(res_timeout.total, 9);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_check_official_updates_at_timeout_and_healing() {
+    use crate::updater::{UpdateCheckError, check_official_updates_at};
+    use std::time::Duration;
+
+    let temp = tempfile::tempdir().unwrap();
+    let runtime_dir = temp.path().join("runtime");
+    let script_path = temp.path().join("fake_checkupdates.sh");
+
+    let script_content = "#!/bin/sh\nmkdir -p \"$CHECKUPDATES_DB\"\ntouch \"$CHECKUPDATES_DB/db.lck\"\nsleep 30\nexit 0\n";
+    std::fs::write(&script_path, script_content).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // 1. Run with 150ms timeout -> triggers timeout & process-group kill
+    let res =
+        check_official_updates_at(Some(&script_path), &runtime_dir, Duration::from_millis(150))
+            .await;
+    assert!(matches!(res, Err(UpdateCheckError::Timeout(_))));
+
+    let db_lck = runtime_dir.join("db/db.lck");
+    assert!(db_lck.exists());
+
+    // 2. Next run with fast script -> heals stale db.lck before spawning
+    let fast_script = temp.path().join("fast_checkupdates.sh");
+    std::fs::write(
+        &fast_script,
+        "#!/bin/sh\necho 'glibc 2.38 -> 2.39'\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fast_script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let res_healed =
+        check_official_updates_at(Some(&fast_script), &runtime_dir, Duration::from_secs(5)).await;
+    assert!(res_healed.is_ok());
+    let rep = res_healed.unwrap();
+    assert_eq!(rep.core_count, 1);
+    assert!(!db_lck.exists());
+}
+
+#[test]
+fn test_compute_attention_view_invariant_matrix() {
+    use crate::gaming::GamingReadinessStatus;
+    use crate::models::{SystemSnapshot, UpdateCheckState};
+    use crate::reboot_safety::RebootSafetyStatus;
+    use crate::view::compute_attention_view;
+
+    let base_snap = SystemSnapshot {
+        status: "FLIGHT_READY".into(),
+        cache_stale: false,
+        source_error: None,
+        ..Default::default()
+    };
+    let base_safety = RebootSafetyStatus::default();
+    let base_gaming = GamingReadinessStatus::default();
+
+    // Nominal: not visible
+    let nom = compute_attention_view(&base_snap, &base_safety, &base_gaming);
+    assert!(!nom.visible);
+
+    // Stale or source_error suppresses attention banner
+    let mut stale_snap = base_snap.clone();
+    stale_snap.cache_stale = true;
+    stale_snap.warnings = 2;
+    assert!(!compute_attention_view(&stale_snap, &base_safety, &base_gaming).visible);
+
+    // 1. Black screen risk -> RED ALERT
+    let mut safety1 = base_safety.clone();
+    safety1.black_screen_risk = true;
+    safety1.issues.push("NVIDIA kernel mismatch".into());
+    let v1 = compute_attention_view(&base_snap, &safety1, &base_gaming);
+    assert!(v1.visible);
+    assert_eq!(v1.badge_text, "RED ALERT");
+    assert_eq!(v1.message, "NVIDIA kernel mismatch");
+
+    // 2. Status reasons + ACTION_REQUIRED -> RED ALERT
+    let mut snap2 = base_snap.clone();
+    snap2.status = "ACTION_REQUIRED".into();
+    snap2
+        .status_reasons
+        .push("Critical systemd unit failed".into());
+    let v2 = compute_attention_view(&snap2, &base_safety, &base_gaming);
+    assert!(v2.visible);
+    assert_eq!(v2.badge_text, "RED ALERT");
+    assert_eq!(v2.message, "Critical systemd unit failed");
+
+    // 3. SysHealth parse error -> ATTENTION
+    let mut snap3 = base_snap.clone();
+    snap3.status = "PRE_FLIGHT_ATTENTION".into();
+    snap3.sys_health_parse_error = Some("corrupt summary.json".into());
+    let v3 = compute_attention_view(&snap3, &base_safety, &base_gaming);
+    assert!(v3.visible);
+    assert_eq!(v3.badge_text, "ATTENTION");
+    assert_eq!(v3.message, "corrupt summary.json");
+
+    // 4. Errors > 0 -> RED ALERT
+    let mut snap4 = base_snap.clone();
+    snap4.errors = 2;
+    let v4 = compute_attention_view(&snap4, &base_safety, &base_gaming);
+    assert!(v4.visible);
+    assert_eq!(v4.badge_text, "RED ALERT");
+    assert!(v4.message.contains("2 error(s)"));
+
+    // 5. Warnings > 0 -> ATTENTION
+    let mut snap5 = base_snap.clone();
+    snap5.warnings = 3;
+    let v5 = compute_attention_view(&snap5, &base_safety, &base_gaming);
+    assert!(v5.visible);
+    assert_eq!(v5.badge_text, "ATTENTION");
+    assert!(v5.message.contains("3 warning(s)"));
+
+    // 6. Update check failed repeatedly (>= 2) -> ATTENTION
+    let mut snap6 = base_snap.clone();
+    snap6.updates_check_state = UpdateCheckState::Failed;
+    snap6.updates_consecutive_failures = 2;
+    let v6 = compute_attention_view(&snap6, &base_safety, &base_gaming);
+    assert!(v6.visible);
+    assert_eq!(v6.badge_text, "ATTENTION");
+    assert_eq!(
+        v6.message,
+        "Official repository update check failed repeatedly (checkupdates)"
+    );
+
+    // 7. Gaming applicable but not ready -> ATTENTION
+    let mut gaming7 = base_gaming.clone();
+    gaming7.applicable = true;
+    gaming7.ready = false;
+    gaming7.warnings.push("Vulkan 32-bit driver missing".into());
+    let v7 = compute_attention_view(&base_snap, &base_safety, &gaming7);
+    assert!(v7.visible);
+    assert_eq!(v7.badge_text, "ATTENTION");
+    assert_eq!(v7.message, "Gaming Readiness: Vulkan 32-bit driver missing");
+}
+
+#[test]
+fn test_build_ai_telemetry_markdown_at_zero_subprocess_and_playbooks() {
+    use crate::copilot::{build_ai_telemetry_markdown_at, discover_user_playbooks_at};
+    use crate::exec;
+
+    let temp = tempfile::tempdir().unwrap();
+    let status_path = temp.path().join("status.json");
+
+    let status_content = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "status_reasons": [],
+        "informational_reasons": [],
+        "updates": {
+            "total": 0,
+            "core_count": 0,
+            "regular_count": 0,
+            "aur_count": 0,
+            "check_state": "ok",
+            "consecutive_failures": 0
+        }
+    }"#;
+    std::fs::write(&status_path, status_content).unwrap();
+
+    exec::reset_spawn_count();
+    let md = build_ai_telemetry_markdown_at(temp.path(), &status_path);
+    assert_eq!(
+        exec::spawn_count(),
+        0,
+        "Telemetry generation must be strictly zero-subprocess!"
+    );
+    assert!(md.contains("SysPilot AI Telemetry"));
+    assert!(md.contains("FLIGHT_READY"));
+    assert!(!md.contains("Safety Issues:"));
+    assert!(!md.contains("Gaming Warnings:"));
+    assert!(!md.contains("Status Reasons:"));
+
+    // Discover user playbooks
+    let playbooks_dir = temp.path().join("playbooks");
+    std::fs::create_dir_all(&playbooks_dir).unwrap();
+
+    let pb1 = playbooks_dir.join("clean.sh");
+    std::fs::write(
+        &pb1,
+        "#!/bin/sh\n# Description: Clean package cache\necho clean\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&pb1, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let non_exec = playbooks_dir.join("skip.sh");
+    std::fs::write(&non_exec, "#!/bin/sh\n# Description: Non-executable\n").unwrap();
+    std::fs::set_permissions(&non_exec, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let dir_sh = playbooks_dir.join("dir_entry.sh");
+    std::fs::create_dir_all(&dir_sh).unwrap();
+    std::fs::set_permissions(&dir_sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let found = discover_user_playbooks_at(&playbooks_dir);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].name, "clean");
+    assert_eq!(found[0].filename, "clean.sh");
+    assert_eq!(found[0].description, "Clean package cache");
+}
+
+#[test]
+fn test_models_check_state_and_effective_status_hysteresis() {
+    use crate::models::{StatusUpdates, SystemSnapshot, UpdateCheckState};
+
+    let u_ok: StatusUpdates = serde_json::from_str(r#"{"check_state": "ok"}"#).unwrap();
+    assert_eq!(u_ok.check_state, UpdateCheckState::Ok);
+
+    let u_failed: StatusUpdates = serde_json::from_str(r#"{"check_state": "failed"}"#).unwrap();
+    assert_eq!(u_failed.check_state, UpdateCheckState::Failed);
+
+    let u_unavail: StatusUpdates =
+        serde_json::from_str(r#"{"check_state": "unavailable"}"#).unwrap();
+    assert_eq!(u_unavail.check_state, UpdateCheckState::Unavailable);
+
+    let u_weird: StatusUpdates = serde_json::from_str(r#"{"check_state": "weird"}"#).unwrap();
+    assert_eq!(u_weird.check_state, UpdateCheckState::Unknown);
+
+    let u_omitted: StatusUpdates = serde_json::from_str(r#"{}"#).unwrap();
+    assert_eq!(u_omitted.check_state, UpdateCheckState::Unknown);
+
+    let mut snap = SystemSnapshot {
+        status: "ALL_CLEAR".into(),
+        updates_check_state: UpdateCheckState::Failed,
+        updates_consecutive_failures: 0,
+        ..Default::default()
+    };
+    assert_eq!(snap.effective_status(), "ALL_CLEAR");
+
+    snap.updates_consecutive_failures = 1;
+    assert_eq!(snap.effective_status(), "ALL_CLEAR");
+
+    snap.updates_check_state = UpdateCheckState::Ok;
+    snap.updates_consecutive_failures = 2;
+    assert_eq!(snap.effective_status(), "ALL_CLEAR");
+
+    snap.updates_check_state = UpdateCheckState::Failed;
+    snap.updates_consecutive_failures = 2;
+    assert_eq!(snap.effective_status(), "PRE_FLIGHT_ATTENTION");
+}
+
+#[test]
+fn test_compute_flight_status_update_failure_hysteresis() {
+    use crate::models::{
+        DiskStatus, DiskUsage, FailedServicesStatus, OrphanStatus, StatusFirewall, StatusFirmware,
+        StatusSecurity, StatusUpdates, UpdateCheckState,
+    };
+    use crate::triage::{FlightStatusInputs, compute_flight_status};
+
+    let base_failed = FailedServicesStatus::default();
+    let base_disk = DiskStatus {
+        root: Some(DiskUsage {
+            total_gb: 100.0,
+            used_gb: 50.0,
+            free_gb: 50.0,
+            used_pct: 50,
+        }),
+        home: None,
+    };
+    let base_orphans = OrphanStatus {
+        checked: true,
+        count: 0,
+        tier3_count: 0,
+        ..Default::default()
+    };
+    let base_security = StatusSecurity::default();
+    let base_firmware = StatusFirmware {
+        available: true,
+        reason: "".into(),
+        updates_count: 0,
+        pending_devices: vec![],
+        ..Default::default()
+    };
+    let base_firewall = StatusFirewall {
+        available: true,
+        active: true,
+        backend: "nftables".into(),
+        default_zone: None,
+        details: "active filter".into(),
+    };
+
+    let updates_f1 = StatusUpdates {
+        check_state: UpdateCheckState::Failed,
+        consecutive_failures: 1,
+        ..Default::default()
+    };
+    let (st1, _, _) = compute_flight_status(FlightStatusInputs {
+        failed: &base_failed,
+        disk: &base_disk,
+        reboot_pending: false,
+        pacnew_files: &[],
+        orphans: &base_orphans,
+        updates: &updates_f1,
+        security: &base_security,
+        firmware: &base_firmware,
+        firewall: &base_firewall,
+    });
+    assert_eq!(st1, "FLIGHT_READY");
+
+    let updates_ok2 = StatusUpdates {
+        check_state: UpdateCheckState::Ok,
+        consecutive_failures: 2,
+        ..Default::default()
+    };
+    let (st2, _, _) = compute_flight_status(FlightStatusInputs {
+        failed: &base_failed,
+        disk: &base_disk,
+        reboot_pending: false,
+        pacnew_files: &[],
+        orphans: &base_orphans,
+        updates: &updates_ok2,
+        security: &base_security,
+        firmware: &base_firmware,
+        firewall: &base_firewall,
+    });
+    assert_eq!(st2, "FLIGHT_READY");
+
+    let updates_f2 = StatusUpdates {
+        check_state: UpdateCheckState::Failed,
+        consecutive_failures: 2,
+        ..Default::default()
+    };
+    let (st3, reasons3, _) = compute_flight_status(FlightStatusInputs {
+        failed: &base_failed,
+        disk: &base_disk,
+        reboot_pending: false,
+        pacnew_files: &[],
+        orphans: &base_orphans,
+        updates: &updates_f2,
+        security: &base_security,
+        firmware: &base_firmware,
+        firewall: &base_firewall,
+    });
+    assert_eq!(st3, "PRE_FLIGHT_ATTENTION");
+    assert!(
+        reasons3
+            .iter()
+            .any(|r| r == "Official repository update check failed repeatedly (checkupdates)")
+    );
+}
+
+#[test]
+fn test_apply_sys_health_gates_all_branches() {
+    use crate::models::{ActionableRemediation, SysHealth};
+    use crate::triage::apply_sys_health_gates;
+
+    // 1. parse_error: Some("bad json")
+    let mut status = "FLIGHT_READY".to_string();
+    let mut reasons = Vec::new();
+    let sh = SysHealth {
+        parse_error: Some("bad json".into()),
+        ..Default::default()
+    };
+    apply_sys_health_gates(&mut status, &mut reasons, &sh);
+    assert_eq!(status, "PRE_FLIGHT_ATTENTION");
+    assert_eq!(reasons, vec!["sys-health parse failure: bad json"]);
+
+    let mut status2 = "ACTION_REQUIRED".to_string();
+    let mut reasons2 = Vec::new();
+    apply_sys_health_gates(&mut status2, &mut reasons2, &sh);
+    assert_eq!(status2, "ACTION_REQUIRED");
+    assert_eq!(reasons2, vec!["sys-health parse failure: bad json"]);
+
+    // 2. errors: 2 with [whitespace-only error summary, warning summary, CRITICAL "Fix keyring"]
+    let mut status = "FLIGHT_READY".to_string();
+    let mut reasons = Vec::new();
+    let sh_err = SysHealth {
+        errors: 2,
+        actionable_remediations: vec![
+            ActionableRemediation {
+                severity: Some("error".into()),
+                summary: Some("   ".into()),
+                ..Default::default()
+            },
+            ActionableRemediation {
+                severity: Some("warning".into()),
+                summary: Some("Warning item".into()),
+                ..Default::default()
+            },
+            ActionableRemediation {
+                severity: Some("CRITICAL".into()),
+                summary: Some("Fix keyring".into()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    apply_sys_health_gates(&mut status, &mut reasons, &sh_err);
+    assert_eq!(status, "ACTION_REQUIRED");
+    assert_eq!(reasons, vec!["Fix keyring"]);
+
+    // 3. errors: 1 with ONLY [severity: None, summary: Some("Generic hint")]
+    let mut status = "FLIGHT_READY".to_string();
+    let mut reasons = Vec::new();
+    let sh_generic = SysHealth {
+        errors: 1,
+        actionable_remediations: vec![ActionableRemediation {
+            severity: None,
+            summary: Some("Generic hint".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    apply_sys_health_gates(&mut status, &mut reasons, &sh_generic);
+    assert_eq!(status, "ACTION_REQUIRED");
+    assert_eq!(reasons, vec!["Generic hint"]);
+
+    // 4. errors: 1 with empty remediations
+    let mut status = "FLIGHT_READY".to_string();
+    let mut reasons = Vec::new();
+    let sh_empty_err = SysHealth {
+        errors: 1,
+        actionable_remediations: vec![],
+        ..Default::default()
+    };
+    apply_sys_health_gates(&mut status, &mut reasons, &sh_empty_err);
+    assert_eq!(status, "ACTION_REQUIRED");
+    assert_eq!(
+        reasons,
+        vec!["sys-health reported 1 error(s) — run sys-health --audit"]
+    );
+
+    // 5. warnings: 2 with status = "FLIGHT_READY" and [error summary, WARNING "Refresh mirrors"]
+    let mut status = "FLIGHT_READY".to_string();
+    let mut reasons = Vec::new();
+    let sh_warn = SysHealth {
+        warnings: 2,
+        actionable_remediations: vec![
+            ActionableRemediation {
+                severity: Some("error".into()),
+                summary: Some("Error item".into()),
+                ..Default::default()
+            },
+            ActionableRemediation {
+                severity: Some("WARNING".into()),
+                summary: Some("Refresh mirrors".into()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    apply_sys_health_gates(&mut status, &mut reasons, &sh_warn);
+    assert_eq!(status, "PRE_FLIGHT_ATTENTION");
+    assert_eq!(reasons, vec!["Refresh mirrors"]);
+
+    let mut status_ar = "ACTION_REQUIRED".to_string();
+    let mut reasons_ar = Vec::new();
+    apply_sys_health_gates(&mut status_ar, &mut reasons_ar, &sh_warn);
+    assert_eq!(status_ar, "ACTION_REQUIRED");
+    assert_eq!(reasons_ar, vec!["Refresh mirrors"]);
+
+    let mut status_hint = "FLIGHT_READY".to_string();
+    let mut reasons_hint = Vec::new();
+    let sh_hint = SysHealth {
+        warnings: 2,
+        actionable_remediations: vec![ActionableRemediation {
+            severity: None,
+            summary: Some("Warn hint".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    apply_sys_health_gates(&mut status_hint, &mut reasons_hint, &sh_hint);
+    assert_eq!(status_hint, "PRE_FLIGHT_ATTENTION");
+    assert_eq!(reasons_hint, vec!["Warn hint"]);
+
+    let mut status_empty_w = "FLIGHT_READY".to_string();
+    let mut reasons_empty_w = Vec::new();
+    let sh_empty_w = SysHealth {
+        warnings: 2,
+        actionable_remediations: vec![],
+        ..Default::default()
+    };
+    apply_sys_health_gates(&mut status_empty_w, &mut reasons_empty_w, &sh_empty_w);
+    assert_eq!(status_empty_w, "PRE_FLIGHT_ATTENTION");
+    assert_eq!(
+        reasons_empty_w,
+        vec!["sys-health reported 2 warning(s) — run sys-health --audit"]
+    );
+}
+
+#[test]
+fn test_copilot_telemetry_nonempty_branches_and_env_wrappers() {
+    use crate::mock_rig::MockRig;
+
+    let rig = MockRig::broken_reboot_state();
+    let status_path = rig.root().join("status.json");
+    let status_content = r#"{
+        "schema_version": "1.0",
+        "status": "PRE_FLIGHT_ATTENTION",
+        "status_reasons": ["Kernel needs reboot"],
+        "informational_reasons": [],
+        "updates": {
+            "total": 0,
+            "core_count": 0,
+            "regular_count": 0,
+            "aur_count": 0,
+            "check_state": "ok",
+            "consecutive_failures": 0
+        }
+    }"#;
+    std::fs::write(&status_path, status_content).unwrap();
+
+    let md = crate::copilot::build_ai_telemetry_markdown_at(rig.root(), &status_path);
+    assert!(md.contains("Safety Issues:"));
+    assert!(md.contains("Gaming Warnings:"));
+    assert!(md.contains("Status Reasons"));
+    assert!(md.contains("Kernel needs reboot"));
+
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut env = EnvGuard::new();
+
+    let temp = tempfile::tempdir().unwrap();
+    let pb_dir = temp.path().join(".config/syspilot/playbooks");
+    std::fs::create_dir_all(&pb_dir).unwrap();
+    let pb_file = pb_dir.join("run.sh");
+    std::fs::write(&pb_file, "#!/bin/sh\n# Description: Run playbook\necho 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&pb_file, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    env.set("HOME", temp.path());
+    env.set("SYSPILOT_STATUS_PATH", &status_path);
+
+    assert_eq!(crate::copilot::discover_user_playbooks().len(), 1);
+    let sys_md = crate::copilot::build_ai_telemetry_markdown();
+    assert!(sys_md.contains("### SysPilot AI Telemetry"));
+    assert!(sys_md.contains("Kernel needs reboot"));
+}
+
+#[test]
+fn test_updater_runtime_dir_and_public_wrappers() {
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut env = EnvGuard::new();
+
+    let uid = unsafe { libc::getuid() };
+
+    // 1. With XDG_RUNTIME_DIR pointing to a tempdir
+    let temp1 = tempfile::tempdir().unwrap();
+    env.set("XDG_RUNTIME_DIR", temp1.path());
+    let res1 = crate::updater::checkupdates_runtime_dir().unwrap();
+    assert_eq!(res1, temp1.path().join("syspilot/checkupdates"));
+    assert!(res1.join("db").is_dir());
+
+    // 2. With XDG_RUNTIME_DIR=""
+    env.set("XDG_RUNTIME_DIR", "");
+    let res2 = crate::updater::checkupdates_runtime_dir().unwrap();
+    assert_eq!(
+        res2,
+        std::env::temp_dir().join(format!("syspilot-{uid}/checkupdates"))
+    );
+
+    // 3. With XDG_RUNTIME_DIR pointing to a second tempdir where syspilot/checkupdates/db is a symlink
+    let temp_sym = tempfile::tempdir().unwrap();
+    let sym_base = temp_sym.path().join("syspilot/checkupdates");
+    std::fs::create_dir_all(&sym_base).unwrap();
+    let dummy = temp_sym.path().join("dummy");
+    std::fs::create_dir_all(&dummy).unwrap();
+    std::os::unix::fs::symlink(&dummy, sym_base.join("db")).unwrap();
+    env.set("XDG_RUNTIME_DIR", temp_sym.path());
+    let err3 = crate::updater::checkupdates_runtime_dir().unwrap_err();
+    assert_eq!(err3.kind(), std::io::ErrorKind::PermissionDenied);
+
+    use crate::updater::validate_secure_runtime_dir_meta;
+    assert!(validate_secure_runtime_dir_meta(true, false, 1000, 1000));
+    assert!(!validate_secure_runtime_dir_meta(false, false, 1000, 1000));
+    assert!(!validate_secure_runtime_dir_meta(true, true, 1000, 1000));
+    assert!(!validate_secure_runtime_dir_meta(true, false, 0, 1000));
+
+    // Reset XDG_RUNTIME_DIR to clean tempdir
+    let temp_clean = tempfile::tempdir().unwrap();
+    env.set("XDG_RUNTIME_DIR", temp_clean.path());
+
+    let script_path = temp_clean.path().join("checkupdates.sh");
+    std::fs::write(
+        &script_path,
+        "#!/bin/sh\nprintf 'linux 6.12 -> 6.13\\nhtop 3.3 -> 3.4\\n'\nexit 0\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    env.set("SYSPILOT_BIN_CHECKUPDATES", &script_path);
+    env.set("SYSPILOT_BIN_YAY", "/nonexistent/bin");
+    env.set("SYSPILOT_BIN_PARU", "/nonexistent/bin");
+    env.set("SYSPILOT_BIN_SYS_HEALTH", "/nonexistent/bin");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        use crate::models::UpdateCheckState;
+        use crate::updater::{
+            check_official_updates, check_official_updates_detailed, run_full_update_check,
+        };
+
+        let rep = check_official_updates_detailed().await.unwrap();
+        assert_eq!(rep.core_count, 1);
+        assert_eq!(rep.regular_count, 1);
+        assert_eq!(rep.core_packages, vec!["linux 6.12 -> 6.13".to_string()]);
+
+        let (core, reg, pkgs) = check_official_updates().await;
+        assert_eq!(core, 1);
+        assert_eq!(reg, 1);
+        assert_eq!(pkgs, vec!["linux 6.12 -> 6.13".to_string()]);
+
+        let summary = run_full_update_check(false).await.unwrap();
+        assert_eq!(summary.core_count, 1);
+        assert_eq!(summary.regular_count, 1);
+        assert_eq!(summary.check_state, UpdateCheckState::Ok);
+    });
 }

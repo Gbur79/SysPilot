@@ -13,6 +13,7 @@ pub struct UpdateSummary {
     pub standalone_count: u32,
     pub core_packages: Vec<String>,
     pub last_checked: Option<Instant>,
+    pub check_state: crate::models::UpdateCheckState,
 }
 
 impl UpdateSummary {
@@ -129,38 +130,245 @@ pub fn is_process_running(proc_name: &str) -> bool {
     false
 }
 
-pub async fn check_official_updates() -> (u32, u32, Vec<String>) {
-    let Some(checkupdates) = find_executable("checkupdates") else {
-        return (0, 0, Vec::new());
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateCheckError {
+    NotFound,
+    Busy,
+    Timeout(Duration),
+    ExecutionFailed(String),
+    ParseFailed(String),
+}
+
+pub fn map_checkupdates_exit(
+    code: Option<i32>,
+    stdout: &[u8],
+) -> Result<CheckupdatesReport, UpdateCheckError> {
+    match code {
+        Some(0) => {
+            let text = std::str::from_utf8(stdout)
+                .map_err(|e| UpdateCheckError::ParseFailed(format!("invalid utf-8 output: {e}")))?;
+            parse_checkupdates_str(text).map_err(UpdateCheckError::ParseFailed)
+        }
+        Some(2) => Ok(CheckupdatesReport {
+            core_count: 0,
+            regular_count: 0,
+            core_packages: Vec::new(),
+            all_packages: Vec::new(),
+        }),
+        Some(75) => Err(UpdateCheckError::Busy),
+        Some(c) => Err(UpdateCheckError::ExecutionFailed(format!(
+            "checkupdates exited with status {c}"
+        ))),
+        None => Err(UpdateCheckError::ExecutionFailed(
+            "checkupdates terminated by signal".to_string(),
+        )),
+    }
+}
+
+pub fn validate_secure_runtime_dir_meta(
+    is_dir: bool,
+    is_symlink: bool,
+    owner_uid: u32,
+    expected_uid: u32,
+) -> bool {
+    !is_symlink && is_dir && owner_uid == expected_uid
+}
+
+pub fn checkupdates_runtime_dir() -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
+    let uid = unsafe { libc::getuid() };
+    let base = match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(val) if !val.is_empty() => PathBuf::from(val).join("syspilot/checkupdates"),
+        _ => std::env::temp_dir().join(format!("syspilot-{uid}/checkupdates")),
     };
 
-    let timeout_dur = default_checkupdates_timeout();
-    let cmd = crate::exec::new_tokio_command(&checkupdates);
-    let output = match run_command_with_timeout(cmd, timeout_dur).await {
-        Ok(out) => out,
-        Err(_) => return (0, 0, Vec::new()),
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    builder.mode(0o700);
+
+    let db_dir = base.join("db");
+    builder.create(&db_dir)?;
+
+    for dir in [&base, &db_dir] {
+        let meta = std::fs::symlink_metadata(dir)?;
+        if !validate_secure_runtime_dir_meta(
+            meta.is_dir(),
+            meta.file_type().is_symlink(),
+            meta.uid(),
+            uid,
+        ) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("insecure checkupdates runtime dir {:?}", dir),
+            ));
+        }
+    }
+
+    Ok(base)
+}
+
+pub async fn check_official_updates_at(
+    checkupdates_bin: Option<&Path>,
+    runtime_dir: &Path,
+    timeout_dur: Duration,
+) -> Result<CheckupdatesReport, UpdateCheckError> {
+    static CHECK_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = CHECK_LOCK.lock().await;
+
+    let Some(checkupdates_path) = checkupdates_bin else {
+        return Err(UpdateCheckError::NotFound);
     };
 
-    // Auto-heal stale /tmp/checkup-db-<uid>/db.lck if checkupdates fails on lock
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-        if stderr.contains("database is locked") {
-            let uid = unsafe { libc::getuid() };
-            let lock_path = PathBuf::from(format!("/tmp/checkup-db-{uid}/db.lck"));
-            if lock_path.exists() && !is_process_running("checkupdates") {
-                let _ = std::fs::remove_file(lock_path);
-                let retry_cmd = crate::exec::new_tokio_command(&checkupdates);
-                if let Ok(retry) = run_command_with_timeout(retry_cmd, timeout_dur).await {
-                    if retry.status.success() {
-                        return parse_checkupdates_stdout(&retry.stdout);
+    const FLOCK_EX_NB: libc::c_int = 6;
+    const _: () = assert!(FLOCK_EX_NB == (libc::LOCK_EX | libc::LOCK_NB));
+    const FLOCK_UN: libc::c_int = 8;
+    const _: () = assert!(FLOCK_UN == libc::LOCK_UN);
+
+    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::io::AsRawFd;
+
+    let db_dir = runtime_dir.join("db");
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    builder.mode(0o700);
+    if let Err(e) = builder.create(&db_dir) {
+        return Err(UpdateCheckError::ExecutionFailed(format!(
+            "failed to create runtime dir: {e}"
+        )));
+    }
+
+    let lock_path = runtime_dir.join(".lock");
+    let lock_file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            return Err(UpdateCheckError::ExecutionFailed(format!(
+                "failed to open lock file: {e}"
+            )));
+        }
+    };
+
+    let lock_res = unsafe { libc::flock(lock_file.as_raw_fd(), FLOCK_EX_NB) };
+    if lock_res != 0 {
+        return Err(UpdateCheckError::Busy);
+    }
+
+    let db_lck = db_dir.join("db.lck");
+    if db_lck.exists() {
+        let _ = std::fs::remove_file(&db_lck);
+    }
+
+    let flock_bin_opt = find_executable("flock");
+    let mut cmd = if let Some(ref flock_bin) = flock_bin_opt {
+        unsafe { libc::flock(lock_file.as_raw_fd(), FLOCK_UN) };
+        let mut c = crate::exec::new_tokio_command(flock_bin);
+        c.arg("-n")
+            .arg("-E")
+            .arg("75")
+            .arg(&lock_path)
+            .arg(checkupdates_path);
+        c
+    } else {
+        crate::exec::new_tokio_command(checkupdates_path)
+    };
+
+    cmd.env("CHECKUPDATES_DB", &db_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .kill_on_drop(true);
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return Err(UpdateCheckError::ExecutionFailed(format!(
+                "failed to spawn checkupdates: {e}"
+            )));
+        }
+    };
+
+    let pgid = child.id().map(|p| p as i32);
+
+    let stdout_pipe = child.stdout.take();
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = stdout_pipe {
+            let _ = tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut buf).await;
+        }
+        buf
+    });
+
+    let status_res = tokio::select! {
+        res = child.wait() => res,
+        _ = tokio::time::sleep(timeout_dur) => {
+            if let Some(pid) = pgid {
+                unsafe {
+                    libc::kill(-pid, libc::SIGTERM);
+                }
+            }
+            let wait_res = tokio::time::timeout(Duration::from_millis(500), child.wait()).await;
+            if wait_res.is_err() {
+                if let Some(pid) = pgid {
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
                     }
                 }
             }
+            let _ = child.wait().await;
+            eprintln!("[syspilot-core::updater] checkupdates timed out after {}s (pgid: {:?})", timeout_dur.as_secs(), pgid);
+            return Err(UpdateCheckError::Timeout(timeout_dur));
         }
-        return (0, 0, Vec::new());
-    }
+    };
 
-    parse_checkupdates_stdout(&output.stdout)
+    let status = match status_res {
+        Ok(s) => s,
+        Err(e) => {
+            return Err(UpdateCheckError::ExecutionFailed(format!(
+                "failed to wait on checkupdates: {e}"
+            )));
+        }
+    };
+
+    let stdout = match tokio::time::timeout(Duration::from_secs(1), stdout_task).await {
+        Ok(Ok(bytes)) => bytes,
+        _ => Vec::new(),
+    };
+
+    map_checkupdates_exit(status.code(), &stdout)
+}
+
+pub async fn check_official_updates_detailed() -> Result<CheckupdatesReport, UpdateCheckError> {
+    let dir = match checkupdates_runtime_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            return Err(UpdateCheckError::ExecutionFailed(format!(
+                "checkupdates_runtime_dir failed: {e}"
+            )));
+        }
+    };
+    let bin = find_executable("checkupdates");
+    check_official_updates_at(bin.as_deref(), &dir, default_checkupdates_timeout()).await
+}
+
+pub async fn check_official_updates() -> (u32, u32, Vec<String>) {
+    match check_official_updates_detailed().await {
+        Ok(report) => (
+            report.core_count,
+            report.regular_count,
+            report.core_packages,
+        ),
+        Err(e) => {
+            eprintln!("[syspilot-core::updater] check_official_updates failed: {e:?}");
+            (0, 0, Vec::new())
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -425,7 +633,23 @@ pub async fn run_full_update_check(gamemode_active: bool) -> Option<UpdateSummar
         return None;
     }
 
-    let (core_count, regular_count, core_packages) = check_official_updates().await;
+    let official_res = check_official_updates_detailed().await;
+    let (core_count, regular_count, core_packages, check_state) = match official_res {
+        Ok(report) => (
+            report.core_count,
+            report.regular_count,
+            report.core_packages,
+            crate::models::UpdateCheckState::Ok,
+        ),
+        Err(UpdateCheckError::NotFound) => (
+            0,
+            0,
+            Vec::new(),
+            crate::models::UpdateCheckState::Unavailable,
+        ),
+        Err(_) => (0, 0, Vec::new(), crate::models::UpdateCheckState::Failed),
+    };
+
     let aur_count = check_aur_updates().await;
     let standalone_count = check_standalone_updates().await;
 
@@ -436,5 +660,6 @@ pub async fn run_full_update_check(gamemode_active: bool) -> Option<UpdateSummar
         standalone_count,
         core_packages,
         last_checked: Some(Instant::now()),
+        check_state,
     })
 }

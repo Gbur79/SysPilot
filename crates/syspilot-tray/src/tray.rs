@@ -41,7 +41,9 @@ impl SysPilotTray {
         if let Some(u) = &self.updates {
             // If snapshot was refreshed to 0 (e.g. after upgrade),
             // while internal cache holds older package count, authoritative state is clean (0).
-            if self.snapshot.updates_total == 0 {
+            if self.snapshot.updates_total == 0
+                && self.snapshot.updates_check_state == syspilot_core::UpdateCheckState::Ok
+            {
                 (0, 0)
             } else {
                 (u.total(), u.core_count)
@@ -183,6 +185,10 @@ impl Tray for SysPilotTray {
                 "SysPilot — telemetry stale (age {})",
                 self.snapshot.age_label()
             )
+        } else if self.snapshot.updates_check_state == syspilot_core::UpdateCheckState::Failed
+            && self.snapshot.updates_consecutive_failures >= 2
+        {
+            "SysPilot — Official update check failed".into()
         } else if self.snapshot.effective_status() == "ACTION_REQUIRED" {
             "SysPilot — action required".into()
         } else if self.snapshot.security_high_risk > 0 {
@@ -233,6 +239,10 @@ impl Tray for SysPilotTray {
             "Telemetry unavailable — last known data is not trusted".into()
         } else if self.snapshot.cache_stale {
             format!("Telemetry stale — cache age {}", self.snapshot.age_label())
+        } else if self.snapshot.updates_check_state == syspilot_core::UpdateCheckState::Failed
+            && self.snapshot.updates_consecutive_failures >= 2
+        {
+            "SysPilot — Official update check failed".into()
         } else if total_updates > 0 {
             format!(
                 "Updates Pending — {} packages ({} core), {} errors",

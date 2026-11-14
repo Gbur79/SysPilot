@@ -61,7 +61,7 @@ export component AppWindow inherits Window {
     in property <string> attention_badge: "ATTENTION";
     in property <string> attention_message: "";
     in property <string> sre_telemetry_export: "";
-    in property <string> custom_playbook_desc: "Executes user tactical scripts discovered in ~/.config/syspilot/playbooks.d/*.sh";
+    in property <string> custom_playbook_desc: "Executes user tactical scripts discovered in ~/.config/syspilot/playbooks/*.sh";
 
     telemetry_clipboard := TextInput {
         width: 0px;
@@ -873,7 +873,7 @@ export component AppWindow inherits Window {
 
                             LcarsMaintenanceRow {
                                 code: "05 // CUSTOM";
-                                title: "User Tactical Playbooks (playbooks.d)";
+                                title: "User Tactical Playbooks (playbooks)";
                                 description: root.custom_playbook_desc;
                                 action-text: "RUN SCRIPT";
                                 accent-color: Theme.tricorder-cyan;

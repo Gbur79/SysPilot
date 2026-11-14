@@ -416,26 +416,23 @@ fn test_terminal_custom_fallback() {
 
 #[test]
 fn test_goose_recipe_resolution() {
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut env = EnvGuard::new();
     use crate::copilot::{get_compact_health, resolve_goose_recipe};
-    use std::path::PathBuf;
 
     let health = get_compact_health();
     assert!(health.contains("status=") || health == "cache=unavailable");
 
-    // Test with explicit SYSPILOT_GOOSE_RECIPE
-    let dummy_recipe = std::env::temp_dir().join("syspilot-test-recipe.yaml");
+    // Test with explicit SYSPILOT_GOOSE_RECIPE in isolated RAII tempdir
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let dummy_recipe = tmp_dir.path().join("syspilot-test-recipe.yaml");
     std::fs::write(&dummy_recipe, "# test recipe").unwrap();
 
-    unsafe {
-        std::env::set_var("SYSPILOT_GOOSE_RECIPE", &dummy_recipe);
-    }
+    env.set("SYSPILOT_GOOSE_RECIPE", &dummy_recipe);
     let resolved = resolve_goose_recipe();
-    assert_eq!(resolved, Some(PathBuf::from(&dummy_recipe)));
-
-    unsafe {
-        std::env::remove_var("SYSPILOT_GOOSE_RECIPE");
-    }
-    let _ = std::fs::remove_file(dummy_recipe);
+    assert_eq!(resolved, Some(dummy_recipe));
 }
 
 #[test]

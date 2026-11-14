@@ -686,8 +686,7 @@ const SPAWN_DEBOUNCE_WINDOW_MS: u64 = 750;
 
 fn format_custom_playbook_desc(playbooks: &[syspilot_core::UserPlaybook]) -> String {
     if playbooks.is_empty() {
-        "Executes user tactical scripts discovered in ~/.config/syspilot/playbooks.d/*.sh"
-            .to_string()
+        "Executes user tactical scripts discovered in ~/.config/syspilot/playbooks/*.sh".to_string()
     } else {
         let first = &playbooks[0];
         if first.description.is_empty() {
@@ -1165,7 +1164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = syspilot_core::spawn_terminal_command(&first.path, &[], &first.name);
                 } else {
                     trigger_shell_task(
-                        "echo 'No executable *.sh playbooks in ~/.config/syspilot/playbooks.d/'",
+                        "echo 'No executable *.sh playbooks in ~/.config/syspilot/playbooks/'",
                         "SysPilot Custom Playbooks",
                     );
                 }
@@ -2136,7 +2135,7 @@ mod tests {
         let empty_desc = format_custom_playbook_desc(&[]);
         assert_eq!(
             empty_desc,
-            "Executes user tactical scripts discovered in ~/.config/syspilot/playbooks.d/*.sh"
+            "Executes user tactical scripts discovered in ~/.config/syspilot/playbooks/*.sh"
         );
 
         // 2. [playbook without description]

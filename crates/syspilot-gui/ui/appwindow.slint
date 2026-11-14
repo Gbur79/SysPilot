@@ -31,6 +31,8 @@ export component AppWindow inherits Window {
     callback prune_clicked();
     callback toggle_skin();
     callback tab_changed(int);
+    callback confirm_upgrade_anyway_clicked();
+    callback refresh_mirrors_from_warning_clicked();
 
     // Callbacks - Maintenance
     callback run_orphans_clicked();
@@ -121,6 +123,13 @@ export component AppWindow inherits Window {
     in property <string> orphans_status: "--";
     in property <color> orphans_color: Theme.text-muted;
     in property <string> orphans_details: "Pending telemetry...";
+
+    in property <string> mirrors_status: "--";
+    in property <color> mirrors_color: Theme.text-muted;
+    in property <string> mirrors_details: "Pending telemetry...";
+    in property <bool> mirror_primary_dead: false;
+    in property <string> mirror_upgrade_warning: "";
+    in-out property <bool> upgrade_mirror_warning_visible: false;
 
     // Copilot Properties
     in property <string> copilot_status_text: "Probing Copilot connection...";
@@ -645,6 +654,13 @@ export component AppWindow inherits Window {
                                 accent-color: Theme.enterprise-lilac;
                                 status-color: root.cve_color;
                             }
+                            LcarsTelemetryRow {
+                                label: "REPOSITORY MIRRORLIST";
+                                value: root.mirrors_details;
+                                status: root.mirrors_status;
+                                accent-color: Theme.enterprise-lilac;
+                                status-color: root.mirrors_color;
+                            }
                         }
 
                         // POD 03: THIRD-PARTY & PERIPHERALS
@@ -1101,84 +1117,97 @@ export component AppWindow inherits Window {
                 vertical-stretch: 1;
                 spacing: 10px;
 
-                Card {
-                    title: "🛡 System Health & Hygiene";
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 10px;
 
-                    GridRow {
-                        name: "Kernel & Modules";
-                        status-text: root.kernel_status;
-                        status-color: root.kernel_color;
-                        details: root.kernel_details;
-                    }
-                    GridRow {
-                        name: "Root Storage (/)";
-                        status-text: root.root_status;
-                        status-color: root.root_color;
-                        details: root.root_details;
-                    }
-                    GridRow {
-                        name: "Host Firewall (Shield)";
-                        status-text: root.firewall_status;
-                        status-color: root.firewall_color;
-                        details: root.firewall_details;
-                    }
-                    GridRow {
-                        name: "Failed System Services";
-                        status-text: root.failed_services_status;
-                        status-color: root.failed_services_color;
-                        details: root.failed_services_details;
-                    }
-                    GridRow {
-                        name: "Hardware Platform & GPU";
-                        status-text: root.gpu_status;
-                        status-color: root.gpu_color;
-                        details: root.gpu_details;
-                    }
-                }
+                        Card {
+                            title: "🛡 System Health & Hygiene";
 
-                Card {
-                    title: "📦 System Updates";
+                            GridRow {
+                                name: "Kernel & Modules";
+                                status-text: root.kernel_status;
+                                status-color: root.kernel_color;
+                                details: root.kernel_details;
+                            }
+                            GridRow {
+                                name: "Root Storage (/)";
+                                status-text: root.root_status;
+                                status-color: root.root_color;
+                                details: root.root_details;
+                            }
+                            GridRow {
+                                name: "Host Firewall (Shield)";
+                                status-text: root.firewall_status;
+                                status-color: root.firewall_color;
+                                details: root.firewall_details;
+                            }
+                            GridRow {
+                                name: "Failed System Services";
+                                status-text: root.failed_services_status;
+                                status-color: root.failed_services_color;
+                                details: root.failed_services_details;
+                            }
+                            GridRow {
+                                name: "Hardware Platform & GPU";
+                                status-text: root.gpu_status;
+                                status-color: root.gpu_color;
+                                details: root.gpu_details;
+                            }
+                        }
 
-                    GridRow {
-                        name: "Core System (Kernel/Drivers)";
-                        status-text: root.updates_core_text;
-                        status-color: root.updates_core_color;
-                        details: root.updates_core_details;
-                    }
-                    GridRow {
-                        name: "Official Repositories";
-                        status-text: root.updates_repo_text;
-                        status-color: root.updates_repo_color;
-                        details: root.updates_repo_details;
-                    }
-                    GridRow {
-                        name: "AUR Packages";
-                        status-text: root.updates_aur_text;
-                        status-color: root.updates_aur_color;
-                        details: root.updates_aur_details;
-                    }
-                    GridRow {
-                        name: "Security Advisories (CVE)";
-                        status-text: root.cve_status;
-                        status-color: root.cve_color;
-                        details: root.cve_details;
-                    }
-                }
+                        Card {
+                            title: "📦 System Updates";
 
-                Card {
-                    title: "🔌 Third-Party & Peripherals";
+                            GridRow {
+                                name: "Core System (Kernel/Drivers)";
+                                status-text: root.updates_core_text;
+                                status-color: root.updates_core_color;
+                                details: root.updates_core_details;
+                            }
+                            GridRow {
+                                name: "Official Repositories";
+                                status-text: root.updates_repo_text;
+                                status-color: root.updates_repo_color;
+                                details: root.updates_repo_details;
+                            }
+                            GridRow {
+                                name: "AUR Packages";
+                                status-text: root.updates_aur_text;
+                                status-color: root.updates_aur_color;
+                                details: root.updates_aur_details;
+                            }
+                            GridRow {
+                                name: "Security Advisories (CVE)";
+                                status-text: root.cve_status;
+                                status-color: root.cve_color;
+                                details: root.cve_details;
+                            }
+                            GridRow {
+                                name: "Repository Mirrorlist";
+                                status-text: root.mirrors_status;
+                                status-color: root.mirrors_color;
+                                details: root.mirrors_details;
+                            }
+                        }
 
-                    GridRow {
-                        name: "Hardware Firmware (LVFS)";
-                        status-text: root.firmware_status;
-                        status-color: root.firmware_color;
-                        details: root.firmware_details;
-                    }
-                    GridRow {
-                        name: "Orphan Packages";
-                        status-text: root.orphans_status;
-                        status-color: root.orphans_color;
-                        details: root.orphans_details;
+                        Card {
+                            title: "🔌 Third-Party & Peripherals";
+
+                            GridRow {
+                                name: "Hardware Firmware (LVFS)";
+                                status-text: root.firmware_status;
+                                status-color: root.firmware_color;
+                                details: root.firmware_details;
+                            }
+                            GridRow {
+                                name: "Orphan Packages";
+                                status-text: root.orphans_status;
+                                status-color: root.orphans_color;
+                                details: root.orphans_details;
+                            }
+                        }
                     }
                 }
 
@@ -1442,5 +1471,117 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+    }
+
+    // Modal Pre-Flight Mirror Warning Overlay (Covers both LCARS and Classic skins)
+    if (root.upgrade_mirror_warning_visible) : Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000cc;
+
+        TouchArea {}
+
+        dialog_box := Rectangle {
+            width: 540px;
+            vertical-stretch: 0;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: root.is_lcars_skin ? #000000 : Theme.surface;
+            border-width: 2px;
+            border-color: root.is_lcars_skin ? Theme.okuda-amber : Theme.status-amber;
+            border-radius: root.is_lcars_skin ? 0px : Theme.radius-md;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 16px;
+
+                Text {
+                    text: "PRIMARY MIRROR DEAD — PRE-FLIGHT WARNING";
+                    color: root.is_lcars_skin ? Theme.okuda-amber : Theme.status-amber;
+                    font-size: root.is_lcars_skin ? 16px : 14px;
+                    font-weight: 800;
+                    font-family: root.is_lcars_skin ? "Antonio" : "DejaVu Sans, Noto Sans, Liberation Sans, sans-serif";
+                    letter-spacing: root.is_lcars_skin ? 1px : 0px;
+                }
+
+                Text {
+                    text: root.mirror_upgrade_warning;
+                    color: Theme.text-primary;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+
+                if (root.is_lcars_skin) : HorizontalLayout {
+                    spacing: 10px;
+                    vertical-stretch: 0;
+
+                    LcarsActionButton {
+                        text: "REFRESH MIRRORS";
+                        fill-color: Theme.tricorder-cyan;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_mirror_warning_visible = false;
+                            root.refresh_mirrors_from_warning_clicked();
+                        }
+                    }
+
+                    LcarsActionButton {
+                        text: "PROCEED ANYWAY";
+                        fill-color: Theme.okuda-amber;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_mirror_warning_visible = false;
+                            root.confirm_upgrade_anyway_clicked();
+                        }
+                    }
+
+                    LcarsActionButton {
+                        text: "CANCEL";
+                        fill-color: Theme.enterprise-lilac;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_mirror_warning_visible = false;
+                        }
+                    }
+                }
+
+                if (!root.is_lcars_skin) : HorizontalLayout {
+                    spacing: 10px;
+                    vertical-stretch: 0;
+
+                    ActionButton {
+                        text: "REFRESH MIRRORS";
+                        primary: true;
+                        action-color: Theme.status-cyan;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_mirror_warning_visible = false;
+                            root.refresh_mirrors_from_warning_clicked();
+                        }
+                    }
+
+                    ActionButton {
+                        text: "PROCEED ANYWAY";
+                        primary: false;
+                        action-color: Theme.status-amber;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_mirror_warning_visible = false;
+                            root.confirm_upgrade_anyway_clicked();
+                        }
+                    }
+
+                    ActionButton {
+                        text: "CANCEL";
+                        primary: false;
+                        action-color: Theme.text-muted;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_mirror_warning_visible = false;
+                        }
+                    }
+                }
+            }
+        }
     }
 }

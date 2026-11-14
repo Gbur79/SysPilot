@@ -323,9 +323,19 @@ struct SummaryCounts {
 #[derive(Debug, serde::Deserialize)]
 struct SummaryChecksMirrors {
     #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
     arch_primary_alive: Option<bool>,
     #[serde(default)]
     arch_age_days: Option<f64>,
+    #[serde(default)]
+    arch_servers: Option<u32>,
+    #[serde(default)]
+    distro_age_days: Option<f64>,
+    #[serde(default)]
+    distro_servers: Option<u32>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -378,8 +388,13 @@ pub fn load_sys_health_at(state_dir: &Path, root: &Path) -> SysHealth {
                                 .checks
                                 .and_then(|c| c.mirrors)
                                 .map(|m| SysHealthMirrors {
+                                    status: m.status,
+                                    message: m.message,
                                     arch_primary_alive: m.arch_primary_alive,
                                     arch_age_days: m.arch_age_days,
+                                    arch_servers: m.arch_servers,
+                                    distro_age_days: m.distro_age_days,
+                                    distro_servers: m.distro_servers,
                                 });
                         let actionable_remediations =
                             parse_remediations(summary.actionable_remediations);

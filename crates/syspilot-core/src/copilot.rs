@@ -626,6 +626,10 @@ pub fn build_ai_telemetry_markdown_at(root: &Path, status_path: &Path) -> String
     if let Some(err) = &snap.sys_health_parse_error {
         md.push_str(&format!("- **SysHealth Parse Error**: {}\n", err));
     }
+    if snap.mirrors.is_some() {
+        let m = crate::view::format_mirrorlist_state(snap.mirrors.as_ref());
+        md.push_str(&format!("- **Mirrors**: {} ({})\n", m.status, m.details));
+    }
     md
 }
 

@@ -4374,3 +4374,355 @@ fn test_updater_runtime_dir_and_public_wrappers() {
         assert_eq!(summary.check_state, UpdateCheckState::Ok);
     });
 }
+
+#[test]
+fn test_load_sys_health_and_read_system_snapshot_mirrors() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp_dir = std::env::temp_dir().join(format!("syspilot-mirrors-test-{nanos}"));
+    let state_dir = tmp_dir.join("state");
+    let health_dir = state_dir.join("system-health");
+    std::fs::create_dir_all(&health_dir).unwrap();
+
+    // 1. Full 7-field summary.json
+    let summary_json = r#"{
+        "counts": { "errors": 0, "warnings": 1 },
+        "checks": {
+            "mirrors": {
+                "status": "WARN",
+                "message": "Arch mirror status: primary DEAD",
+                "arch_primary_alive": false,
+                "arch_age_days": 12.5,
+                "arch_servers": 15,
+                "distro_age_days": 1.2,
+                "distro_servers": 5
+            }
+        }
+    }"#;
+    std::fs::write(health_dir.join("summary.json"), summary_json).unwrap();
+
+    let health = crate::triage::load_sys_health_at(&state_dir, &tmp_dir);
+    assert!(health.available);
+    assert_eq!(health.warnings, 1);
+    let m = health.mirrors.expect("mirrors parsed");
+    assert_eq!(m.status.as_deref(), Some("WARN"));
+    assert_eq!(
+        m.message.as_deref(),
+        Some("Arch mirror status: primary DEAD")
+    );
+    assert_eq!(m.arch_primary_alive, Some(false));
+    assert_eq!(m.arch_age_days, Some(12.5));
+    assert_eq!(m.arch_servers, Some(15));
+    assert_eq!(m.distro_age_days, Some(1.2));
+    assert_eq!(m.distro_servers, Some(5));
+
+    // 2. read_system_snapshot with health.available == true
+    let status_path = tmp_dir.join("status.json");
+    let status_content = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "updates": { "total": 0, "core_count": 0, "regular_count": 0, "aur_count": 0 },
+        "sys_health": {
+            "available": true,
+            "errors": 0,
+            "warnings": 1,
+            "mirrors": {
+                "status": "WARN",
+                "message": "Arch mirror status: primary DEAD",
+                "arch_primary_alive": false,
+                "arch_age_days": 12.5,
+                "arch_servers": 15,
+                "distro_age_days": 1.2,
+                "distro_servers": 5
+            }
+        }
+    }"#;
+    std::fs::write(&status_path, status_content).unwrap();
+    let snap = crate::models::read_system_snapshot(&status_path).unwrap();
+    assert_eq!(snap.effective_status(), "PRE_FLIGHT_ATTENTION");
+    assert!(snap.mirrors.is_some());
+    assert_eq!(snap.mirrors.as_ref().unwrap().arch_servers, Some(15));
+
+    // 3. read_system_snapshot with health.available == false
+    let status_content_false = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "updates": { "total": 0, "core_count": 0, "regular_count": 0, "aur_count": 0 },
+        "sys_health": {
+            "available": false,
+            "errors": 0,
+            "warnings": 0,
+            "mirrors": {
+                "status": "WARN",
+                "message": "Arch mirror status: primary DEAD",
+                "arch_primary_alive": false
+            }
+        }
+    }"#;
+    std::fs::write(&status_path, status_content_false).unwrap();
+    let snap_false = crate::models::read_system_snapshot(&status_path).unwrap();
+    assert!(snap_false.mirrors.is_none());
+
+    // 4. Legacy minimal JSON in summary.json
+    let legacy_summary = r#"{
+        "checks": {
+            "mirrors": {
+                "arch_primary_alive": false,
+                "arch_age_days": 4.0
+            }
+        }
+    }"#;
+    std::fs::write(health_dir.join("summary.json"), legacy_summary).unwrap();
+    let health_legacy = crate::triage::load_sys_health_at(&state_dir, &tmp_dir);
+    let m_legacy = health_legacy.mirrors.expect("legacy mirrors parsed");
+    assert_eq!(m_legacy.status, None);
+    assert_eq!(m_legacy.message, None);
+    assert_eq!(m_legacy.arch_primary_alive, Some(false));
+    assert_eq!(m_legacy.arch_age_days, Some(4.0));
+    assert_eq!(m_legacy.arch_servers, None);
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+#[test]
+fn test_mirror_predicates_and_view_permutations() {
+    use crate::gaming::GamingReadinessStatus;
+    use crate::models::{SysHealthMirrors, SystemSnapshot};
+    use crate::reboot_safety::RebootSafetyStatus;
+    use crate::view::{
+        RowSeverity, compute_attention_view, format_mirrorlist_state, is_mirrorlist_warning,
+        is_primary_mirror_dead, mirror_upgrade_warning_message,
+    };
+
+    // 1. None
+    assert!(!is_primary_mirror_dead(None));
+    assert!(!is_mirrorlist_warning(None));
+    assert!(mirror_upgrade_warning_message(None).is_none());
+    let row_none = format_mirrorlist_state(None);
+    assert_eq!(row_none.status, "INFO");
+    assert_eq!(row_none.severity, RowSeverity::Info);
+    assert_eq!(
+        row_none.details,
+        "MIRROR TELEMETRY PENDING — RUN DIAGNOSTIC AUDIT"
+    );
+
+    // 2. status: "unknown" + arch_primary_alive: false (MUST NOT trigger primary dead!)
+    let m_unknown = SysHealthMirrors {
+        status: Some("unknown".into()),
+        arch_primary_alive: Some(false),
+        ..Default::default()
+    };
+    assert!(!is_primary_mirror_dead(Some(&m_unknown)));
+    assert!(!is_mirrorlist_warning(Some(&m_unknown)));
+    assert!(mirror_upgrade_warning_message(Some(&m_unknown)).is_none());
+    let row_unknown = format_mirrorlist_state(Some(&m_unknown));
+    assert_eq!(row_unknown.status, "INFO");
+    assert_eq!(
+        row_unknown.details,
+        "MIRROR TELEMETRY PENDING — RUN DIAGNOSTIC AUDIT"
+    );
+
+    // 3. "probe unavail" + "PASS" + arch_primary_alive: false (MUST NOT trigger primary dead!)
+    let m_probe_unavail = SysHealthMirrors {
+        status: Some("PASS".into()),
+        message: Some("probe unavail".into()),
+        arch_primary_alive: Some(false),
+        ..Default::default()
+    };
+    assert!(!is_primary_mirror_dead(Some(&m_probe_unavail)));
+    assert!(!is_mirrorlist_warning(Some(&m_probe_unavail)));
+    assert!(mirror_upgrade_warning_message(Some(&m_probe_unavail)).is_none());
+    let row_probe = format_mirrorlist_state(Some(&m_probe_unavail));
+    assert_eq!(row_probe.status, "PASS");
+    assert_eq!(row_probe.details, "PROBE UNAVAIL");
+
+    // 4. "primary DEAD" + "WARN"
+    let m_dead = SysHealthMirrors {
+        status: Some("WARN".into()),
+        message: Some("Arch mirror status: primary DEAD".into()),
+        arch_primary_alive: Some(false),
+        arch_age_days: Some(7.0),
+        ..Default::default()
+    };
+    assert!(is_primary_mirror_dead(Some(&m_dead)));
+    assert!(is_mirrorlist_warning(Some(&m_dead)));
+    let warn_msg = mirror_upgrade_warning_message(Some(&m_dead)).unwrap();
+    assert!(warn_msg.contains("primary DEAD"));
+    assert!(warn_msg.contains("Guarded System Upgrade"));
+    let row_dead = format_mirrorlist_state(Some(&m_dead));
+    assert_eq!(row_dead.status, "WARN");
+    assert_eq!(row_dead.severity, RowSeverity::Warn);
+    assert!(row_dead.details.contains("PRIMARY MIRROR DEAD"));
+
+    // 5. Age boundary checks (45.0 vs 45.1, 90.0 vs 90.1) with status == None
+    let m_45_0 = SysHealthMirrors {
+        arch_age_days: Some(45.0),
+        ..Default::default()
+    };
+    assert!(!is_mirrorlist_warning(Some(&m_45_0)));
+    assert_eq!(format_mirrorlist_state(Some(&m_45_0)).status, "PASS");
+    assert_eq!(
+        format_mirrorlist_state(Some(&m_45_0)).details,
+        "ARCH MIRRORS HEALTHY (45D)"
+    );
+
+    let m_45_1 = SysHealthMirrors {
+        arch_age_days: Some(45.1),
+        ..Default::default()
+    };
+    assert!(!is_mirrorlist_warning(Some(&m_45_1)));
+    assert_eq!(format_mirrorlist_state(Some(&m_45_1)).status, "INFO");
+    assert_eq!(
+        format_mirrorlist_state(Some(&m_45_1)).details,
+        "ARCH MIRRORLIST AGING (45D)"
+    );
+
+    let m_90_0 = SysHealthMirrors {
+        arch_age_days: Some(90.0),
+        ..Default::default()
+    };
+    assert!(!is_mirrorlist_warning(Some(&m_90_0)));
+    assert_eq!(format_mirrorlist_state(Some(&m_90_0)).status, "INFO");
+    assert_eq!(
+        format_mirrorlist_state(Some(&m_90_0)).details,
+        "ARCH MIRRORLIST AGING (90D)"
+    );
+
+    let m_90_1 = SysHealthMirrors {
+        arch_age_days: Some(90.1),
+        ..Default::default()
+    };
+    assert!(is_mirrorlist_warning(Some(&m_90_1)));
+    assert_eq!(format_mirrorlist_state(Some(&m_90_1)).status, "WARN");
+    assert_eq!(
+        format_mirrorlist_state(Some(&m_90_1)).details,
+        "ARCH MIRRORLIST STALE (90D) — REFRESH RECOMMENDED"
+    );
+
+    // 6. Healthy PASS with servers count
+    let m_healthy = SysHealthMirrors {
+        status: Some("PASS".into()),
+        arch_primary_alive: Some(true),
+        arch_age_days: Some(2.0),
+        arch_servers: Some(10),
+        ..Default::default()
+    };
+    let row_healthy = format_mirrorlist_state(Some(&m_healthy));
+    assert_eq!(row_healthy.status, "PASS");
+    assert_eq!(row_healthy.details, "ARCH MIRRORS HEALTHY (2D, 10 SRV)");
+
+    // 7. Healthy PASS fallback without age or msg
+    let m_online = SysHealthMirrors {
+        status: Some("PASS".into()),
+        arch_primary_alive: Some(true),
+        ..Default::default()
+    };
+    let row_online = format_mirrorlist_state(Some(&m_online));
+    assert_eq!(row_online.status, "PASS");
+    assert_eq!(row_online.details, "REPOSITORY MIRRORS ONLINE & VERIFIED");
+
+    // 8. Legacy minimal JSON: arch_primary_alive == false, arch_age_days == 4.0
+    let m_legacy = SysHealthMirrors {
+        arch_primary_alive: Some(false),
+        arch_age_days: Some(4.0),
+        ..Default::default()
+    };
+    assert!(is_primary_mirror_dead(Some(&m_legacy)));
+    assert!(is_mirrorlist_warning(Some(&m_legacy)));
+    let row_legacy = format_mirrorlist_state(Some(&m_legacy));
+    assert_eq!(row_legacy.status, "WARN");
+    assert_eq!(
+        row_legacy.details,
+        "PRIMARY ARCH MIRROR DEAD (4D) — REFRESH MIRRORS"
+    );
+
+    // 8b. Edge cases for valid_mirror_message and fallback formatting
+    let m_ws = SysHealthMirrors {
+        status: Some("WARN".into()),
+        message: Some("   ".into()),
+        arch_primary_alive: Some(false),
+        ..Default::default()
+    };
+    assert!(is_primary_mirror_dead(Some(&m_ws)));
+    let row_ws = format_mirrorlist_state(Some(&m_ws));
+    assert_eq!(row_ws.status, "WARN");
+    assert_eq!(row_ws.details, "PRIMARY ARCH MIRROR DEAD — REFRESH MIRRORS");
+    let warn_ws = mirror_upgrade_warning_message(Some(&m_ws)).unwrap();
+    assert!(!warn_ws.contains(" (   )"));
+
+    let m_msg_unknown = SysHealthMirrors {
+        status: Some("WARN".into()),
+        message: Some("unknown".into()),
+        arch_primary_alive: Some(false),
+        ..Default::default()
+    };
+    assert!(is_primary_mirror_dead(Some(&m_msg_unknown)));
+    let row_msg_unk = format_mirrorlist_state(Some(&m_msg_unknown));
+    assert_eq!(row_msg_unk.status, "WARN");
+    assert_eq!(
+        row_msg_unk.details,
+        "PRIMARY ARCH MIRROR DEAD — REFRESH MIRRORS"
+    );
+    let warn_unk = mirror_upgrade_warning_message(Some(&m_msg_unknown)).unwrap();
+    assert!(!warn_unk.contains("unknown"));
+
+    let m_pass_none = SysHealthMirrors {
+        status: Some("PASS".into()),
+        message: None,
+        arch_age_days: None,
+        arch_primary_alive: None,
+        ..Default::default()
+    };
+    let row_pass_none = format_mirrorlist_state(Some(&m_pass_none));
+    assert_eq!(row_pass_none.status, "PASS");
+    assert_eq!(
+        row_pass_none.details,
+        "REPOSITORY MIRRORS ONLINE & VERIFIED"
+    );
+
+    let m_unk_msg = SysHealthMirrors {
+        status: Some("unknown".into()),
+        message: Some("Arch: 2d, 20ms, 5 srv".into()),
+        arch_primary_alive: Some(true),
+        ..Default::default()
+    };
+    let row_unk_msg = format_mirrorlist_state(Some(&m_unk_msg));
+    assert_eq!(row_unk_msg.status, "PASS");
+    assert_eq!(row_unk_msg.details, "ARCH: 2D, 20MS, 5 SRV");
+
+    // 9. Status::effective_status & compute_attention_view
+    let snap_dead = SystemSnapshot {
+        status: "ALL_CLEAR".into(),
+        cache_stale: false,
+        mirrors: Some(m_dead),
+        ..Default::default()
+    };
+    assert_eq!(snap_dead.effective_status(), "PRE_FLIGHT_ATTENTION");
+
+    let reboot_safety = RebootSafetyStatus::default();
+    let gaming = GamingReadinessStatus::default();
+    let attn = compute_attention_view(&snap_dead, &reboot_safety, &gaming);
+    assert!(attn.visible);
+    assert_eq!(attn.badge_text, "ATTENTION");
+    assert_eq!(
+        attn.message,
+        "Primary Arch repository mirror is DEAD — refresh mirrors before upgrading"
+    );
+
+    // 10. Errors override attention message
+    let snap_error_and_dead = SystemSnapshot {
+        status: "ALL_CLEAR".into(),
+        errors: 1,
+        cache_stale: false,
+        mirrors: snap_dead.mirrors.clone(),
+        ..Default::default()
+    };
+    assert_eq!(snap_error_and_dead.effective_status(), "ACTION_REQUIRED");
+    let attn_err = compute_attention_view(&snap_error_and_dead, &reboot_safety, &gaming);
+    assert!(attn_err.visible);
+    assert_eq!(attn_err.badge_text, "RED ALERT");
+    assert!(attn_err.message.contains("1 error(s)"));
+}

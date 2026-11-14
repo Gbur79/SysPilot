@@ -1,5 +1,5 @@
 use crate::gaming::GamingReadinessStatus;
-use crate::models::{SystemSnapshot, UpdateCheckState};
+use crate::models::{SysHealthMirrors, SystemSnapshot, UpdateCheckState};
 use crate::reboot_safety::RebootSafetyStatus;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +92,157 @@ pub fn format_repo_updates_state(
     }
 }
 
+fn valid_mirror_message(m: &SysHealthMirrors) -> Option<&str> {
+    m.message
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("unknown"))
+}
+
+pub fn is_primary_mirror_dead(mirrors: Option<&SysHealthMirrors>) -> bool {
+    let Some(m) = mirrors else {
+        return false;
+    };
+    if m.status
+        .as_deref()
+        .map(|s| s.eq_ignore_ascii_case("unknown"))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    if let Some(msg) = valid_mirror_message(m) {
+        return msg.to_ascii_lowercase().contains("primary dead");
+    }
+    m.arch_primary_alive == Some(false)
+        && !matches!(m.status.as_deref(), Some("PASS" | "pass" | "INFO" | "info"))
+}
+
+pub fn is_mirrorlist_warning(mirrors: Option<&SysHealthMirrors>) -> bool {
+    let Some(m) = mirrors else {
+        return false;
+    };
+    if is_primary_mirror_dead(Some(m)) {
+        return true;
+    }
+    if m.status
+        .as_deref()
+        .map(|s| s.eq_ignore_ascii_case("warn"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    m.status.is_none() && m.arch_age_days.is_some_and(|d| d > 90.0)
+}
+
+pub fn mirror_upgrade_warning_message(mirrors: Option<&SysHealthMirrors>) -> Option<String> {
+    if !is_primary_mirror_dead(mirrors) {
+        return None;
+    }
+    let m = mirrors?;
+    let detail = valid_mirror_message(m)
+        .map(|msg| format!(" ({msg})"))
+        .unwrap_or_default();
+    Some(format!(
+        "Primary Arch repository mirror is unreachable (primary DEAD){detail}. It is strongly recommended to refresh and rank mirrors before running Guarded System Upgrade."
+    ))
+}
+
+pub fn format_mirrorlist_state(mirrors: Option<&SysHealthMirrors>) -> RowDisplayState {
+    let Some(m) = mirrors else {
+        return RowDisplayState {
+            status: "INFO".to_string(),
+            severity: RowSeverity::Info,
+            details: "MIRROR TELEMETRY PENDING — RUN DIAGNOSTIC AUDIT".to_string(),
+        };
+    };
+
+    let is_status_unknown = m
+        .status
+        .as_deref()
+        .map(|s| s.eq_ignore_ascii_case("unknown"))
+        .unwrap_or(false);
+    let valid_msg = valid_mirror_message(m);
+
+    if is_status_unknown
+        && valid_msg.is_none()
+        && m.arch_age_days.is_none()
+        && m.arch_primary_alive != Some(true)
+    {
+        return RowDisplayState {
+            status: "INFO".to_string(),
+            severity: RowSeverity::Info,
+            details: "MIRROR TELEMETRY PENDING — RUN DIAGNOSTIC AUDIT".to_string(),
+        };
+    }
+
+    if is_primary_mirror_dead(Some(m)) {
+        let details = if let Some(msg) = valid_msg {
+            format!("PRIMARY MIRROR DEAD • {}", msg.to_ascii_uppercase())
+        } else if let Some(days) = m.arch_age_days {
+            format!("PRIMARY ARCH MIRROR DEAD ({days:.0}D) — REFRESH MIRRORS")
+        } else {
+            "PRIMARY ARCH MIRROR DEAD — REFRESH MIRRORS".to_string()
+        };
+        return RowDisplayState {
+            status: "WARN".to_string(),
+            severity: RowSeverity::Warn,
+            details,
+        };
+    }
+
+    if is_mirrorlist_warning(Some(m)) {
+        let details = if let Some(msg) = valid_msg {
+            msg.to_ascii_uppercase()
+        } else if let Some(days) = m.arch_age_days {
+            format!("ARCH MIRRORLIST STALE ({days:.0}D) — REFRESH RECOMMENDED")
+        } else {
+            "MIRRORLIST WARNING — RUN DIAGNOSTIC AUDIT".to_string()
+        };
+        return RowDisplayState {
+            status: "WARN".to_string(),
+            severity: RowSeverity::Warn,
+            details,
+        };
+    }
+
+    let is_info = m
+        .status
+        .as_deref()
+        .map(|s| s.eq_ignore_ascii_case("info"))
+        .unwrap_or(false)
+        || (m.status.is_none() && m.arch_age_days.is_some_and(|d| d > 45.0));
+
+    if is_info {
+        let details = if let Some(msg) = valid_msg {
+            msg.to_ascii_uppercase()
+        } else if let Some(days) = m.arch_age_days {
+            format!("ARCH MIRRORLIST AGING ({days:.0}D)")
+        } else {
+            "MIRRORLIST ADVISORY — REVIEW MIRRORS".to_string()
+        };
+        return RowDisplayState {
+            status: "INFO".to_string(),
+            severity: RowSeverity::Info,
+            details,
+        };
+    }
+
+    let details = if let Some(msg) = valid_msg {
+        msg.to_ascii_uppercase()
+    } else if let (Some(days), Some(srv)) = (m.arch_age_days, m.arch_servers) {
+        format!("ARCH MIRRORS HEALTHY ({days:.0}D, {srv} SRV)")
+    } else if let Some(days) = m.arch_age_days {
+        format!("ARCH MIRRORS HEALTHY ({days:.0}D)")
+    } else {
+        "REPOSITORY MIRRORS ONLINE & VERIFIED".to_string()
+    };
+    RowDisplayState {
+        status: "PASS".to_string(),
+        severity: RowSeverity::Pass,
+        details,
+    }
+}
+
 pub fn compute_attention_view(
     snapshot: &SystemSnapshot,
     reboot_safety: &RebootSafetyStatus,
@@ -145,6 +296,8 @@ pub fn compute_attention_view(
             "sys-health reported {} error(s) — run sys-health --audit",
             snapshot.errors
         )
+    } else if is_primary_mirror_dead(snapshot.mirrors.as_ref()) {
+        "Primary Arch repository mirror is DEAD — refresh mirrors before upgrading".to_string()
     } else if snapshot.warnings > 0 {
         format!(
             "sys-health reported {} warning(s) — run sys-health --audit",

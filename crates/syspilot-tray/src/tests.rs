@@ -903,3 +903,129 @@ fn test_apply_tray_snapshot_update_cache_invalidation() {
     crate::apply_tray_snapshot_update(&mut tray, snap_ok_zero);
     assert!(tray.updates.is_none());
 }
+
+#[test]
+fn test_tray_mirrors_permutations_status_icon_tooltip_menu() {
+    use ksni::Tray;
+    use syspilot_core::{SysHealthMirrors, SystemSnapshot};
+
+    let (exit_tx, _exit_rx) = tokio::sync::mpsc::channel(1);
+
+    // 1. mirrors: None (nominal)
+    let snap_none = SystemSnapshot {
+        status: "ALL_CLEAR".into(),
+        cache_stale: false,
+        ..Default::default()
+    };
+    let tray_none = crate::tray::SysPilotTray::new(
+        snap_none,
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        exit_tx.clone(),
+    );
+    assert_eq!(tray_none.status(), ksni::Status::Active);
+    assert_eq!(tray_none.icon_name(), "security-high");
+    assert!(!tray_none.tool_tip().description.contains("Mirrors:"));
+
+    // 2. mirrors: status "unknown" + arch_primary_alive: false -> stays Active!
+    let snap_unknown = SystemSnapshot {
+        status: "ALL_CLEAR".into(),
+        cache_stale: false,
+        mirrors: Some(SysHealthMirrors {
+            status: Some("unknown".into()),
+            arch_primary_alive: Some(false),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let tray_unknown = crate::tray::SysPilotTray::new(
+        snap_unknown,
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        exit_tx.clone(),
+    );
+    assert_eq!(tray_unknown.status(), ksni::Status::Active);
+    assert_eq!(tray_unknown.icon_name(), "security-high");
+    assert!(
+        tray_unknown
+            .tool_tip()
+            .description
+            .contains("Mirrors: INFO (MIRROR TELEMETRY PENDING")
+    );
+
+    // 3. mirrors: healthy PASS
+    let snap_healthy = SystemSnapshot {
+        status: "ALL_CLEAR".into(),
+        cache_stale: false,
+        mirrors: Some(SysHealthMirrors {
+            status: Some("PASS".into()),
+            arch_primary_alive: Some(true),
+            arch_age_days: Some(3.0),
+            arch_servers: Some(12),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let tray_healthy = crate::tray::SysPilotTray::new(
+        snap_healthy,
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        exit_tx.clone(),
+    );
+    assert_eq!(tray_healthy.status(), ksni::Status::Active);
+    assert_eq!(tray_healthy.icon_name(), "security-high");
+    assert!(
+        tray_healthy
+            .tool_tip()
+            .description
+            .contains("Mirrors: PASS (ARCH MIRRORS HEALTHY (3D, 12 SRV))")
+    );
+
+    // 4. mirrors: primary DEAD
+    let snap_dead = SystemSnapshot {
+        status: "ALL_CLEAR".into(),
+        cache_stale: false,
+        mirrors: Some(SysHealthMirrors {
+            status: Some("WARN".into()),
+            message: Some("Arch mirror status: primary DEAD".into()),
+            arch_primary_alive: Some(false),
+            arch_age_days: Some(8.0),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let tray_dead = crate::tray::SysPilotTray::new(
+        snap_dead,
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        exit_tx,
+    );
+    assert_eq!(tray_dead.status(), ksni::Status::NeedsAttention);
+    assert_eq!(tray_dead.icon_name(), "dialog-warning");
+    let tt = tray_dead.tool_tip();
+    assert_eq!(
+        tt.title,
+        "SysPilot — Primary Arch mirror DEAD (refresh mirrors)"
+    );
+    assert!(tt.description.contains("Mirrors: WARN"));
+    assert!(tt.description.contains("PRIMARY MIRROR DEAD"));
+
+    let menu = tray_dead.menu();
+    assert!(!menu.is_empty());
+    if let ksni::MenuItem::Standard(header) = &menu[0] {
+        assert_eq!(
+            header.label,
+            "Primary mirror DEAD — refresh mirrors before upgrading"
+        );
+    } else {
+        panic!("Expected standard item for menu header");
+    }
+}

@@ -256,9 +256,19 @@ pub struct StatusAppUpdate {
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SysHealthMirrors {
     #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
     pub arch_primary_alive: Option<bool>,
     #[serde(default)]
     pub arch_age_days: Option<f64>,
+    #[serde(default)]
+    pub arch_servers: Option<u32>,
+    #[serde(default)]
+    pub distro_age_days: Option<f64>,
+    #[serde(default)]
+    pub distro_servers: Option<u32>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -336,6 +346,7 @@ pub struct SystemSnapshot {
     pub app_current_version: String,
     pub app_latest_version: String,
     pub app_release_url: String,
+    pub mirrors: Option<SysHealthMirrors>,
 }
 
 impl Default for SystemSnapshot {
@@ -367,6 +378,7 @@ impl Default for SystemSnapshot {
             app_current_version: env!("CARGO_PKG_VERSION").into(),
             app_latest_version: String::new(),
             app_release_url: String::new(),
+            mirrors: None,
         }
     }
 }
@@ -407,6 +419,7 @@ impl SystemSnapshot {
             || self.sys_health_parse_error.is_some()
             || (self.updates_check_state == UpdateCheckState::Failed
                 && self.updates_consecutive_failures >= 2)
+            || crate::view::is_mirrorlist_warning(self.mirrors.as_ref())
         {
             "PRE_FLIGHT_ATTENTION"
         } else {
@@ -610,6 +623,11 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
 
     let health = parsed.sys_health.unwrap_or_default();
     let sys_health_parse_error = health.parse_error.clone();
+    let mirrors = if health.available {
+        health.mirrors
+    } else {
+        None
+    };
     let (errors, warnings, environment, gaming_detected) = if health.available {
         (
             health.errors,
@@ -683,6 +701,7 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
         },
         app_latest_version: app_update.latest_version,
         app_release_url: app_update.release_url,
+        mirrors,
     })
 }
 

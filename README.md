@@ -77,6 +77,7 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
   - Auto-heals stale lockfiles, enforces graceful process-group termination (`SIGTERM` -> `SIGKILL`), and applies cold-boot failure hysteresis (`UpdateCheckState`).
   - Suspends all background update and disk checks during active gaming sessions (GameMode Freeze).
   - **On-Demand Package Pre-Caching (`[⚡ PRE-CACHE PACKAGES]`):** Interactively pre-downloads multi-gigabyte package archives into `/var/cache/pacman/pkg` prior to initiating the full upgrade, minimizing system lock times.
+  - **Repository Mirrorlist Health & Pre-Flight Guard:** Ingests structured mirrorlist telemetry (`checks.mirrors`) from `sys-health` across the Dashboard (`LCARS` & `Classic`), Tray Sentinel tooltip/menu, and SRE Telemetry export. When the primary Arch repository mirror is unreachable (`primary DEAD`), clicking **Guarded System Upgrade** displays a pre-flight warning modal offering 1-click mirror ranking before proceeding.
 - **Security & Vulnerability Intelligence (`arch-audit`):**
   - Instant, non-blocking CVE tracking parsing official Arch Linux Security Tracker data (`security.archlinux.org`).
   - Distinguishes benign utility updates from High/Critical remote code execution or privilege escalation zero-days.
@@ -128,7 +129,7 @@ The cockpit is organized into 3 streamlined, high-density tabs with proportional
 
 1. **✈ Dashboard (01 DASHBOARD):** Real-time operational cockpit categorized into 3 synchronized telemetry pods/cards:
    - **System Health & Hygiene:** Kernel & modules sync, root storage (`/`), host firewall shield, failed systemd units, and dynamic Hardware Platform & GPU telemetry.
-   - **System Updates:** Core system packages (kernel/drivers), official repository updates, AUR packages, and security advisories (CVE tracking).
+   - **System Updates:** Core system packages (kernel/drivers), official repository updates, AUR packages, security advisories (CVE tracking), and repository mirrorlist health (with pre-flight warning modal before guarded upgrades when primary mirror is dead).
    - **Third-Party & Peripherals:** Hardware firmware (LVFS / `fwupd`) and orphan package detection, paired with quick action triggers (`RUN GUARDED UPGRADE`, `DIAGNOSTIC AUDIT`, `PRUNE ORPHANS`).
 2. **🛠 System Maintenance (02 MAINTAIN):** 8 atomic, battle-tested maintenance pods/cards:
    - 1) **Orphan Package Triage & Prune:** Interactive 3-tier orphan purger preserving optional dependencies (`optdepends`).

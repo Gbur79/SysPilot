@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.1.4] - 2026-11-14
 
-### Added & Hardened / SRE Runtime View, Dual-Skin Attention Banners & Tactical Playbooks (`PATCH-029` & `PATCH-027`)
+### Added & Hardened / SRE Runtime View, Dual-Skin Attention Banners, Tactical Playbooks & Mirrorlist Guard (`PATCH-031`, `PATCH-029`, `PATCH-027`)
+- **Repository Mirrorlist Telemetry & Guarded Upgrade Pre-Flight Warning (`ISSUE-20261018T154614949255-DDE9`, `PATCH-031`)**:
+  - Expanded `SysHealthMirrors` and `SummaryChecksMirrors` with full telemetry ingestion (`status`, `message`, `arch_primary_alive`, `arch_age_days`, `arch_servers`, `distro_age_days`, `distro_servers`).
+  - Added repository mirror status predicates (`is_primary_mirror_dead`, `is_mirrorlist_warning`, `mirror_upgrade_warning_message`, `format_mirrorlist_state`) in `syspilot-core::view`.
+  - Integrated mirrorlist telemetry across the entire stack: tray sentinel tooltips and menu headers (`syspilot-tray`), copilot telemetry exports (`syspilot-core`), and dual-skin UI rows (`POD 02` in LCARS, `Card: System Updates` in Classic with `ScrollView` wrapping at 520px min-height).
+  - Implemented pre-flight modal warning intercepting Guarded System Upgrade when the primary Arch repository mirror is DEAD, offering 1-click mirror ranking before proceeding.
 - **Runtime View & ATTENTION Banners (`PATCH-029`)**:
   - Introduced `core::view` module (`RowSeverity`, `RowDisplayState`, `AttentionView`) providing unified attention banner telemetry and state calculation across LCARS and Classic skins.
   - Implemented `checkupdates` runtime isolation and cold-boot hysteresis closing `ISSUE-20261111T201915171104-C3B4`.

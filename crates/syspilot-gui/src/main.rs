@@ -307,6 +307,26 @@ pub fn format_repo_updates_row(
     (state.status, rgb, state.details)
 }
 
+pub fn format_mirrors_row(
+    snapshot: &syspilot_core::SystemSnapshot,
+) -> (String, (u8, u8, u8), String) {
+    let state = syspilot_core::format_mirrorlist_state(snapshot.mirrors.as_ref());
+    let rgb = RowTone::from(state.severity).rgb();
+    (state.status, rgb, state.details)
+}
+
+pub fn handle_upgrade_click<FW: FnOnce(), FU: FnOnce()>(
+    mirror_primary_dead: bool,
+    show_warning: FW,
+    launch_upgrade: FU,
+) {
+    if mirror_primary_dead {
+        show_warning();
+    } else {
+        launch_upgrade();
+    }
+}
+
 pub fn format_repo_updates(count: u32) -> (&'static str, (u8, u8, u8), String) {
     if count == 0 {
         (
@@ -405,6 +425,9 @@ pub struct DashboardViewModel {
     pub updates_core: RowPresentation,
     pub updates_repo: RowPresentation,
     pub updates_aur: RowPresentation,
+    pub mirrors: RowPresentation,
+    pub mirror_primary_dead: bool,
+    pub mirror_upgrade_warning: String,
     pub firmware: RowPresentation,
     pub orphans: RowPresentation,
     pub self_update: SelfUpdateView,
@@ -436,6 +459,11 @@ impl DashboardViewModel {
         let (core_status, core_rgb, core_details) = format_core_updates(snapshot.core_updates);
         let (repo_status, repo_rgb, repo_details) = format_repo_updates_row(snapshot);
         let (aur_status, aur_rgb, aur_details) = format_aur_updates(snapshot.aur_updates);
+        let (mirrors_status, mirrors_rgb, mirrors_details) = format_mirrors_row(snapshot);
+        let mirror_primary_dead = syspilot_core::is_primary_mirror_dead(snapshot.mirrors.as_ref());
+        let mirror_upgrade_warning =
+            syspilot_core::mirror_upgrade_warning_message(snapshot.mirrors.as_ref())
+                .unwrap_or_default();
         let (fwupd_status, fwupd_rgb, fwupd_details) =
             format_firmware_updates(snapshot.firmware_updates);
         let (orph_status, orph_rgb, orph_details) = format_orphans_row();
@@ -496,6 +524,13 @@ impl DashboardViewModel {
                 rgb: aur_rgb,
                 details: aur_details,
             },
+            mirrors: RowPresentation {
+                status: mirrors_status,
+                rgb: mirrors_rgb,
+                details: mirrors_details,
+            },
+            mirror_primary_dead,
+            mirror_upgrade_warning,
             firmware: RowPresentation {
                 status: fwupd_status.to_string(),
                 rgb: fwupd_rgb,
@@ -536,6 +571,9 @@ impl DashboardViewModel {
             updates_core: offline_row(),
             updates_repo: offline_row(),
             updates_aur: offline_row(),
+            mirrors: offline_row(),
+            mirror_primary_dead: false,
+            mirror_upgrade_warning: String::new(),
             firmware: offline_row(),
             orphans: offline_row(),
             self_update: SelfUpdateView {
@@ -635,6 +673,16 @@ fn apply_dashboard_view_model(ui: &AppWindow, vm: &DashboardViewModel) {
         vm.updates_aur.rgb.2,
     ));
     ui.set_updates_aur_details(vm.updates_aur.details.as_str().into());
+
+    ui.set_mirrors_status(vm.mirrors.status.as_str().into());
+    ui.set_mirrors_color(slint::Color::from_rgb_u8(
+        vm.mirrors.rgb.0,
+        vm.mirrors.rgb.1,
+        vm.mirrors.rgb.2,
+    ));
+    ui.set_mirrors_details(vm.mirrors.details.as_str().into());
+    ui.set_mirror_primary_dead(vm.mirror_primary_dead);
+    ui.set_mirror_upgrade_warning(vm.mirror_upgrade_warning.as_str().into());
 
     ui.set_firmware_status(vm.firmware.status.as_str().into());
     ui.set_firmware_color(slint::Color::from_rgb_u8(
@@ -1031,10 +1079,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui_weak_upgrade = ui.as_weak();
     ui.on_upgrade_clicked(move || {
+        let Some(ui_inst) = ui_weak_upgrade.upgrade() else {
+            return;
+        };
+        let is_primary_dead = ui_inst.get_mirror_primary_dead();
+        let ui_for_launch = ui_weak_upgrade.clone();
+        handle_upgrade_click(
+            is_primary_dead,
+            move || {
+                ui_inst.set_upgrade_mirror_warning_visible(true);
+            },
+            move || {
+                trigger_task_with_post_triage(
+                    ui_for_launch,
+                    &["--upgrade"],
+                    "SysPilot Guarded Upgrade",
+                );
+            },
+        );
+    });
+
+    let ui_weak_confirm_upgrade = ui.as_weak();
+    ui.on_confirm_upgrade_anyway_clicked(move || {
         trigger_task_with_post_triage(
-            ui_weak_upgrade.clone(),
+            ui_weak_confirm_upgrade.clone(),
             &["--upgrade"],
             "SysPilot Guarded Upgrade",
+        );
+    });
+
+    let ui_weak_refresh_mirrors = ui.as_weak();
+    ui.on_refresh_mirrors_from_warning_clicked(move || {
+        trigger_task_with_post_triage(
+            ui_weak_refresh_mirrors.clone(),
+            &["--mirrors"],
+            "SysPilot Mirror Ranking",
         );
     });
 
@@ -1715,6 +1794,7 @@ mod tests {
         assert_eq!(vm.updates_core.status, "PASS");
         assert_eq!(vm.updates_repo.status, "PASS");
         assert_eq!(vm.updates_aur.status, "PASS");
+        assert_eq!(vm.mirrors.status, "INFO");
         assert_eq!(vm.firmware.status, "PASS");
         assert_eq!(vm.orphans.status, "PASS");
         assert!(!vm.self_update.available);
@@ -1874,15 +1954,120 @@ mod tests {
             &vm.updates_core,
             &vm.updates_repo,
             &vm.updates_aur,
+            &vm.mirrors,
             &vm.firmware,
             &vm.orphans,
         ];
-        assert_eq!(rows.len(), 11);
+        assert_eq!(rows.len(), 12);
         for row in rows {
             assert_eq!(row.status, "OFFLINE");
             assert_eq!(row.rgb, RowTone::Offline.rgb());
             assert_eq!(row.details, "TELEMETRY UNAVAILABLE");
         }
+    }
+
+    #[test]
+    fn test_mirrors_presentation_and_upgrade_click_permutations() {
+        let nominal_safety = syspilot_core::RebootSafetyStatus::default();
+        let nominal_sentinels = syspilot_core::SentinelStatus::default();
+        let nominal_gaming = syspilot_core::GamingReadinessStatus::default();
+
+        // 1. None
+        let snap_none = syspilot_core::SystemSnapshot::default();
+        let (st, rgb, det) = format_mirrors_row(&snap_none);
+        assert_eq!(st, "INFO");
+        assert_eq!(rgb, RowTone::Info.rgb());
+        assert_eq!(det, "MIRROR TELEMETRY PENDING — RUN DIAGNOSTIC AUDIT");
+
+        // 2. unknown
+        let snap_unknown = syspilot_core::SystemSnapshot {
+            mirrors: Some(syspilot_core::SysHealthMirrors {
+                status: Some("unknown".into()),
+                arch_primary_alive: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (st, _, det) = format_mirrors_row(&snap_unknown);
+        assert_eq!(st, "INFO");
+        assert_eq!(det, "MIRROR TELEMETRY PENDING — RUN DIAGNOSTIC AUDIT");
+
+        // 3. PASS healthy
+        let snap_pass = syspilot_core::SystemSnapshot {
+            mirrors: Some(syspilot_core::SysHealthMirrors {
+                status: Some("PASS".into()),
+                arch_primary_alive: Some(true),
+                arch_age_days: Some(3.0),
+                arch_servers: Some(8),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (st, rgb, det) = format_mirrors_row(&snap_pass);
+        assert_eq!(st, "PASS");
+        assert_eq!(rgb, RowTone::Pass.rgb());
+        assert_eq!(det, "ARCH MIRRORS HEALTHY (3D, 8 SRV)");
+
+        // 4. INFO aging 46d
+        let snap_aging = syspilot_core::SystemSnapshot {
+            mirrors: Some(syspilot_core::SysHealthMirrors {
+                arch_age_days: Some(46.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (st, rgb, det) = format_mirrors_row(&snap_aging);
+        assert_eq!(st, "INFO");
+        assert_eq!(rgb, RowTone::Info.rgb());
+        assert_eq!(det, "ARCH MIRRORLIST AGING (46D)");
+
+        // 5. WARN stale 91d
+        let snap_stale = syspilot_core::SystemSnapshot {
+            mirrors: Some(syspilot_core::SysHealthMirrors {
+                arch_age_days: Some(91.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (st, rgb, det) = format_mirrors_row(&snap_stale);
+        assert_eq!(st, "WARN");
+        assert_eq!(rgb, RowTone::Warn.rgb());
+        assert_eq!(det, "ARCH MIRRORLIST STALE (91D) — REFRESH RECOMMENDED");
+
+        // 6. WARN primary DEAD
+        let snap_dead = syspilot_core::SystemSnapshot {
+            mirrors: Some(syspilot_core::SysHealthMirrors {
+                status: Some("WARN".into()),
+                message: Some("Arch mirror status: primary DEAD".into()),
+                arch_primary_alive: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &snap_dead,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "Generic GPU",
+            "2.1.4",
+        );
+        assert_eq!(vm.mirrors.status, "WARN");
+        assert!(vm.mirror_primary_dead);
+        assert!(vm.mirror_upgrade_warning.contains("primary DEAD"));
+
+        // 7. handle_upgrade_click
+        let mut warning_shown = false;
+        let mut upgrade_launched = false;
+        handle_upgrade_click(true, || warning_shown = true, || upgrade_launched = true);
+        assert!(warning_shown);
+        assert!(!upgrade_launched);
+
+        warning_shown = false;
+        upgrade_launched = false;
+        handle_upgrade_click(false, || warning_shown = true, || upgrade_launched = true);
+        assert!(!warning_shown);
+        assert!(upgrade_launched);
     }
 
     #[test]
@@ -2071,8 +2256,11 @@ mod tests {
         assert_eq!(ui.get_updates_core_text().as_str(), "PASS");
         assert_eq!(ui.get_updates_repo_text().as_str(), "PASS");
         assert_eq!(ui.get_updates_aur_text().as_str(), "PASS");
+        assert_eq!(ui.get_mirrors_status().as_str(), "INFO");
         assert_eq!(ui.get_firmware_status().as_str(), "PASS");
         assert_eq!(ui.get_orphans_status().as_str(), "PASS");
+        assert!(!ui.get_mirror_primary_dead());
+        assert!(!ui.get_upgrade_mirror_warning_visible());
 
         // Attention snapshot test
         let attention_snap = syspilot_core::SystemSnapshot {
@@ -2088,6 +2276,38 @@ mod tests {
         assert!(ui.get_has_attention());
         assert_eq!(ui.get_attention_badge().as_str(), "ATTENTION");
         assert!(ui.get_attention_message().as_str().contains("2 warning(s)"));
+
+        // Dead primary mirror snapshot binding & modal check
+        let dead_snap = syspilot_core::SystemSnapshot {
+            os: "EndeavourOS".to_string(),
+            kernel: "6.12.8-arch1-1".to_string(),
+            status: "PRE_FLIGHT_ATTENTION".to_string(),
+            cache_stale: false,
+            mirrors: Some(syspilot_core::SysHealthMirrors {
+                status: Some("WARN".into()),
+                message: Some("Arch mirror status: primary DEAD".into()),
+                arch_primary_alive: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        update_ui_from_snapshot(&ui, &dead_snap);
+        assert_eq!(ui.get_mirrors_status().as_str(), "WARN");
+        assert!(ui.get_mirror_primary_dead());
+        assert!(!ui.get_mirror_upgrade_warning().as_str().is_empty());
+        assert!(!ui.get_upgrade_mirror_warning_visible());
+
+        // Test handle_upgrade_click toggling modal
+        handle_upgrade_click(
+            ui.get_mirror_primary_dead(),
+            || ui.set_upgrade_mirror_warning_visible(true),
+            || panic!("Should not trigger upgrade directly when primary is dead"),
+        );
+        assert!(ui.get_upgrade_mirror_warning_visible());
+
+        // Cancel dialog
+        ui.set_upgrade_mirror_warning_visible(false);
+        assert!(!ui.get_upgrade_mirror_warning_visible());
 
         // SRE Telemetry export test
         apply_tab_selection_to_window(&ui, 0);
@@ -2122,6 +2342,8 @@ mod tests {
         assert_eq!(ui.get_updates_core_text().as_str(), "OFFLINE");
         assert_eq!(ui.get_updates_repo_text().as_str(), "OFFLINE");
         assert_eq!(ui.get_updates_aur_text().as_str(), "OFFLINE");
+        assert_eq!(ui.get_mirrors_status().as_str(), "OFFLINE");
+        assert!(!ui.get_mirror_primary_dead());
         assert_eq!(ui.get_firmware_status().as_str(), "OFFLINE");
         assert_eq!(ui.get_orphans_status().as_str(), "OFFLINE");
     }

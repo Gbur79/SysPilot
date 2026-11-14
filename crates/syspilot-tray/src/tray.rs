@@ -196,6 +196,8 @@ impl Tray for SysPilotTray {
                 "SysPilot — {} high-risk security CVE(s) pending",
                 self.snapshot.security_high_risk
             )
+        } else if syspilot_core::is_primary_mirror_dead(self.snapshot.mirrors.as_ref()) {
+            "SysPilot — Primary Arch mirror DEAD (refresh mirrors)".into()
         } else if total_updates > 0 {
             format!("SysPilot — {total_updates} updates available ({core_updates} core)")
         } else if self.gamemode_active {
@@ -204,7 +206,7 @@ impl Tray for SysPilotTray {
             format!("SysPilot — Status: {}", self.snapshot.effective_status())
         };
 
-        let description = format!(
+        let mut description = format!(
             "Updates: {} ({} core)\nReboot: {}\nDisk (/): {}% used ({:.1}G free)",
             total_updates,
             core_updates,
@@ -216,6 +218,10 @@ impl Tray for SysPilotTray {
             self.sentinels.root_used_pct,
             self.sentinels.root_avail_gb,
         );
+        if self.snapshot.mirrors.is_some() {
+            let m = syspilot_core::format_mirrorlist_state(self.snapshot.mirrors.as_ref());
+            description.push_str(&format!("\nMirrors: {} ({})", m.status, m.details));
+        }
 
         ToolTip {
             title,
@@ -243,6 +249,8 @@ impl Tray for SysPilotTray {
             && self.snapshot.updates_consecutive_failures >= 2
         {
             "SysPilot — Official update check failed".into()
+        } else if syspilot_core::is_primary_mirror_dead(self.snapshot.mirrors.as_ref()) {
+            "Primary mirror DEAD — refresh mirrors before upgrading".into()
         } else if total_updates > 0 {
             format!(
                 "Updates Pending — {} packages ({} core), {} errors",

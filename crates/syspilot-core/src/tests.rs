@@ -298,6 +298,7 @@ fn test_write_and_read_status_json_atomic() {
         app_update: None,
         reboot_safety: None,
         gaming_readiness: None,
+        mirrors: None,
     };
 
     write_status_json_atomic(&tmp_file, &payload).unwrap();
@@ -556,6 +557,7 @@ fn test_dynamic_kernel_and_os_fallback() {
         app_update: None,
         reboot_safety: None,
         gaming_readiness: None,
+        mirrors: None,
     };
     write_status_json_atomic(&tmp_file, &payload).unwrap();
 
@@ -1067,6 +1069,7 @@ fn test_concurrent_atomic_status_writes() {
                     app_update: None,
                     reboot_safety: None,
                     gaming_readiness: None,
+                    mirrors: None,
                 };
                 write_status_json_atomic(&p, &payload)
                     .expect("Concurrent atomic write must succeed");
@@ -3080,6 +3083,7 @@ async fn test_stage3_triage_mutants() {
         app_update: None,
         reboot_safety: None,
         gaming_readiness: None,
+        mirrors: None,
     };
     write_status_json_atomic(&out_json_path, &test_payload).unwrap();
     let read_back = read_system_snapshot(&out_json_path).unwrap();
@@ -5080,4 +5084,463 @@ fn test_build_ai_telemetry_markdown_standalone_tools() {
     std::fs::write(&status_path, status_c).unwrap();
     let md_c = crate::copilot::build_ai_telemetry_markdown_at(temp.path(), &status_path);
     assert!(md_c.contains("- **Standalone Tools**: 1 pending (standalone tools)"));
+}
+
+#[tokio::test]
+async fn test_patch035_mirrors_discovery_probe_and_evaluation() {
+    use crate::mock_rig::MockRig;
+    use crate::view::is_primary_mirror_dead;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+
+    // 1. active_mirror_root & default_mirror_timeout & resolve_control_urls
+    assert_eq!(
+        crate::mirrors::active_mirror_root(),
+        std::path::Path::new("/")
+    );
+    assert_eq!(
+        crate::mirrors::default_mirror_timeout(),
+        Duration::from_millis(5500)
+    );
+    crate::mirrors::set_test_mirror_overrides(None, None, None);
+    assert_eq!(
+        crate::mirrors::resolve_control_urls(),
+        vec![
+            "https://archlinux.org".to_string(),
+            "https://1.1.1.1".to_string(),
+            "https://cloudflare.com".to_string(),
+        ]
+    );
+
+    // 2. parse_curl_probe_output
+    assert_eq!(
+        crate::mirrors::parse_curl_probe_output("200|0.123"),
+        Some((200, 123))
+    );
+    assert_eq!(
+        crate::mirrors::parse_curl_probe_output("301|0.400"),
+        Some((301, 400))
+    );
+    assert_eq!(
+        crate::mirrors::parse_curl_probe_output("302|0.401"),
+        Some((302, 401))
+    );
+    assert_eq!(
+        crate::mirrors::parse_curl_probe_output("200|0.0"),
+        Some((200, 0))
+    );
+    assert_eq!(
+        crate::mirrors::parse_curl_probe_output("200|3600.0"),
+        Some((200, 3_600_000))
+    );
+    assert_eq!(crate::mirrors::parse_curl_probe_output("200|-0.1"), None);
+    assert_eq!(crate::mirrors::parse_curl_probe_output("200|3600.1"), None);
+    assert_eq!(crate::mirrors::parse_curl_probe_output("bad"), None);
+    assert_eq!(crate::mirrors::parse_curl_probe_output("200|bad"), None);
+
+    // 3. classify_mirrorlist_kind
+    assert_eq!(
+        crate::mirrors::classify_mirrorlist_kind(std::path::Path::new("/etc/pacman.d/mirrorlist")),
+        "Arch"
+    );
+    assert_eq!(
+        crate::mirrors::classify_mirrorlist_kind(std::path::Path::new(
+            "/etc/pacman.d/arch-mirrorlist"
+        )),
+        "Arch"
+    );
+    assert_eq!(
+        crate::mirrors::classify_mirrorlist_kind(std::path::Path::new(
+            "/etc/pacman.d/mirrorlist-arch"
+        )),
+        "Arch"
+    );
+    assert_eq!(
+        crate::mirrors::classify_mirrorlist_kind(std::path::Path::new(
+            "/etc/pacman.d/endeavouros-mirrorlist"
+        )),
+        "Distro"
+    );
+
+    // 4. expand_mirror_url & parse_mirrorlist_servers
+    assert_eq!(
+        crate::mirrors::expand_mirror_url("https://mirror.org/$repo/$arch", "core", "x86_64"),
+        "https://mirror.org/core/x86_64"
+    );
+    let sample_ml = "\
+        # A comment\n\
+        Server = https://srv1.example.org/$repo/os/$arch\n\
+        Server = \n\
+        OtherKey = foo\n\
+        Server = https://srv2.example.org/$repo/os/$arch\n";
+    let servers = crate::mirrors::parse_mirrorlist_servers(sample_ml);
+    assert_eq!(
+        servers,
+        vec![
+            "https://srv1.example.org/$repo/os/$arch",
+            "https://srv2.example.org/$repo/os/$arch"
+        ]
+    );
+
+    // 5. file_age_days
+    let now = SystemTime::now();
+    let one_day_ago = now - Duration::from_secs(86400);
+    assert_eq!(crate::mirrors::file_age_days(one_day_ago, now), 1.0);
+    let future = now + Duration::from_secs(3600);
+    assert_eq!(crate::mirrors::file_age_days(future, now), 0.0);
+
+    // 6. evaluate_mirror_health boundary matrix
+    // Empty lists -> WARN, \"no active mirrorlists configured\"
+    let h_empty =
+        crate::mirrors::evaluate_mirror_health(&[], crate::mirrors::PrimaryProbeOutcome::Skipped);
+    assert_eq!(h_empty.status.as_deref(), Some("WARN"));
+    assert_eq!(
+        h_empty.message.as_deref(),
+        Some("no active mirrorlists configured")
+    );
+
+    let make_list =
+        |kind: &'static str, age: f64, srv_cnt: usize| crate::mirrors::DiscoveredMirrorlist {
+            repo: "core".to_string(),
+            kind,
+            path: std::path::PathBuf::from(format!("/etc/pacman.d/{kind}-ml")),
+            servers: (0..srv_cnt)
+                .map(|i| format!("https://srv{i}.org/$repo/os/$arch"))
+                .collect(),
+            age_days: Some(age),
+        };
+
+    // Multi-list kind breakdown and label formatting
+    let multi_lists = vec![
+        make_list("Arch", 10.0, 3),
+        make_list("Arch", 20.0, 5),
+        make_list("Distro", 5.0, 4),
+        make_list("Distro", 8.0, 6),
+    ];
+    let h_multi = crate::mirrors::evaluate_mirror_health(
+        &multi_lists,
+        crate::mirrors::PrimaryProbeOutcome::Alive { ms: 25 },
+    );
+    assert_eq!(h_multi.arch_age_days, Some(10.0));
+    assert_eq!(h_multi.arch_servers, Some(3));
+    assert_eq!(h_multi.distro_age_days, Some(5.0));
+    assert_eq!(h_multi.distro_servers, Some(4));
+    assert!(
+        h_multi
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Arch: 10d, 25ms, 3 srv │ Arch: 20d, 5 srv │ Distro: 5d, 4 srv")
+    );
+
+    // Single Distro-only list (total_lists == 1 attaches probe tag)
+    let distro_single = vec![make_list("Distro", 5.0, 4)];
+    let h_distro_1 = crate::mirrors::evaluate_mirror_health(
+        &distro_single,
+        crate::mirrors::PrimaryProbeOutcome::Alive { ms: 25 },
+    );
+    assert_eq!(h_distro_1.arch_servers, None);
+    assert_eq!(h_distro_1.distro_servers, Some(4));
+    assert_eq!(
+        h_distro_1.message.as_deref(),
+        Some("Distro: 5d, 25ms, 4 srv")
+    );
+
+    // Two Distro-only lists (total_lists == 2 does not attach probe tag to Distro)
+    let distro_multi = vec![make_list("Distro", 5.0, 4), make_list("Distro", 8.0, 6)];
+    let h_distro_2 = crate::mirrors::evaluate_mirror_health(
+        &distro_multi,
+        crate::mirrors::PrimaryProbeOutcome::Alive { ms: 25 },
+    );
+    assert_eq!(
+        h_distro_2.message.as_deref(),
+        Some("Distro: 5d, 4 srv │ Distro: 8d, 6 srv")
+    );
+
+    // 10.0d, 2 srv, Alive { ms: 400 } -> PASS (400ms), Alive { ms: 401 } -> INFO (401ms high-latency)
+    let l_norm = vec![make_list("Arch", 10.0, 2)];
+    let h_p400 = crate::mirrors::evaluate_mirror_health(
+        &l_norm,
+        crate::mirrors::PrimaryProbeOutcome::Alive { ms: 400 },
+    );
+    assert_eq!(h_p400.status.as_deref(), Some("PASS"));
+    assert!(h_p400.message.as_ref().unwrap().contains("400ms"));
+
+    let h_p401 = crate::mirrors::evaluate_mirror_health(
+        &l_norm,
+        crate::mirrors::PrimaryProbeOutcome::Alive { ms: 401 },
+    );
+    assert_eq!(h_p401.status.as_deref(), Some("INFO"));
+    assert!(
+        h_p401
+            .message
+            .as_ref()
+            .unwrap()
+            .contains("401ms high-latency")
+    );
+
+    // Age boundaries (Alive { ms: 30 }, 2 srv): 45.0 (PASS), 45.1 (INFO), 90.0 (INFO), 90.1 (WARN)
+    let p_alive = crate::mirrors::PrimaryProbeOutcome::Alive { ms: 30 };
+    let h_a45_0 = crate::mirrors::evaluate_mirror_health(&[make_list("Arch", 45.0, 2)], p_alive);
+    assert_eq!(h_a45_0.status.as_deref(), Some("PASS"));
+
+    let h_a45_1 = crate::mirrors::evaluate_mirror_health(&[make_list("Arch", 45.1, 2)], p_alive);
+    assert_eq!(h_a45_1.status.as_deref(), Some("INFO"));
+
+    let h_a90_0 = crate::mirrors::evaluate_mirror_health(&[make_list("Arch", 90.0, 2)], p_alive);
+    assert_eq!(h_a90_0.status.as_deref(), Some("INFO"));
+
+    let h_a90_1 = crate::mirrors::evaluate_mirror_health(&[make_list("Arch", 90.1, 2)], p_alive);
+    assert_eq!(h_a90_1.status.as_deref(), Some("WARN"));
+
+    // Server redundancy (10.0d, Alive { ms: 30 }): 2 srv (PASS), 1 srv (INFO), 0 srv (WARN)
+    let h_srv2 = crate::mirrors::evaluate_mirror_health(&[make_list("Arch", 10.0, 2)], p_alive);
+    assert_eq!(h_srv2.status.as_deref(), Some("PASS"));
+
+    let h_srv1 = crate::mirrors::evaluate_mirror_health(&[make_list("Arch", 10.0, 1)], p_alive);
+    assert_eq!(h_srv1.status.as_deref(), Some("INFO"));
+
+    let h_srv0 = crate::mirrors::evaluate_mirror_health(&[make_list("Arch", 10.0, 0)], p_alive);
+    assert_eq!(h_srv0.status.as_deref(), Some("WARN"));
+
+    // Probe outcomes (10.0d, 2 srv):
+    // Dead -> WARN + arch_primary_alive == Some(false) + is_primary_mirror_dead == true
+    let h_dead =
+        crate::mirrors::evaluate_mirror_health(&l_norm, crate::mirrors::PrimaryProbeOutcome::Dead);
+    assert_eq!(h_dead.status.as_deref(), Some("WARN"));
+    assert_eq!(h_dead.arch_primary_alive, Some(false));
+    assert!(is_primary_mirror_dead(Some(&h_dead)));
+
+    // Offline -> INFO + arch_primary_alive == None + !is_primary_mirror_dead
+    let h_offline = crate::mirrors::evaluate_mirror_health(
+        &l_norm,
+        crate::mirrors::PrimaryProbeOutcome::Offline,
+    );
+    assert_eq!(h_offline.status.as_deref(), Some("INFO"));
+    assert_eq!(h_offline.arch_primary_alive, None);
+    assert!(!is_primary_mirror_dead(Some(&h_offline)));
+
+    // Unavailable -> PASS + probe unavail
+    let h_unavail = crate::mirrors::evaluate_mirror_health(
+        &l_norm,
+        crate::mirrors::PrimaryProbeOutcome::Unavailable,
+    );
+    assert_eq!(h_unavail.status.as_deref(), Some("PASS"));
+    assert!(
+        h_unavail
+            .message
+            .as_ref()
+            .unwrap()
+            .contains("probe unavail")
+    );
+
+    // Skipped -> PASS
+    let h_skip = crate::mirrors::evaluate_mirror_health(
+        &l_norm,
+        crate::mirrors::PrimaryProbeOutcome::Skipped,
+    );
+    assert_eq!(h_skip.status.as_deref(), Some("PASS"));
+
+    // 7. Hermetic MockRig + check_mirrors_at & check_mirrors
+    let rig = MockRig::empty();
+    crate::exec::reset_spawn_count();
+
+    // Missing pacman.conf -> WARN, spawn_count() == 0
+    let h_no_conf = crate::mirrors::check_mirrors_at(rig.root(), false).await;
+    assert_eq!(h_no_conf.status.as_deref(), Some("WARN"));
+    assert_eq!(crate::exec::spawn_count(), 0);
+
+    // [endeavouros] before [core] + [extra] deduplicating /etc/pacman.d/mirrorlist to "core" + file:// mirror
+    let pacman_conf = "\
+\n\
+[options]\n\
+Architecture = auto\n\
+Include = /etc/pacman.d/options-ignored\n\
+[]\n\
+Include = /etc/pacman.d/empty-sec-ignored\n\
+[endeavouros]\n\
+Include = /etc/pacman.d/endeavouros-mirrorlist\n\
+[extra]\n\
+Include = /etc/pacman.d/mirrorlist\n\
+[core]\n\
+# Include = /etc/pacman.d/commented-mirrorlist\n\
+IgnorePkg = pkg[1]\n\
+SigLevel = /etc/pacman.d/siglevel-ignored\n\
+Include = \n\
+Include = /etc/pacman.d/mirrorlist\n";
+    rig.write("/etc/pacman.conf", pacman_conf);
+    rig.write("/etc/pacman.d/commented-mirrorlist", "# empty\n");
+    rig.write("/etc/pacman.d/options-ignored", "# empty\n");
+    rig.write("/etc/pacman.d/empty-sec-ignored", "# empty\n");
+    rig.write("/etc/pacman.d/siglevel-ignored", "# empty\n");
+
+    let eos_ml = "Server = file:///var/cache/pacman/pkg/$repo/$arch\nServer = file:///var/cache/pacman/backup/$repo/$arch\n";
+    let arch_ml =
+        "Server = file:///srv/repo/$repo/os/$arch\nServer = file:///srv/backup/$repo/os/$arch\n";
+    rig.write("/etc/pacman.d/endeavouros-mirrorlist", eos_ml);
+    rig.write("/etc/pacman.d/mirrorlist", arch_ml);
+
+    // Create core.db in /srv/repo/core/os/x86_64/
+    let arch = std::env::consts::ARCH;
+    rig.write(&format!("/srv/repo/core/os/{arch}/core.db"), "mock_db");
+
+    crate::exec::reset_spawn_count();
+    crate::mirrors::set_test_mirror_overrides(Some(rig.root().to_path_buf()), None, None);
+    let h_file_ok = crate::mirrors::check_mirrors(false).await;
+    assert_eq!(h_file_ok.status.as_deref(), Some("PASS"));
+    assert_eq!(h_file_ok.arch_primary_alive, Some(true));
+    assert_eq!(h_file_ok.arch_servers, Some(2));
+    assert_eq!(h_file_ok.distro_servers, Some(2));
+    assert_eq!(crate::exec::spawn_count(), 0);
+
+    // file:// missing -> WARN, arch_primary_alive == Some(false), spawn_count() == 0
+    let rig_missing = MockRig::empty();
+    let pacman_conf_missing = "\
+[core]\n\
+Include = /etc/pacman.d/mirrorlist\n";
+    rig_missing.write("/etc/pacman.conf", pacman_conf_missing);
+    rig_missing.write(
+        "/etc/pacman.d/mirrorlist",
+        "Server = file:///nonexistent/repo/$repo/$arch\nServer = file:///nonexistent2/repo/$repo/$arch\n",
+    );
+    crate::exec::reset_spawn_count();
+    let h_file_missing = crate::mirrors::check_mirrors_at(rig_missing.root(), false).await;
+    assert_eq!(h_file_missing.status.as_deref(), Some("WARN"));
+    assert_eq!(h_file_missing.arch_primary_alive, Some(false));
+    assert_eq!(crate::exec::spawn_count(), 0);
+
+    // http:// with skip_network == true -> spawn_count() == 0, arch_primary_alive == None
+    let rig_http = MockRig::empty();
+    let pacman_conf_http = "\
+[core]\n\
+Include = /etc/pacman.d/mirrorlist\n";
+    rig_http.write("/etc/pacman.conf", pacman_conf_http);
+    rig_http.write(
+        "/etc/pacman.d/mirrorlist",
+        "Server = http://arch.example.com/$repo/os/$arch\nServer = http://arch2.example.com/$repo/os/$arch\n",
+    );
+    crate::exec::reset_spawn_count();
+    let h_http_skip = crate::mirrors::check_mirrors_at(rig_http.root(), true).await;
+    assert_eq!(crate::exec::spawn_count(), 0);
+    assert_eq!(h_http_skip.arch_primary_alive, None);
+
+    // http:// with mock executable curl (TEST_CURL_BIN, reset via set_test_mirror_overrides(None, None, None) at end)
+    let temp_mock_bin = tempfile::TempDir::new().unwrap();
+    let mock_curl_path = temp_mock_bin.path().join("mock-curl");
+    let mode_path = temp_mock_bin.path().join("curl_mode");
+
+    let script = format!(
+        r#"#!/bin/sh
+MODE=$(cat "{}" 2>/dev/null || echo "200")
+case "$MODE" in
+  200)
+    for arg in "$@"; do
+      if [ "$arg" = "-w" ]; then
+        printf "200|0.042"
+        exit 0
+      fi
+    done
+    exit 0
+    ;;
+  404_CP_UP)
+    for arg in "$@"; do
+      if [ "$arg" = "-w" ]; then
+        printf "404|0.015"
+        exit 22
+      fi
+    done
+    exit 0
+    ;;
+  000_CP_DOWN)
+    for arg in "$@"; do
+      if [ "$arg" = "-w" ]; then
+        printf "000|0.000"
+        exit 7
+      fi
+    done
+    exit 7
+    ;;
+esac
+"#,
+        mode_path.display()
+    );
+    std::fs::write(&mock_curl_path, script).unwrap();
+    std::fs::set_permissions(&mock_curl_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // 200|0.042 (PASS)
+    std::fs::write(&mode_path, "200").unwrap();
+    crate::mirrors::set_test_mirror_overrides(
+        Some(rig_http.root().to_path_buf()),
+        Some(Some(mock_curl_path.clone())),
+        Some(vec!["https://fake-control-plane.org".into()]),
+    );
+    let h_curl_200 = crate::mirrors::check_mirrors(false).await;
+    assert_eq!(h_curl_200.status.as_deref(), Some("PASS"));
+    assert_eq!(h_curl_200.arch_primary_alive, Some(true));
+
+    // 404|0.015 + control plane UP (Dead, WARN)
+    std::fs::write(&mode_path, "404_CP_UP").unwrap();
+    let h_curl_404 = crate::mirrors::check_mirrors(false).await;
+    assert_eq!(h_curl_404.status.as_deref(), Some("WARN"));
+    assert_eq!(h_curl_404.arch_primary_alive, Some(false));
+    assert!(is_primary_mirror_dead(Some(&h_curl_404)));
+
+    // 000|0.000 + control plane DOWN (Offline, INFO)
+    std::fs::write(&mode_path, "000_CP_DOWN").unwrap();
+    let h_curl_000 = crate::mirrors::check_mirrors(false).await;
+    assert_eq!(h_curl_000.status.as_deref(), Some("INFO"));
+    assert_eq!(h_curl_000.arch_primary_alive, None);
+    assert!(!is_primary_mirror_dead(Some(&h_curl_000)));
+
+    // TEST_CURL_BIN = Some(None) (probe unavail)
+    crate::mirrors::set_test_mirror_overrides(
+        Some(rig_http.root().to_path_buf()),
+        Some(None),
+        None,
+    );
+    let h_curl_unavail = crate::mirrors::check_mirrors(false).await;
+    assert!(
+        h_curl_unavail
+            .message
+            .as_ref()
+            .unwrap()
+            .contains("probe unavail")
+    );
+
+    // Clean reset
+    crate::mirrors::set_test_mirror_overrides(None, None, None);
+
+    // 8. read_system_snapshot precedence: StatusJson.mirrors: Some(...) overrides sys_health.mirrors
+    let temp_snap = tempfile::TempDir::new().unwrap();
+    let snap_path = temp_snap.path().join("status.json");
+
+    let snap_json = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "updates": {
+            "total": 0,
+            "core_count": 0,
+            "regular_count": 0,
+            "aur_count": 0,
+            "standalone_count": 0,
+            "check_state": "ok"
+        },
+        "sys_health": {
+            "available": true,
+            "mirrors": {
+                "status": "WARN",
+                "message": "legacy-sys-health"
+            }
+        },
+        "mirrors": {
+            "status": "PASS",
+            "message": "native-syspilot"
+        }
+    }"#;
+    std::fs::write(&snap_path, snap_json).unwrap();
+    let snap = crate::models::read_system_snapshot(&snap_path).unwrap();
+    assert_eq!(
+        snap.mirrors.as_ref().and_then(|m| m.message.as_deref()),
+        Some("native-syspilot")
+    );
 }

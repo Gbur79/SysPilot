@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.1.5] - 2026-11-15
 
-### Added & Hardened / LCARS Cockpit Polish, Standalone Tools Integration & SRE Tooling Hardening (`PATCH-034`, `PATCH-033`, `PATCH-032`)
+### Added & Hardened / LCARS Cockpit Polish, Standalone Tools Integration & SRE Tooling Hardening (`PATCH-035`, `PATCH-034`, `PATCH-033`, `PATCH-032`)
+- **Native Mirrorlist Discovery, Age & Reachability Probe (`PATCH-035`)**: Added `syspilot-core::mirrors` to parse `/etc/pacman.conf` `Include` directives, evaluate Arch and distribution mirrorlist `mtime` age and server redundancy in pure Rust (`0` forks), and probe primary mirror reachability with control-plane offline protection, populating `StatusJson.mirrors` directly during `run_triage()` without requiring a manual `sys-health --audit` run.
 - **LCARS Cockpit UI Polish (`PATCH-034`)**: Removed redundant bordered `ATTENTION` banner in LCARS skin to reclaim `42px` vertical viewport space for `POD 03` (while preserving Classic skin attention banners and `has_attention` view-model bindings), added semantic amber (`#ffb833`) and red-alert (`#ff6b6b`) value text + subtle backlit track gradients in `LcarsTelemetryRow`, and aligned `LcarsTabButton` widths (`128px` inactive / `136px` active) with dimmed Okuda colors (`base-color.mix(#000000, 44%/62%)`).
 - **Standalone Developer Tools & Flatpak Upgrades Integration (`PATCH-033`)**:
   - Expanded `UpdateSummary`, `StatusUpdates`, and `SystemSnapshot` with `standalone_count`/`standalone_updates` and `standalone_tools` vector telemetry.

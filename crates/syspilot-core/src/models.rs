@@ -143,6 +143,8 @@ pub struct StatusJson {
     pub reboot_safety: Option<crate::reboot_safety::RebootSafetyStatus>,
     #[serde(default)]
     pub gaming_readiness: Option<crate::gaming::GamingReadinessStatus>,
+    #[serde(default)]
+    pub mirrors: Option<SysHealthMirrors>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -631,11 +633,11 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
 
     let health = parsed.sys_health.unwrap_or_default();
     let sys_health_parse_error = health.parse_error.clone();
-    let mirrors = if health.available {
+    let mirrors = parsed.mirrors.or(if health.available {
         health.mirrors
     } else {
         None
-    };
+    });
     let (errors, warnings, environment, gaming_detected) = if health.available {
         (
             health.errors,

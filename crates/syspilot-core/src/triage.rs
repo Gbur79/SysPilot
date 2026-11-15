@@ -733,6 +733,7 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let firewall = check_host_firewall().await;
     let reboot_safety = crate::reboot_safety::check_reboot_safety();
     let gaming_readiness = crate::gaming::check_gaming_readiness();
+    let mirrors = crate::mirrors::check_mirrors(skip_slow_probes).await;
     let sys_health = load_sys_health();
 
     let (mut status, mut status_reasons, mut informational_reasons) =
@@ -808,6 +809,7 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
         app_update,
         reboot_safety: Some(reboot_safety),
         gaming_readiness: Some(gaming_readiness),
+        mirrors: Some(mirrors),
     };
 
     let _ = write_status_json_atomic(&status_path, &payload);

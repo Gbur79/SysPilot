@@ -77,7 +77,7 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
   - Auto-heals stale lockfiles, enforces graceful process-group termination (`SIGTERM` -> `SIGKILL`), and applies cold-boot failure hysteresis (`UpdateCheckState`).
   - Suspends all background update and disk checks during active gaming sessions (GameMode Freeze).
   - **On-Demand Package Pre-Caching (`[⚡ PRE-CACHE PACKAGES]`):** Interactively pre-downloads multi-gigabyte package archives into `/var/cache/pacman/pkg` prior to initiating the full upgrade, minimizing system lock times.
-  - **Repository Mirrorlist Health & Pre-Flight Guard:** Ingests structured mirrorlist telemetry (`checks.mirrors`) from `sys-health` across the Dashboard (`LCARS` & `Classic`), Tray Sentinel tooltip/menu, and SRE Telemetry export. When the primary Arch repository mirror is unreachable (`primary DEAD`), clicking **Guarded System Upgrade** displays a pre-flight warning modal offering 1-click mirror ranking before proceeding.
+  - **Native Repository Mirrorlist Health & Pre-Flight Guard (`mirrors.rs`):** Natively parses `/etc/pacman.conf` `Include` directives, evaluates Arch and distro mirrorlist `mtime` age and server redundancy in pure Rust (`0` forks), and probes primary mirror reachability with network control-plane offline protection (with backward-compatible `sys-health` `checks.mirrors` fallback). Telemetry surfaces across the Dashboard (`LCARS` & `Classic`), Tray Sentinel tooltip/menu, and SRE Telemetry export. When the primary Arch repository mirror is unreachable (`primary DEAD`), clicking **Guarded System Upgrade** displays a pre-flight warning modal offering 1-click mirror ranking before proceeding.
 - **Security & Vulnerability Intelligence (`arch-audit`):**
   - Instant, non-blocking CVE tracking parsing official Arch Linux Security Tracker data (`security.archlinux.org`).
   - Distinguishes benign utility updates from High/Critical remote code execution or privilege escalation zero-days.
@@ -245,7 +245,7 @@ sysPilot/
 │   ├── syspilot                 # Unified master CLI & GUI runner
 │   └── syspilot-faf-repair      # Deterministic FAF runner & shortcut repair tool
 ├── crates/
-│   ├── syspilot-core/           # Headless triage engine, semantic view, CVE, LVFS, firewall, terminal & playbooks
+│   ├── syspilot-core/           # Headless triage engine, semantic view, mirrors, CVE, LVFS, firewall, terminal & playbooks
 │   ├── syspilot-tray/           # High-performance 24/7 Rust StatusNotifierItem Tray Sentinel (~3.2 MB RAM)
 │   └── syspilot-gui/            # Native Slint Desktop Cockpit (Dashboard, Maintenance Suite & SRE Playbooks)
 ├── copilot/
@@ -264,7 +264,7 @@ sysPilot/
 ├── autostart/
 │   └── syspilot.desktop         # XDG autostart entry for background tray sentinel
 ├── packaging/
-│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.1.4)
+│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.1.5)
 │   └── syspilot.desktop         # Application menu desktop launcher (Exec=syspilot --gui)
 └── systemd/
     └── syspilot-tray.service    # User systemd service for 24/7 Rust Sentinel

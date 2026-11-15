@@ -94,10 +94,17 @@ async fn refresh(
 
 pub(crate) fn apply_tray_snapshot_update(tray: &mut SysPilotTray, snapshot: SystemSnapshot) {
     tray.snapshot = snapshot;
-    if tray.snapshot.updates_total == 0
-        && tray.snapshot.updates_check_state == syspilot_core::UpdateCheckState::Ok
-    {
-        tray.updates = None;
+    if tray.snapshot.updates_check_state == syspilot_core::UpdateCheckState::Ok {
+        if tray.snapshot.updates_total == 0 {
+            tray.updates = None;
+        } else if let Some(u) = tray.updates.as_mut() {
+            u.core_count = tray.snapshot.core_updates;
+            u.regular_count = tray.snapshot.regular_updates;
+            u.aur_count = tray.snapshot.aur_updates;
+            u.check_state = tray.snapshot.updates_check_state;
+            u.standalone_count = tray.snapshot.standalone_updates;
+            u.standalone_tools = tray.snapshot.standalone_tools.clone();
+        }
     }
 }
 

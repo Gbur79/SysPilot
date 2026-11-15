@@ -251,6 +251,21 @@ pub fn compute_flight_status(inputs: FlightStatusInputs) -> (String, Vec<String>
             .push("Hardware firmware telemetry unavailable (fwupd inactive or missing)".into());
     }
 
+    if inputs.updates.standalone_count > 0 {
+        if inputs.updates.standalone_tools.is_empty() {
+            informational_reasons.push(format!(
+                "{} standalone tool update(s) available",
+                inputs.updates.standalone_count
+            ));
+        } else {
+            let tools = inputs.updates.standalone_tools.join(", ");
+            informational_reasons.push(format!(
+                "{} standalone tool update(s) available ({tools})",
+                inputs.updates.standalone_count
+            ));
+        }
+    }
+
     if inputs.firewall.active {
         informational_reasons.push(format!(
             "Host firewall active ({}: {})",
@@ -476,6 +491,8 @@ pub fn build_status_updates(core: u32, regular: u32, aur: u32) -> StatusUpdates 
         core_count: core,
         regular_count: regular,
         aur_count: aur,
+        standalone_count: 0,
+        standalone_tools: Vec::new(),
         check_state: UpdateCheckState::Ok,
         consecutive_failures: 0,
     }
@@ -495,6 +512,8 @@ pub fn resolve_updates_with_hysteresis(
                 core_count: core,
                 regular_count: regular,
                 aur_count: aur,
+                standalone_count: 0,
+                standalone_tools: Vec::new(),
                 check_state: UpdateCheckState::Ok,
                 consecutive_failures: 0,
             }
@@ -504,6 +523,8 @@ pub fn resolve_updates_with_hysteresis(
             core_count: 0,
             regular_count: 0,
             aur_count: aur,
+            standalone_count: 0,
+            standalone_tools: Vec::new(),
             check_state: UpdateCheckState::Unavailable,
             consecutive_failures: 0,
         },
@@ -522,6 +543,8 @@ pub fn resolve_updates_with_hysteresis(
                 core_count: core,
                 regular_count: regular,
                 aur_count: aur,
+                standalone_count: 0,
+                standalone_tools: Vec::new(),
                 check_state: state,
                 consecutive_failures: failures,
             }
@@ -542,6 +565,8 @@ pub fn resolve_updates_with_hysteresis(
                 core_count: core,
                 regular_count: regular,
                 aur_count: aur,
+                standalone_count: 0,
+                standalone_tools: Vec::new(),
                 check_state: UpdateCheckState::Failed,
                 consecutive_failures: prev_failures.saturating_add(1),
             }
@@ -674,13 +699,19 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let updates = if effective_check_pkgs {
         let official_res = crate::updater::check_official_updates_detailed().await;
         let aur = check_aur_updates().await;
-        resolve_updates_with_hysteresis(cached.as_ref(), official_res, aur)
+        let standalone_report = crate::updater::check_standalone_updates_detailed().await;
+        let mut resolved = resolve_updates_with_hysteresis(cached.as_ref(), official_res, aur);
+        resolved.standalone_count = standalone_report.count;
+        resolved.standalone_tools = standalone_report.pending_tools;
+        resolved
     } else if let Some(ref c) = cached {
         StatusUpdates {
             total: c.updates_total,
             core_count: c.core_updates,
             regular_count: c.regular_updates,
             aur_count: c.aur_updates,
+            standalone_count: c.standalone_updates,
+            standalone_tools: c.standalone_tools.clone(),
             check_state: c.updates_check_state,
             consecutive_failures: c.updates_consecutive_failures,
         }
@@ -690,6 +721,8 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
             core_count: 0,
             regular_count: 0,
             aur_count: 0,
+            standalone_count: 0,
+            standalone_tools: Vec::new(),
             check_state: UpdateCheckState::Unknown,
             consecutive_failures: 0,
         }

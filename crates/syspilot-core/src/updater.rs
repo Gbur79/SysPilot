@@ -11,14 +11,19 @@ pub struct UpdateSummary {
     pub regular_count: u32,
     pub aur_count: u32,
     pub standalone_count: u32,
+    pub standalone_tools: Vec<String>,
     pub core_packages: Vec<String>,
     pub last_checked: Option<Instant>,
     pub check_state: crate::models::UpdateCheckState,
 }
 
 impl UpdateSummary {
+    pub fn package_total(&self) -> u32 {
+        self.core_count + self.regular_count + self.aur_count
+    }
+
     pub fn total(&self) -> u32 {
-        self.core_count + self.regular_count + self.aur_count + self.standalone_count
+        self.package_total() + self.standalone_count
     }
 }
 
@@ -590,7 +595,7 @@ pub fn parse_standalone_updates_str(stdout: &str) -> Result<StandaloneUpdatesRep
     })
 }
 
-pub async fn check_standalone_updates() -> u32 {
+pub async fn check_standalone_updates_detailed() -> StandaloneUpdatesReport {
     let sys_health_opt = {
         #[cfg(test)]
         {
@@ -604,27 +609,31 @@ pub async fn check_standalone_updates() -> u32 {
         }
     };
     let Some(sys_health) = sys_health_opt else {
-        return 0;
+        return StandaloneUpdatesReport::default();
     };
 
     let mut cmd = crate::exec::new_tokio_command(sys_health);
     cmd.args(["--software", "--json"]);
     let output = match run_command_with_timeout(cmd, default_standalone_timeout()).await {
         Ok(out) => out,
-        Err(_) => return 0,
+        Err(_) => return StandaloneUpdatesReport::default(),
     };
 
     if !output.status.success() {
-        return 0;
+        return StandaloneUpdatesReport::default();
     }
 
     match parse_standalone_updates_str(&String::from_utf8_lossy(&output.stdout)) {
-        Ok(r) => r.count,
+        Ok(r) => r,
         Err(e) => {
             eprintln!("[syspilot-core::updater] parse_standalone_updates_str failed: {e}");
-            0
+            StandaloneUpdatesReport::default()
         }
     }
+}
+
+pub async fn check_standalone_updates() -> u32 {
+    check_standalone_updates_detailed().await.count
 }
 
 pub async fn run_full_update_check(gamemode_active: bool) -> Option<UpdateSummary> {
@@ -651,13 +660,14 @@ pub async fn run_full_update_check(gamemode_active: bool) -> Option<UpdateSummar
     };
 
     let aur_count = check_aur_updates().await;
-    let standalone_count = check_standalone_updates().await;
+    let standalone_report = check_standalone_updates_detailed().await;
 
     Some(UpdateSummary {
         core_count,
         regular_count,
         aur_count,
-        standalone_count,
+        standalone_count: standalone_report.count,
+        standalone_tools: standalone_report.pending_tools,
         core_packages,
         last_checked: Some(Instant::now()),
         check_state,

@@ -46,25 +46,31 @@ for root, dirs, files in os.walk(crates_dir):
             continue
         full_path = os.path.join(root, f)
         rel_path = os.path.relpath(full_path, project_root)
-        if is_excluded_file(rel_path):
-            continue
         try:
             with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
-                for line_no, line in enumerate(fh, 1):
-                    if "syspilot-lint:allow" in line:
-                        continue
-                    # Check rig bias
-                    for bias in forbidden_rig_bias:
-                        if bias in line:
-                            violations.append(f"{rel_path}:{line_no}: Forbidden rig-bias pattern '{bias}'")
-                    # Check subprocesses
-                    for proc in forbidden_subprocesses:
-                        if f'Command::new("{proc}")' in line or f'Command::new(&"{proc}")' in line:
-                            violations.append(f"{rel_path}:{line_no}: Forbidden subprocess invocation '{proc}'")
-                        elif proc != "sudo" and f'"{proc}"' in line:
-                            violations.append(f"{rel_path}:{line_no}: Forbidden heavy subprocess pattern '{proc}'")
-                    if os.path.basename(rel_path) != "exec.rs" and "Command::new(" in line:
-                        violations.append(f"{rel_path}:{line_no}: Direct Command::new is forbidden outside exec.rs; use syspilot_core::exec::{{new_tokio_command, new_std_command}}")
+                lines = fh.readlines()
+            for line_no, line in enumerate(lines, 1):
+                if "syspilot-lint:allow" in line:
+                    continue
+                if "set_var(" in line or "remove_var(" in line:
+                    violations.append(f"{rel_path}:{line_no}: Direct env::set_var/remove_var is forbidden; use hermetic *_at(root) parameters or EnvGuard under TERMINAL_TEST_MUTEX")
+            if is_excluded_file(rel_path):
+                continue
+            for line_no, line in enumerate(lines, 1):
+                if "syspilot-lint:allow" in line:
+                    continue
+                # Check rig bias
+                for bias in forbidden_rig_bias:
+                    if bias in line:
+                        violations.append(f"{rel_path}:{line_no}: Forbidden rig-bias pattern '{bias}'")
+                # Check subprocesses
+                for proc in forbidden_subprocesses:
+                    if f'Command::new("{proc}")' in line or f'Command::new(&"{proc}")' in line:
+                        violations.append(f"{rel_path}:{line_no}: Forbidden subprocess invocation '{proc}'")
+                    elif proc != "sudo" and f'"{proc}"' in line:
+                        violations.append(f"{rel_path}:{line_no}: Forbidden heavy subprocess pattern '{proc}'")
+                if os.path.basename(rel_path) != "exec.rs" and "Command::new(" in line:
+                    violations.append(f"{rel_path}:{line_no}: Direct Command::new is forbidden outside exec.rs; use syspilot_core::exec::{{new_tokio_command, new_std_command}}")
         except Exception as e:
             violations.append(f"{rel_path}: read error: {e}")
 
@@ -79,6 +85,61 @@ if check_roots_guards:
             content = fh.read()
         if "libc::getuid() == 0" not in content and "getuid() == 0" not in content:
             violations.append(f"{main_rel}: missing getuid() == 0 zero-root guard")
+
+    # Vertical Slice Telemetry Parity Gate
+    import re
+
+    def extract_struct_fields(file_rel, struct_name):
+        path = os.path.join(project_root, file_rel)
+        if not os.path.exists(path):
+            violations.append(f"{file_rel}: file not found for struct extraction")
+            return []
+        with open(path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+        in_struct = False
+        fields = []
+        field_re = re.compile(r'^(?:pub(?:\([^)]+\))?\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*:')
+        for line in lines:
+            stripped = line.strip()
+            if not in_struct:
+                if re.search(rf'\bstruct\s+{struct_name}\b', stripped):
+                    in_struct = True
+                continue
+            if stripped.startswith("}"):
+                break
+            if not stripped or stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*") or stripped.startswith("#["):
+                continue
+            if "syspilot-lint:allow-unconsumed" in line:
+                continue
+            m = field_re.match(stripped)
+            if m:
+                fields.append(m.group(1))
+        return fields
+
+    sc_fields = extract_struct_fields("crates/syspilot-core/src/triage.rs", "SummaryChecks")
+    view_path = os.path.join(project_root, "crates/syspilot-core/src/view.rs")
+    if os.path.exists(view_path):
+        with open(view_path, "r", encoding="utf-8") as fh:
+            view_content = fh.read()
+        for field in sc_fields:
+            if not re.search(rf'\b{field}\b', view_content):
+                violations.append(f"Vertical slice parity violation: SummaryChecks field '{field}' is unconsumed in crates/syspilot-core/src/view.rs")
+
+    snap_fields = extract_struct_fields("crates/syspilot-core/src/models.rs", "SystemSnapshot")
+    ui_paths = [
+        "crates/syspilot-core/src/view.rs",
+        "crates/syspilot-gui/src/main.rs",
+        "crates/syspilot-tray/src/tray.rs",
+    ]
+    combined_ui_content = ""
+    for ui_rel in ui_paths:
+        ui_path = os.path.join(project_root, ui_rel)
+        if os.path.exists(ui_path):
+            with open(ui_path, "r", encoding="utf-8") as fh:
+                combined_ui_content += fh.read() + "\n"
+    for field in snap_fields:
+        if not re.search(rf'\.{field}\b', combined_ui_content):
+            violations.append(f"Vertical slice parity violation: SystemSnapshot field '{field}' is unconsumed in UI presentation layers")
 
     # Version Synchronization Gate (Cargo.toml == CHANGELOG.md == bin/syspilot == packaging/PKGBUILD)
     import re

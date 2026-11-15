@@ -6,6 +6,10 @@ export component LcarsTelemetryRow inherits HorizontalLayout {
     in property <color> status-color: #22c55e;
     in property <color> value-color: #93c5fd;
 
+    private property <bool> is-alert: root.status == "ALERT" || root.status-color == #ef4444;
+    private property <bool> is-warning: !root.is-alert && (root.status == "UPDATE" || root.status == "WARN" || root.status == "REBOOT" || root.status-color == #f59e0b);
+    out property <color> effective-value-color: root.is-alert ? #ff6b6b : (root.is-warning ? #ffb833 : root.value-color);
+
     height: 24px;
     spacing: 4px;
     vertical-stretch: 0;
@@ -42,7 +46,7 @@ export component LcarsTelemetryRow inherits HorizontalLayout {
     // Mid Segment: [90 ... 90] Pure OLED Backlit Track
     Rectangle {
         height: 24px;
-        background: #00000000;
+        background: (root.is-alert || root.is-warning) ? @linear-gradient(90deg, root.status-color.transparentize(88%) 0%, root.status-color.transparentize(94%) 60%, #00000000 100%) : #00000000;
         horizontal-stretch: 1;
 
         HorizontalLayout {
@@ -51,7 +55,7 @@ export component LcarsTelemetryRow inherits HorizontalLayout {
             alignment: start;
             Text {
                 text: root.value;
-                color: root.value-color;
+                color: root.effective-value-color;
                 font-size: 13px;
                 font-family: "Antonio";
                 font-weight: 700;

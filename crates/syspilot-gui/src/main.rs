@@ -315,6 +315,46 @@ pub fn format_mirrors_row(
     (state.status, rgb, state.details)
 }
 
+pub fn format_standalone_updates_row(
+    snapshot: &syspilot_core::SystemSnapshot,
+) -> (String, (u8, u8, u8), String) {
+    let state = syspilot_core::format_standalone_updates_state(
+        snapshot.standalone_updates,
+        &snapshot.standalone_tools,
+    );
+    let rgb = RowTone::from(state.severity).rgb();
+    (state.status, rgb, state.details)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeClickAction {
+    ShowMirrorWarning,
+    ShowStandalonePrompt,
+    LaunchDirectSystemUpgrade,
+}
+
+pub fn resolve_upgrade_click_action(
+    mirror_primary_dead: bool,
+    standalone_count: u32,
+) -> UpgradeClickAction {
+    if mirror_primary_dead {
+        UpgradeClickAction::ShowMirrorWarning
+    } else if standalone_count > 0 {
+        UpgradeClickAction::ShowStandalonePrompt
+    } else {
+        UpgradeClickAction::LaunchDirectSystemUpgrade
+    }
+}
+
+pub fn sh_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+pub fn build_chained_upgrade_software_cmd(syspilot_bin: &std::path::Path) -> String {
+    let quoted = sh_single_quote(&syspilot_bin.to_string_lossy());
+    format!("{quoted} --upgrade && {quoted} --software")
+}
+
 pub fn handle_upgrade_click<FW: FnOnce(), FU: FnOnce()>(
     mirror_primary_dead: bool,
     show_warning: FW,
@@ -425,6 +465,8 @@ pub struct DashboardViewModel {
     pub updates_core: RowPresentation,
     pub updates_repo: RowPresentation,
     pub updates_aur: RowPresentation,
+    pub updates_standalone: RowPresentation,
+    pub standalone_updates_count: u32,
     pub mirrors: RowPresentation,
     pub mirror_primary_dead: bool,
     pub mirror_upgrade_warning: String,
@@ -459,6 +501,8 @@ impl DashboardViewModel {
         let (core_status, core_rgb, core_details) = format_core_updates(snapshot.core_updates);
         let (repo_status, repo_rgb, repo_details) = format_repo_updates_row(snapshot);
         let (aur_status, aur_rgb, aur_details) = format_aur_updates(snapshot.aur_updates);
+        let (standalone_status, standalone_rgb, standalone_details) =
+            format_standalone_updates_row(snapshot);
         let (mirrors_status, mirrors_rgb, mirrors_details) = format_mirrors_row(snapshot);
         let mirror_primary_dead = syspilot_core::is_primary_mirror_dead(snapshot.mirrors.as_ref());
         let mirror_upgrade_warning =
@@ -524,6 +568,12 @@ impl DashboardViewModel {
                 rgb: aur_rgb,
                 details: aur_details,
             },
+            updates_standalone: RowPresentation {
+                status: standalone_status,
+                rgb: standalone_rgb,
+                details: standalone_details,
+            },
+            standalone_updates_count: snapshot.standalone_updates,
             mirrors: RowPresentation {
                 status: mirrors_status,
                 rgb: mirrors_rgb,
@@ -571,6 +621,8 @@ impl DashboardViewModel {
             updates_core: offline_row(),
             updates_repo: offline_row(),
             updates_aur: offline_row(),
+            updates_standalone: offline_row(),
+            standalone_updates_count: 0,
             mirrors: offline_row(),
             mirror_primary_dead: false,
             mirror_upgrade_warning: String::new(),
@@ -673,6 +725,15 @@ fn apply_dashboard_view_model(ui: &AppWindow, vm: &DashboardViewModel) {
         vm.updates_aur.rgb.2,
     ));
     ui.set_updates_aur_details(vm.updates_aur.details.as_str().into());
+
+    ui.set_updates_standalone_status(vm.updates_standalone.status.as_str().into());
+    ui.set_updates_standalone_color(slint::Color::from_rgb_u8(
+        vm.updates_standalone.rgb.0,
+        vm.updates_standalone.rgb.1,
+        vm.updates_standalone.rgb.2,
+    ));
+    ui.set_updates_standalone_details(vm.updates_standalone.details.as_str().into());
+    ui.set_standalone_updates_count(vm.standalone_updates_count as i32);
 
     ui.set_mirrors_status(vm.mirrors.status.as_str().into());
     ui.set_mirrors_color(slint::Color::from_rgb_u8(
@@ -900,6 +961,69 @@ fn trigger_task_with_post_triage(ui_weak: slint::Weak<AppWindow>, args: &[&str],
     });
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_CAN_SPAWN_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    static TEST_SHELL_TASK_RECORDER: std::cell::RefCell<Option<Vec<(String, String)>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn trigger_shell_task_with_post_triage(
+    ui_weak: slint::Weak<AppWindow>,
+    command: &str,
+    title: &str,
+) -> bool {
+    #[cfg(test)]
+    let can_spawn = TEST_CAN_SPAWN_OVERRIDE
+        .with(|cell| cell.get())
+        .unwrap_or_else(can_spawn_task);
+    #[cfg(not(test))]
+    let can_spawn = can_spawn_task();
+
+    if !can_spawn {
+        return false;
+    }
+
+    #[cfg(test)]
+    {
+        let recorded = TEST_SHELL_TASK_RECORDER.with(|rec| {
+            if let Some(list) = rec.borrow_mut().as_mut() {
+                list.push((command.to_string(), title.to_string()));
+                true
+            } else {
+                false
+            }
+        });
+        if recorded {
+            return true;
+        }
+    }
+
+    syspilot_core::spawn_shell_task_with_callback(command, title, move || {
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(err) => {
+                    eprintln!("SysPilot: failed to build runtime for post-triage: {err}");
+                    return;
+                }
+            };
+            rt.block_on(async {
+                let _ = syspilot_core::run_triage(true, false).await;
+                let status_path = syspilot_core::get_status_path();
+                let snapshot_res = syspilot_core::read_system_snapshot(&status_path);
+                let _ = ui_weak.upgrade_in_event_loop(move |ui_inst| match snapshot_res {
+                    Ok(snapshot) => update_ui_from_snapshot(&ui_inst, &snapshot),
+                    Err(err) => update_ui_from_error(&ui_inst, &err),
+                });
+            });
+        });
+    })
+    .is_ok()
+}
+
 fn trigger_shell_task(command: &str, title: &str) {
     if !can_spawn_task() {
         return;
@@ -1083,28 +1207,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return;
         };
         let is_primary_dead = ui_inst.get_mirror_primary_dead();
-        let ui_for_launch = ui_weak_upgrade.clone();
-        handle_upgrade_click(
-            is_primary_dead,
-            move || {
+        let standalone_count = ui_inst.get_standalone_updates_count().max(0) as u32;
+        match resolve_upgrade_click_action(is_primary_dead, standalone_count) {
+            UpgradeClickAction::ShowMirrorWarning => {
                 ui_inst.set_upgrade_mirror_warning_visible(true);
-            },
-            move || {
+            }
+            UpgradeClickAction::ShowStandalonePrompt => {
+                ui_inst.set_upgrade_standalone_prompt_visible(true);
+            }
+            UpgradeClickAction::LaunchDirectSystemUpgrade => {
                 trigger_task_with_post_triage(
-                    ui_for_launch,
+                    ui_weak_upgrade.clone(),
                     &["--upgrade"],
                     "SysPilot Guarded Upgrade",
                 );
-            },
-        );
+            }
+        }
     });
 
     let ui_weak_confirm_upgrade = ui.as_weak();
     ui.on_confirm_upgrade_anyway_clicked(move || {
+        let Some(ui_inst) = ui_weak_confirm_upgrade.upgrade() else {
+            return;
+        };
+        let standalone_count = ui_inst.get_standalone_updates_count().max(0) as u32;
+        match resolve_upgrade_click_action(false, standalone_count) {
+            UpgradeClickAction::ShowStandalonePrompt => {
+                ui_inst.set_upgrade_standalone_prompt_visible(true);
+            }
+            UpgradeClickAction::LaunchDirectSystemUpgrade
+            | UpgradeClickAction::ShowMirrorWarning => {
+                trigger_task_with_post_triage(
+                    ui_weak_confirm_upgrade.clone(),
+                    &["--upgrade"],
+                    "SysPilot Guarded Upgrade",
+                );
+            }
+        }
+    });
+
+    let ui_weak_upgrade_with_software = ui.as_weak();
+    ui.on_confirm_upgrade_with_software_clicked(move || {
+        let syspilot_bin = syspilot_core::resolve_syspilot()
+            .unwrap_or_else(|| std::path::PathBuf::from("syspilot"));
+        let chained_cmd = build_chained_upgrade_software_cmd(&syspilot_bin);
+        let _ = trigger_shell_task_with_post_triage(
+            ui_weak_upgrade_with_software.clone(),
+            &chained_cmd,
+            "SysPilot Full Upgrade (System + Tools)",
+        );
+    });
+
+    let ui_weak_upgrade_system_only = ui.as_weak();
+    ui.on_confirm_upgrade_system_only_clicked(move || {
         trigger_task_with_post_triage(
-            ui_weak_confirm_upgrade.clone(),
+            ui_weak_upgrade_system_only.clone(),
             &["--upgrade"],
-            "SysPilot Guarded Upgrade",
+            "SysPilot Guarded Upgrade (System Only)",
+        );
+    });
+
+    let ui_weak_run_software = ui.as_weak();
+    ui.on_run_software_clicked(move || {
+        trigger_task_with_post_triage(
+            ui_weak_run_software.clone(),
+            &["--software"],
+            "SysPilot Standalone Software Updates",
         );
     });
 
@@ -1327,6 +1495,7 @@ mod tests {
 
     #[test]
     fn test_compute_maintenance_window_height() {
+        assert_eq!(compute_maintenance_window_height(9), 680.0);
         assert_eq!(compute_maintenance_window_height(8), 630.0);
         assert_eq!(compute_maintenance_window_height(0), 590.0);
         assert_eq!(compute_maintenance_window_height(10), 740.0);
@@ -2262,20 +2431,42 @@ mod tests {
         assert!(!ui.get_mirror_primary_dead());
         assert!(!ui.get_upgrade_mirror_warning_visible());
 
-        // Attention snapshot test
+        // Attention & multi-status matrix snapshot test (REBOOT, UPDATE, WARN, ALERT, 1 FAILED) across LCARS & Classic
         let attention_snap = syspilot_core::SystemSnapshot {
             os: "EndeavourOS".to_string(),
             kernel: "6.12.8-arch1-1".to_string(),
             status: "PRE_FLIGHT_ATTENTION".to_string(),
             warnings: 2,
+            reboot_pending: true,
+            core_updates: 1,
+            regular_updates: 3,
+            aur_updates: 2,
+            firmware_updates: 1,
+            standalone_updates: 2,
+            standalone_tools: vec!["goose".into(), "uv".into()],
+            security_high_risk: 1,
+            errors: 1,
             cache_stale: false,
+            updates_check_state: syspilot_core::UpdateCheckState::Ok,
             ..Default::default()
         };
         update_ui_from_snapshot(&ui, &attention_snap);
         assert!(!ui.get_has_error());
         assert!(ui.get_has_attention());
-        assert_eq!(ui.get_attention_badge().as_str(), "ATTENTION");
-        assert!(ui.get_attention_message().as_str().contains("2 warning(s)"));
+        assert_eq!(ui.get_attention_badge().as_str(), "RED ALERT");
+        assert!(ui.get_attention_message().as_str().contains("1 error(s)"));
+        assert_eq!(ui.get_kernel_status().as_str(), "REBOOT");
+        assert_eq!(ui.get_updates_core_text().as_str(), "UPDATE");
+        assert_eq!(ui.get_updates_repo_text().as_str(), "UPDATE");
+        assert_eq!(ui.get_updates_aur_text().as_str(), "UPDATE");
+        assert_eq!(ui.get_firmware_status().as_str(), "UPDATE");
+        assert_eq!(ui.get_updates_standalone_status().as_str(), "UPDATE");
+        assert_eq!(ui.get_cve_status().as_str(), "ALERT");
+        assert_eq!(ui.get_failed_services_status().as_str(), "1 FAILED");
+        ui.set_is_lcars_skin(false);
+        assert!(ui.get_has_attention());
+        ui.set_is_lcars_skin(true);
+        assert!(ui.get_has_attention());
 
         // Dead primary mirror snapshot binding & modal check
         let dead_snap = syspilot_core::SystemSnapshot {
@@ -2346,6 +2537,24 @@ mod tests {
         assert!(!ui.get_mirror_primary_dead());
         assert_eq!(ui.get_firmware_status().as_str(), "OFFLINE");
         assert_eq!(ui.get_orphans_status().as_str(), "OFFLINE");
+        assert_eq!(ui.get_updates_standalone_status().as_str(), "OFFLINE");
+        assert_eq!(ui.get_standalone_updates_count(), 0);
+        assert_eq!(ui.get_maintenance_item_count(), 9);
+
+        // Standalone upgrade prompt modal bindings in both skins
+        ui.set_is_lcars_skin(true);
+        assert!(!ui.get_upgrade_standalone_prompt_visible());
+        ui.set_upgrade_standalone_prompt_visible(true);
+        assert!(ui.get_upgrade_standalone_prompt_visible());
+        ui.set_upgrade_standalone_prompt_visible(false);
+        assert!(!ui.get_upgrade_standalone_prompt_visible());
+
+        ui.set_is_lcars_skin(false);
+        assert!(!ui.get_upgrade_standalone_prompt_visible());
+        ui.set_upgrade_standalone_prompt_visible(true);
+        assert!(ui.get_upgrade_standalone_prompt_visible());
+        ui.set_upgrade_standalone_prompt_visible(false);
+        assert!(!ui.get_upgrade_standalone_prompt_visible());
     }
 
     #[test]
@@ -2495,5 +2704,156 @@ mod tests {
         assert!(terminal_calls.borrow().is_empty());
         assert!(shell_calls.borrow().is_empty());
         assert_eq!(custom_calls.get(), 1);
+    }
+
+    #[test]
+    fn test_dashboard_view_model_standalone_matrix() {
+        let nominal_safety = syspilot_core::RebootSafetyStatus::default();
+        let nominal_sentinels = syspilot_core::SentinelStatus::default();
+        let nominal_gaming = syspilot_core::GamingReadinessStatus::default();
+
+        // 1. Standalone count 0
+        let snap_0 = syspilot_core::SystemSnapshot {
+            standalone_updates: 0,
+            standalone_tools: vec![],
+            ..Default::default()
+        };
+        let vm_0 = DashboardViewModel::from_snapshot_inputs(
+            &snap_0,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "NVIDIA GeForce GTX 970",
+            "2.1.4",
+        );
+        assert_eq!(vm_0.updates_standalone.status, "PASS");
+        assert_eq!(
+            vm_0.updates_standalone.details,
+            "ALL STANDALONE TOOLS UP TO DATE"
+        );
+        assert_eq!(vm_0.standalone_updates_count, 0);
+
+        // 2. Standalone count 1
+        let snap_1 = syspilot_core::SystemSnapshot {
+            standalone_updates: 1,
+            standalone_tools: vec!["goose".into()],
+            ..Default::default()
+        };
+        let vm_1 = DashboardViewModel::from_snapshot_inputs(
+            &snap_1,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "NVIDIA GeForce GTX 970",
+            "2.1.4",
+        );
+        assert_eq!(vm_1.updates_standalone.status, "UPDATE");
+        assert_eq!(vm_1.updates_standalone.details, "1 UPDATE PENDING (GOOSE)");
+        assert_eq!(vm_1.standalone_updates_count, 1);
+
+        // 3. Standalone count N (2)
+        let snap_n = syspilot_core::SystemSnapshot {
+            standalone_updates: 2,
+            standalone_tools: vec!["goose".into(), "uv".into()],
+            ..Default::default()
+        };
+        let vm_n = DashboardViewModel::from_snapshot_inputs(
+            &snap_n,
+            &nominal_safety,
+            &nominal_sentinels,
+            &nominal_gaming,
+            "NVIDIA GeForce GTX 970",
+            "2.1.4",
+        );
+        assert_eq!(vm_n.updates_standalone.status, "UPDATE");
+        assert_eq!(
+            vm_n.updates_standalone.details,
+            "2 UPDATES PENDING (GOOSE, UV)"
+        );
+        assert_eq!(vm_n.standalone_updates_count, 2);
+
+        // 4. from_error
+        let vm_err = DashboardViewModel::from_error("connection reset", "2.1.4");
+        assert_eq!(vm_err.updates_standalone.status, "OFFLINE");
+        assert_eq!(vm_err.updates_standalone.details, "TELEMETRY UNAVAILABLE");
+        assert_eq!(vm_err.standalone_updates_count, 0);
+    }
+
+    #[test]
+    fn test_resolve_upgrade_click_action_permutations() {
+        // Dead mirror always forces warning modal, regardless of standalone tools
+        assert_eq!(
+            resolve_upgrade_click_action(true, 0),
+            UpgradeClickAction::ShowMirrorWarning
+        );
+        assert_eq!(
+            resolve_upgrade_click_action(true, 3),
+            UpgradeClickAction::ShowMirrorWarning
+        );
+
+        // Alive mirror with standalone updates prompts for upgrade scope
+        assert_eq!(
+            resolve_upgrade_click_action(false, 1),
+            UpgradeClickAction::ShowStandalonePrompt
+        );
+        assert_eq!(
+            resolve_upgrade_click_action(false, 5),
+            UpgradeClickAction::ShowStandalonePrompt
+        );
+
+        // Alive mirror without standalone tools launches direct upgrade
+        assert_eq!(
+            resolve_upgrade_click_action(false, 0),
+            UpgradeClickAction::LaunchDirectSystemUpgrade
+        );
+    }
+
+    #[test]
+    fn test_sh_single_quote_and_build_chained_upgrade_software_cmd() {
+        use std::path::Path;
+
+        assert_eq!(sh_single_quote("simple"), "'simple'");
+        assert_eq!(sh_single_quote("with spaces"), "'with spaces'");
+        assert_eq!(sh_single_quote("don't fail"), "'don'\\''t fail'");
+
+        let bin_clean = Path::new("/usr/bin/syspilot");
+        assert_eq!(
+            build_chained_upgrade_software_cmd(bin_clean),
+            "'/usr/bin/syspilot' --upgrade && '/usr/bin/syspilot' --software"
+        );
+
+        let bin_tricky = Path::new("/opt/my tools/user's_syspilot");
+        assert_eq!(
+            build_chained_upgrade_software_cmd(bin_tricky),
+            "'/opt/my tools/user'\\''s_syspilot' --upgrade && '/opt/my tools/user'\\''s_syspilot' --software"
+        );
+    }
+
+    #[test]
+    fn test_trigger_shell_task_with_post_triage_thread_local() {
+        let ui_weak = slint::Weak::<AppWindow>::default();
+        let cmd = "'/usr/bin/syspilot' --upgrade && '/usr/bin/syspilot' --software";
+        let title = "SysPilot Full Upgrade";
+
+        // Initialize recorder
+        TEST_SHELL_TASK_RECORDER.with(|rec| *rec.borrow_mut() = Some(Vec::new()));
+
+        // Case 1: TEST_CAN_SPAWN_OVERRIDE = Some(false) -> returns false and records nothing
+        TEST_CAN_SPAWN_OVERRIDE.with(|cell| cell.set(Some(false)));
+        let spawned = trigger_shell_task_with_post_triage(ui_weak.clone(), cmd, title);
+        assert!(!spawned);
+        let recorded = TEST_SHELL_TASK_RECORDER.with(|rec| rec.borrow().clone().unwrap());
+        assert!(recorded.is_empty());
+
+        // Case 2: TEST_CAN_SPAWN_OVERRIDE = Some(true) -> returns true and records command/title
+        TEST_CAN_SPAWN_OVERRIDE.with(|cell| cell.set(Some(true)));
+        let spawned2 = trigger_shell_task_with_post_triage(ui_weak, cmd, title);
+        assert!(spawned2);
+        let recorded2 = TEST_SHELL_TASK_RECORDER.with(|rec| rec.borrow().clone().unwrap());
+        assert_eq!(recorded2, vec![(cmd.to_string(), title.to_string())]);
+
+        // Reset both thread-locals to None before finishing
+        TEST_CAN_SPAWN_OVERRIDE.with(|cell| cell.set(None));
+        TEST_SHELL_TASK_RECORDER.with(|rec| *rec.borrow_mut() = None);
     }
 }

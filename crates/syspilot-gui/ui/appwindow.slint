@@ -33,6 +33,9 @@ export component AppWindow inherits Window {
     callback tab_changed(int);
     callback confirm_upgrade_anyway_clicked();
     callback refresh_mirrors_from_warning_clicked();
+    callback run_software_clicked();
+    callback confirm_upgrade_with_software_clicked();
+    callback confirm_upgrade_system_only_clicked();
 
     // Callbacks - Maintenance
     callback run_orphans_clicked();
@@ -54,7 +57,7 @@ export component AppWindow inherits Window {
     in-out property <bool> is_refreshing: false;
     in-out property <string> refresh_label: "04  REFRESH DATA";
     in-out property <bool> is_lcars_skin: true;
-    in property <int> maintenance_item_count: 8;
+    in property <int> maintenance_item_count: 9;
 
     // Header & Attention Properties
     in property <bool> has_error: false;
@@ -130,6 +133,12 @@ export component AppWindow inherits Window {
     in property <bool> mirror_primary_dead: false;
     in property <string> mirror_upgrade_warning: "";
     in-out property <bool> upgrade_mirror_warning_visible: false;
+
+    in property <string> updates_standalone_status: "--";
+    in property <color> updates_standalone_color: Theme.text-muted;
+    in property <string> updates_standalone_details: "Pending telemetry...";
+    in property <int> standalone_updates_count: 0;
+    in-out property <bool> upgrade_standalone_prompt_visible: false;
 
     // Copilot Properties
     in property <string> copilot_status_text: "Probing Copilot connection...";
@@ -547,27 +556,6 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if (!root.has_error && root.has_attention) : Rectangle {
-                    vertical-stretch: 0;
-                    height: 34px;
-                    background: Theme.okuda-amber.transparentize(85%);
-                    border-color: Theme.okuda-amber;
-                    border-width: 1px;
-                    border-radius: Theme.radius-sm;
-                    HorizontalLayout {
-                        padding-left: 10px;
-                        padding-right: 10px;
-                        Text {
-                            text: root.attention_badge + " // " + root.attention_message;
-                            color: Theme.okuda-amber;
-                            font-size: 12px;
-                            font-weight: 700;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-                    }
-                }
-
                 // TAB 0: DASHBOARD VIEW
                 if (root.active-tab == 0) : ScrollView {
                     vertical-stretch: 1;
@@ -684,6 +672,13 @@ export component AppWindow inherits Window {
                                 accent-color: Theme.tricorder-cyan;
                                 status-color: root.orphans_color;
                             }
+                            LcarsTelemetryRow {
+                                label: "STANDALONE TOOLS (CLI/APP)";
+                                value: root.updates_standalone_details;
+                                status: root.updates_standalone_status;
+                                accent-color: Theme.tricorder-cyan;
+                                status-color: root.updates_standalone_color;
+                            }
                         }
                     }
                 }
@@ -778,6 +773,16 @@ export component AppWindow inherits Window {
                             accent-color: Theme.okuda-peach;
                             action-color: Theme.okuda-peach;
                             clicked => { root.run_self_update_clicked(); }
+                        }
+
+                        LcarsMaintenanceRow {
+                            code: "09 // SOFTWARE";
+                            title: "Standalone Software Updates (CLI / Flatpak)";
+                            description: "Upgrades standalone developer tools (Goose, UV) and Flatpak runtimes via sys-health.";
+                            action-text: "RUN SOFTWARE";
+                            accent-color: Theme.tricorder-cyan;
+                            action-color: Theme.tricorder-cyan;
+                            clicked => { root.run_software_clicked(); }
                         }
                     }
                 }
@@ -1207,6 +1212,12 @@ export component AppWindow inherits Window {
                                 status-color: root.orphans_color;
                                 details: root.orphans_details;
                             }
+                            GridRow {
+                                name: "Standalone Tools (CLI/App)";
+                                status-text: root.updates_standalone_status;
+                                status-color: root.updates_standalone_color;
+                                details: root.updates_standalone_details;
+                            }
                         }
                     }
                 }
@@ -1347,6 +1358,14 @@ export component AppWindow inherits Window {
                         action-text: root.self_update_btn_text;
                         action-color: Theme.status-purple;
                         clicked => { root.run_self_update_clicked(); }
+                    }
+
+                    MaintenanceCard {
+                        title: "9) 🧰 Standalone Software Updates (CLI / Flatpak)";
+                        description: "Upgrades standalone developer tools (Goose, UV) and Flatpak runtimes via sys-health.";
+                        action-text: "RUN SOFTWARE";
+                        action-color: Theme.status-cyan;
+                        clicked => { root.run_software_clicked(); }
                     }
                 }
             }
@@ -1578,6 +1597,139 @@ export component AppWindow inherits Window {
                         vertical-stretch: 0;
                         clicked => {
                             root.upgrade_mirror_warning_visible = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Modal Standalone Software Upgrade Prompt (Dual-Skin LCARS + Classic)
+    if (root.upgrade_standalone_prompt_visible) : Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000cc;
+
+        TouchArea {}
+
+        standalone_box := Rectangle {
+            width: 580px;
+            vertical-stretch: 0;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: root.is_lcars_skin ? #000000 : Theme.surface;
+            border-width: 2px;
+            border-color: root.is_lcars_skin ? Theme.tricorder-cyan : Theme.status-cyan;
+            border-radius: root.is_lcars_skin ? 0px : Theme.radius-md;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 16px;
+
+                Text {
+                    text: root.is_lcars_skin ? "UPGRADE SCOPE SELECTION // STANDALONE TOOLS DETECTED" : "Upgrade Scope Selection — Standalone Tools Detected";
+                    color: root.is_lcars_skin ? Theme.tricorder-cyan : Theme.status-cyan;
+                    font-size: root.is_lcars_skin ? 16px : 14px;
+                    font-weight: 800;
+                    font-family: root.is_lcars_skin ? "Antonio" : "DejaVu Sans, Noto Sans, Liberation Sans, sans-serif";
+                    letter-spacing: root.is_lcars_skin ? 1px : 0px;
+                }
+
+                Text {
+                    text: "Standalone developer tools / Flatpak packages have pending updates. Select upgrade scope:";
+                    color: Theme.text-primary;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+
+                if (root.is_lcars_skin) : HorizontalLayout {
+                    spacing: 8px;
+                    vertical-stretch: 0;
+
+                    LcarsActionButton {
+                        text: "SYSTEM + TOOLS";
+                        fill-color: Theme.tricorder-cyan;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_standalone_prompt_visible = false;
+                            root.confirm_upgrade_with_software_clicked();
+                        }
+                    }
+
+                    LcarsActionButton {
+                        text: "SYSTEM ONLY";
+                        fill-color: Theme.okuda-amber;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_standalone_prompt_visible = false;
+                            root.confirm_upgrade_system_only_clicked();
+                        }
+                    }
+
+                    LcarsActionButton {
+                        text: "TOOLS ONLY";
+                        fill-color: Theme.enterprise-lilac;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_standalone_prompt_visible = false;
+                            root.run_software_clicked();
+                        }
+                    }
+
+                    LcarsActionButton {
+                        text: "CANCEL";
+                        fill-color: Theme.status-red;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_standalone_prompt_visible = false;
+                        }
+                    }
+                }
+
+                if (!root.is_lcars_skin) : HorizontalLayout {
+                    spacing: 8px;
+                    vertical-stretch: 0;
+
+                    ActionButton {
+                        text: "SYSTEM + TOOLS";
+                        primary: true;
+                        action-color: Theme.status-cyan;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_standalone_prompt_visible = false;
+                            root.confirm_upgrade_with_software_clicked();
+                        }
+                    }
+
+                    ActionButton {
+                        text: "SYSTEM ONLY";
+                        primary: false;
+                        action-color: Theme.status-amber;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_standalone_prompt_visible = false;
+                            root.confirm_upgrade_system_only_clicked();
+                        }
+                    }
+
+                    ActionButton {
+                        text: "TOOLS ONLY";
+                        primary: false;
+                        action-color: Theme.status-purple;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_standalone_prompt_visible = false;
+                            root.run_software_clicked();
+                        }
+                    }
+
+                    ActionButton {
+                        text: "CANCEL";
+                        primary: false;
+                        action-color: Theme.text-muted;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.upgrade_standalone_prompt_visible = false;
                         }
                     }
                 }

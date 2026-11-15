@@ -92,6 +92,46 @@ pub fn format_repo_updates_state(
     }
 }
 
+pub fn format_standalone_updates_state(count: u32, tools: &[String]) -> RowDisplayState {
+    let cleaned_tools: Vec<String> = tools
+        .iter()
+        .map(|t| t.trim().to_ascii_uppercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let effective_count = count.max(cleaned_tools.len() as u32);
+
+    if effective_count == 0 {
+        RowDisplayState {
+            status: "PASS".to_string(),
+            severity: RowSeverity::Pass,
+            details: "ALL STANDALONE TOOLS UP TO DATE".to_string(),
+        }
+    } else if effective_count == 1 {
+        let details = if let Some(tool) = cleaned_tools.first() {
+            format!("1 UPDATE PENDING ({tool})")
+        } else {
+            "1 STANDALONE TOOL UPDATE PENDING".to_string()
+        };
+        RowDisplayState {
+            status: "UPDATE".to_string(),
+            severity: RowSeverity::Update,
+            details,
+        }
+    } else {
+        let details = if !cleaned_tools.is_empty() {
+            let tools_str = cleaned_tools.join(", ");
+            format!("{effective_count} UPDATES PENDING ({tools_str})")
+        } else {
+            format!("{effective_count} STANDALONE TOOL UPDATES PENDING")
+        };
+        RowDisplayState {
+            status: "UPDATE".to_string(),
+            severity: RowSeverity::Update,
+            details,
+        }
+    }
+}
+
 fn valid_mirror_message(m: &SysHealthMirrors) -> Option<&str> {
     m.message
         .as_deref()

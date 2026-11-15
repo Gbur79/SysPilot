@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.5] - 2026-11-15
+
+### Added & Hardened / LCARS Cockpit Polish, Standalone Tools Integration & SRE Tooling Hardening (`PATCH-034`, `PATCH-033`, `PATCH-032`)
+- **LCARS Cockpit UI Polish (`PATCH-034`)**: Removed redundant bordered `ATTENTION` banner in LCARS skin to reclaim `42px` vertical viewport space for `POD 03` (while preserving Classic skin attention banners and `has_attention` view-model bindings), added semantic amber (`#ffb833`) and red-alert (`#ff6b6b`) value text + subtle backlit track gradients in `LcarsTelemetryRow`, and aligned `LcarsTabButton` widths (`128px` inactive / `136px` active) with dimmed Okuda colors (`base-color.mix(#000000, 44%/62%)`).
+- **Standalone Developer Tools & Flatpak Upgrades Integration (`PATCH-033`)**:
+  - Expanded `UpdateSummary`, `StatusUpdates`, and `SystemSnapshot` with `standalone_count`/`standalone_updates` and `standalone_tools` vector telemetry.
+  - Implemented `check_standalone_updates_detailed` in `syspilot-core::updater` and `format_standalone_updates_state` in `syspilot-core::view`.
+  - Added non-escalating informational flight status reasons in triage for standalone software updates.
+  - Upgraded `syspilot-tray` tooltip with detailed standalone tool breakdown (`Tools: N standalone updates (goose, uv)`) and cache synchronization.
+  - Extended dual-skin GUI with LCARS `POD 03` / Classic `Third-Party & Peripherals` telemetry rows, maintenance item 09 (`Standalone Software Updates`), and interactive pre-flight upgrade modal prompting between System + Tools, System Only, and Tools Only scopes.
+  - Added `dev-tools/check-deps.sh` non-mutating Cargo dependency dry-run auditor and `.github/dependabot.yml` weekly Cargo security updates.
+- **SRE Tooling Hardening (`PATCH-032`)**: Added Vertical Slice Telemetry Parity (`SummaryChecks` and `SystemSnapshot` presentation consumer verification) and `Env Mutation Guard` (`env::set_var` / `remove_var` ban across all crates and tests outside `EnvGuard`) to `dev-tools/lint-universalism.sh`, migrated remaining test env mutations to hermetic `*_at` / `EnvGuard`, and added a cold `summary.json` contractual regression test.
+
 ## [2.1.4] - 2026-11-14
 
 ### Added & Hardened / SRE Runtime View, Dual-Skin Attention Banners, Tactical Playbooks & Mirrorlist Guard (`PATCH-031`, `PATCH-029`, `PATCH-027`)

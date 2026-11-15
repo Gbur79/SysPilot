@@ -178,6 +178,10 @@ pub struct StatusUpdates {
     pub regular_count: u32,
     #[serde(default)]
     pub aur_count: u32,
+    #[serde(default)]
+    pub standalone_count: u32,
+    #[serde(default)]
+    pub standalone_tools: Vec<String>,
     #[serde(default, deserialize_with = "de_check_state")]
     pub check_state: UpdateCheckState,
     #[serde(default)]
@@ -328,14 +332,16 @@ pub struct SystemSnapshot {
     pub core_updates: u32,
     pub regular_updates: u32,
     pub aur_updates: u32,
+    pub standalone_updates: u32,
+    pub standalone_tools: Vec<String>,
     pub updates_check_state: UpdateCheckState,
     pub updates_consecutive_failures: u32,
     pub reboot_pending: bool,
     pub kernel: String,
     pub os: String,
-    pub gaming_detected: bool,
+    pub gaming_detected: bool, // syspilot-lint:allow-unconsumed (superseded by GamingReadinessStatus)
     pub gaming_mode: bool,
-    pub modified: Option<SystemTime>,
+    pub modified: Option<SystemTime>, // syspilot-lint:allow-unconsumed (consumed via age_seconds/age_label)
     pub cache_stale: bool,
     pub source_error: Option<String>,
     pub sys_health_parse_error: Option<String>,
@@ -345,7 +351,7 @@ pub struct SystemSnapshot {
     pub app_update_available: bool,
     pub app_current_version: String,
     pub app_latest_version: String,
-    pub app_release_url: String,
+    pub app_release_url: String, // syspilot-lint:allow-unconsumed (release metadata field)
     pub mirrors: Option<SysHealthMirrors>,
 }
 
@@ -360,6 +366,8 @@ impl Default for SystemSnapshot {
             core_updates: 0,
             regular_updates: 0,
             aur_updates: 0,
+            standalone_updates: 0,
+            standalone_tools: Vec::new(),
             updates_check_state: UpdateCheckState::Unknown,
             updates_consecutive_failures: 0,
             reboot_pending: false,
@@ -679,6 +687,8 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
         core_updates: parsed.updates.core_count,
         regular_updates: parsed.updates.regular_count,
         aur_updates: parsed.updates.aur_count,
+        standalone_updates: parsed.updates.standalone_count,
+        standalone_tools: parsed.updates.standalone_tools,
         updates_check_state: parsed.updates.check_state,
         updates_consecutive_failures: parsed.updates.consecutive_failures,
         reboot_pending: parsed.reboot_pending,

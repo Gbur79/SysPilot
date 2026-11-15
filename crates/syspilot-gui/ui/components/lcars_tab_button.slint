@@ -5,9 +5,9 @@ export component LcarsTabButton inherits Rectangle {
     in property <color> active-color: #ffaa66;
     callback clicked();
 
-    width: root.active ? 132px : 124px;
+    width: root.active ? 136px : 128px;
     height: root.active ? 46px : 40px;
-    background: root.active ? @linear-gradient(90deg, root.active-color.darker(5%) 0%, root.active-color.brighter(6%) 100%) : (touch.has-hover ? #222b3d : #151c27);
+    background: root.active ? @linear-gradient(90deg, root.active-color.darker(5%) 0%, root.active-color.brighter(6%) 100%) : (touch.has-hover ? root.base-color.mix(#000000, 62%) : root.base-color.mix(#000000, 44%));
     border-radius: 0px;
     drop-shadow-blur: root.active ? 12px : 0px;
     drop-shadow-color: root.active ? root.active-color.transparentize(45%) : #00000000;
@@ -30,7 +30,7 @@ export component LcarsTabButton inherits Rectangle {
         alignment: space-between;
         Text {
             text: root.text;
-            color: root.active ? #000000 : (touch.has-hover ? #94a3b8 : #64748b);
+            color: root.active ? #000000 : (touch.has-hover ? #f8fafc : #e2e8f0);
             font-size: 13px;
             font-family: "Antonio";
             font-weight: 700;

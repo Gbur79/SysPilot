@@ -282,6 +282,8 @@ fn test_write_and_read_status_json_atomic() {
             core_count: 1,
             regular_count: 1,
             aur_count: 0,
+            standalone_count: 0,
+            standalone_tools: Vec::new(),
             check_state: UpdateCheckState::Ok,
             consecutive_failures: 0,
         },
@@ -440,12 +442,11 @@ fn test_agy_copilot_detection() {
     let _guard = TERMINAL_TEST_MUTEX
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    let mut env = EnvGuard::new();
     use crate::copilot::get_copilot_info;
 
-    unsafe {
-        std::env::set_var("SYSPILOT_COPILOT_CMD", "agy --agent eos-admin");
-        std::env::set_var("COPILOT_LABEL", "Antigravity (eos-admin)");
-    }
+    env.set("SYSPILOT_COPILOT_CMD", "agy --agent eos-admin");
+    env.set("COPILOT_LABEL", "Antigravity (eos-admin)");
 
     let info = get_copilot_info();
     assert_eq!(info.provider, "Antigravity CLI");
@@ -454,11 +455,6 @@ fn test_agy_copilot_detection() {
         info.badge_label(),
         "🤖 Antigravity (eos-admin) (Antigravity CLI)"
     );
-
-    unsafe {
-        std::env::remove_var("SYSPILOT_COPILOT_CMD");
-        std::env::remove_var("COPILOT_LABEL");
-    }
 }
 
 #[test]
@@ -586,7 +582,7 @@ impl EnvGuard {
             self.vars.push((key, std::env::var_os(key)));
         }
         unsafe {
-            std::env::set_var(key, val);
+            std::env::set_var(key, val); // syspilot-lint:allow-env
         }
     }
 
@@ -596,7 +592,7 @@ impl EnvGuard {
             self.vars.push((key, std::env::var_os(key)));
         }
         unsafe {
-            std::env::remove_var(key);
+            std::env::remove_var(key); // syspilot-lint:allow-env
         }
     }
 }
@@ -606,8 +602,8 @@ impl Drop for EnvGuard {
         for (k, v) in self.vars.drain(..).rev() {
             unsafe {
                 match v {
-                    Some(val) => std::env::set_var(k, val),
-                    None => std::env::remove_var(k),
+                    Some(val) => std::env::set_var(k, val), // syspilot-lint:allow-env
+                    None => std::env::remove_var(k),        // syspilot-lint:allow-env
                 }
             }
         }
@@ -845,22 +841,16 @@ fn test_copilot_timeout_enforcement() {
     let _guard = TERMINAL_TEST_MUTEX
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    let mut env = EnvGuard::new();
     use crate::copilot::execute_copilot_query_with_timeout;
     use std::time::Duration;
 
-    unsafe {
-        std::env::set_var("SYSPILOT_COPILOT_CMD", "bash -c 'sleep 5' --");
-        std::env::set_var("COPILOT_LABEL", "Test Sleep");
-    }
+    env.set("SYSPILOT_COPILOT_CMD", "bash -c 'sleep 5' --");
+    env.set("COPILOT_LABEL", "Test Sleep");
 
     let start = std::time::Instant::now();
     let res = execute_copilot_query_with_timeout("test query", Duration::from_millis(150));
     let elapsed = start.elapsed();
-
-    unsafe {
-        std::env::remove_var("SYSPILOT_COPILOT_CMD");
-        std::env::remove_var("COPILOT_LABEL");
-    }
 
     assert!(res.is_err(), "Query must fail due to timeout");
     let err = res.unwrap_err();
@@ -909,11 +899,10 @@ fn test_updater_offline_mode_resilience() {
         .unwrap();
 
     rt.block_on(async {
-        unsafe {
-            std::env::set_var("SYSPILOT_BIN_CHECKUPDATES", "/nonexistent/checkupdates/bin");
-            std::env::set_var("SYSPILOT_BIN_YAY", "/nonexistent/yay/bin");
-            std::env::set_var("SYSPILOT_BIN_SYS_HEALTH", "/nonexistent/sys-health/bin");
-        }
+        let mut env = EnvGuard::new();
+        env.set("SYSPILOT_BIN_CHECKUPDATES", "/nonexistent/checkupdates/bin");
+        env.set("SYSPILOT_BIN_YAY", "/nonexistent/yay/bin");
+        env.set("SYSPILOT_BIN_SYS_HEALTH", "/nonexistent/sys-health/bin");
 
         let (core, regular, pkgs) = check_official_updates().await;
         assert_eq!(core, 0);
@@ -925,12 +914,6 @@ fn test_updater_offline_mode_resilience() {
 
         let standalone = check_standalone_updates().await;
         assert_eq!(standalone, 0);
-
-        unsafe {
-            std::env::remove_var("SYSPILOT_BIN_CHECKUPDATES");
-            std::env::remove_var("SYSPILOT_BIN_YAY");
-            std::env::remove_var("SYSPILOT_BIN_SYS_HEALTH");
-        }
     });
 }
 
@@ -1068,6 +1051,8 @@ fn test_concurrent_atomic_status_writes() {
                         core_count: 0,
                         regular_count: 0,
                         aur_count: 0,
+                        standalone_count: 0,
+                        standalone_tools: Vec::new(),
                         check_state: UpdateCheckState::Ok,
                         consecutive_failures: 0,
                     },
@@ -1222,15 +1207,7 @@ fn test_sys_health_ingests_mirrors_telemetry() {
     }"#;
     std::fs::write(summary_dir.join("summary.json"), summary_content).unwrap();
 
-    unsafe {
-        std::env::set_var("XDG_STATE_HOME", &state_dir);
-    }
-
-    let health = crate::triage::load_sys_health();
-
-    unsafe {
-        std::env::remove_var("XDG_STATE_HOME");
-    }
+    let health = crate::triage::load_sys_health_at(&state_dir, &state_dir);
 
     assert!(health.available);
     assert_eq!(health.errors, 1);
@@ -4725,4 +4702,382 @@ fn test_mirror_predicates_and_view_permutations() {
     assert!(attn_err.visible);
     assert_eq!(attn_err.badge_text, "RED ALERT");
     assert!(attn_err.message.contains("1 error(s)"));
+}
+
+#[test]
+fn test_cold_summary_json_unknown_probes_yield_flight_ready() {
+    use crate::gaming::GamingReadinessStatus;
+    use crate::models::SystemSnapshot;
+    use crate::reboot_safety::RebootSafetyStatus;
+    use crate::triage::{apply_sys_health_gates, load_sys_health_at};
+    use crate::view::{
+        RowSeverity, compute_attention_view, format_mirrorlist_state, is_mirrorlist_warning,
+        is_primary_mirror_dead,
+    };
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let state_dir = tmp_dir.path().join("state");
+    let health_dir = state_dir.join("system-health");
+    std::fs::create_dir_all(&health_dir).unwrap();
+
+    let cold_summary = r#"{
+        "schema_version": "2.0",
+        "timestamp": "2026-11-14T00:00:00+00:00",
+        "status": "ALL_CLEAR",
+        "counts": { "errors": 0, "warnings": 0 },
+        "flagged": [],
+        "actionable_remediations": [],
+        "checks": {
+            "desktop_indexers": { "status": "unknown", "observations": [] },
+            "journal_rate_limit": { "status": "unknown", "rate_limited": false },
+            "mirrors": {
+                "status": "unknown",
+                "message": "unknown",
+                "arch_age_days": null,
+                "arch_primary_alive": false,
+                "arch_servers": 0,
+                "distro_age_days": null,
+                "distro_servers": 0
+            },
+            "standalone_software": { "status": "unknown", "pending_count": 0, "pending_tools": [] }
+        },
+        "environment": { "os": "EndeavourOS", "kernel": "6.12.0-zen" },
+        "gaming": { "detected": false }
+    }"#;
+    std::fs::write(health_dir.join("summary.json"), cold_summary).unwrap();
+
+    let health = load_sys_health_at(&state_dir, tmp_dir.path());
+    assert!(health.available);
+    assert_eq!(health.errors, 0);
+    assert_eq!(health.warnings, 0);
+    assert!(health.parse_error.is_none());
+
+    let mut status = "FLIGHT_READY".to_string();
+    let mut reasons = Vec::new();
+    apply_sys_health_gates(&mut status, &mut reasons, &health);
+    assert_eq!(status, "FLIGHT_READY");
+    assert!(reasons.is_empty());
+
+    let snap = SystemSnapshot {
+        status,
+        status_reasons: reasons,
+        cache_stale: false,
+        mirrors: health.mirrors,
+        ..Default::default()
+    };
+    assert!(!is_primary_mirror_dead(snap.mirrors.as_ref()));
+    assert!(!is_mirrorlist_warning(snap.mirrors.as_ref()));
+    assert_eq!(snap.effective_status(), "FLIGHT_READY");
+
+    let row = format_mirrorlist_state(snap.mirrors.as_ref());
+    assert_eq!(row.status, "INFO");
+    assert_eq!(row.severity, RowSeverity::Info);
+
+    let attn = compute_attention_view(
+        &snap,
+        &RebootSafetyStatus::default(),
+        &GamingReadinessStatus::default(),
+    );
+    assert!(!attn.visible);
+}
+
+#[test]
+fn test_update_summary_package_total_vs_total() {
+    let summary = crate::updater::UpdateSummary {
+        core_count: 2,
+        regular_count: 5,
+        aur_count: 3,
+        standalone_count: 4,
+        standalone_tools: vec!["goose".into(), "uv".into()],
+        ..Default::default()
+    };
+    assert_eq!(summary.package_total(), 10);
+    assert_eq!(summary.total(), 14);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_check_standalone_updates_detailed_matrix() {
+    let temp = tempfile::tempdir().unwrap();
+
+    // 0 updates
+    let script_0 = temp.path().join("sys_health_0.sh");
+    std::fs::write(
+        &script_0,
+        "#!/bin/sh\necho '{\"goose\":{\"update_available\":false}}'\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script_0, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::updater::set_test_updater_bins(None, Some(script_0));
+    let rep0 = crate::updater::check_standalone_updates_detailed().await;
+    assert_eq!(rep0.count, 0);
+    assert!(rep0.pending_tools.is_empty());
+
+    // 1 update
+    let script_1 = temp.path().join("sys_health_1.sh");
+    std::fs::write(
+        &script_1,
+        "#!/bin/sh\necho '{\"goose\":{\"update_available\":true}}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script_1, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::updater::set_test_updater_bins(None, Some(script_1));
+    let rep1 = crate::updater::check_standalone_updates_detailed().await;
+    assert_eq!(rep1.count, 1);
+    assert_eq!(rep1.pending_tools, vec!["goose".to_string()]);
+
+    // N updates
+    let script_n = temp.path().join("sys_health_n.sh");
+    std::fs::write(
+        &script_n,
+        "#!/bin/sh\necho '{\"goose\":{\"update_available\":true},\"uv\":{\"update_available\":true},\"flatpak\":{\"update_available\":true}}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script_n, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::updater::set_test_updater_bins(None, Some(script_n));
+    let rep_n = crate::updater::check_standalone_updates_detailed().await;
+    assert_eq!(rep_n.count, 3);
+    assert_eq!(
+        rep_n.pending_tools,
+        vec!["goose".to_string(), "uv".to_string(), "flatpak".to_string()]
+    );
+
+    // Error exit
+    let script_err = temp.path().join("sys_health_err.sh");
+    std::fs::write(
+        &script_err,
+        "#!/bin/sh\necho 'fatal internal error' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script_err, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::updater::set_test_updater_bins(None, Some(script_err));
+    let rep_err = crate::updater::check_standalone_updates_detailed().await;
+    assert_eq!(rep_err.count, 0);
+    assert!(rep_err.pending_tools.is_empty());
+
+    crate::updater::set_test_updater_bins(None, None);
+}
+
+#[test]
+fn test_read_system_snapshot_standalone_fields() {
+    let temp = tempfile::tempdir().unwrap();
+
+    // 1. With standalone fields
+    let with_path = temp.path().join("status_with.json");
+    let content_with = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "updates": {
+            "total": 3,
+            "core_count": 1,
+            "regular_count": 2,
+            "aur_count": 0,
+            "standalone_count": 2,
+            "standalone_tools": ["goose", "uv"],
+            "check_state": "ok"
+        }
+    }"#;
+    std::fs::write(&with_path, content_with).unwrap();
+    let snap_with = crate::models::read_system_snapshot(&with_path).unwrap();
+    assert_eq!(snap_with.updates_total, 3);
+    assert_eq!(snap_with.standalone_updates, 2);
+    assert_eq!(
+        snap_with.standalone_tools,
+        vec!["goose".to_string(), "uv".to_string()]
+    );
+
+    // 2. Without standalone fields (backwards compatibility / default fallback)
+    let without_path = temp.path().join("status_without.json");
+    let content_without = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "updates": {
+            "total": 1,
+            "core_count": 1,
+            "regular_count": 0,
+            "aur_count": 0,
+            "check_state": "ok"
+        }
+    }"#;
+    std::fs::write(&without_path, content_without).unwrap();
+    let snap_without = crate::models::read_system_snapshot(&without_path).unwrap();
+    assert_eq!(snap_without.updates_total, 1);
+    assert_eq!(snap_without.standalone_updates, 0);
+    assert!(snap_without.standalone_tools.is_empty());
+}
+
+#[test]
+fn test_compute_flight_status_standalone_informational_reason() {
+    let base_failed = crate::models::FailedServicesStatus::default();
+    let base_disk = crate::models::DiskStatus::default();
+    let base_orphans = crate::models::OrphanStatus {
+        checked: true,
+        ..Default::default()
+    };
+    let base_security = crate::models::StatusSecurity::default();
+    let base_firmware = crate::models::StatusFirmware::default();
+    let base_firewall = crate::models::StatusFirewall::default();
+
+    // Standalone count = 0 -> no informational reason
+    let updates_0 = crate::models::StatusUpdates::default();
+    let (st0, _, info0) = crate::triage::compute_flight_status(crate::triage::FlightStatusInputs {
+        failed: &base_failed,
+        disk: &base_disk,
+        reboot_pending: false,
+        pacnew_files: &[],
+        orphans: &base_orphans,
+        updates: &updates_0,
+        security: &base_security,
+        firmware: &base_firmware,
+        firewall: &base_firewall,
+    });
+    assert_eq!(st0, "FLIGHT_READY");
+    assert!(
+        !info0
+            .iter()
+            .any(|r| r.contains("standalone tool update(s)"))
+    );
+
+    // Standalone count = 1 with tool -> informational reason present, NOT escalated to PRE_FLIGHT_ATTENTION
+    let updates_1 = crate::models::StatusUpdates {
+        standalone_count: 1,
+        standalone_tools: vec!["goose".to_string()],
+        ..Default::default()
+    };
+    let (st1, _, info1) = crate::triage::compute_flight_status(crate::triage::FlightStatusInputs {
+        failed: &base_failed,
+        disk: &base_disk,
+        reboot_pending: false,
+        pacnew_files: &[],
+        orphans: &base_orphans,
+        updates: &updates_1,
+        security: &base_security,
+        firmware: &base_firmware,
+        firewall: &base_firewall,
+    });
+    assert_eq!(st1, "FLIGHT_READY");
+    assert!(
+        info1
+            .iter()
+            .any(|r| r == "1 standalone tool update(s) available (goose)")
+    );
+
+    // Standalone count = 2 without tools -> fallback without parentheses
+    let updates_2 = crate::models::StatusUpdates {
+        standalone_count: 2,
+        standalone_tools: vec![],
+        ..Default::default()
+    };
+    let (st2, _, info2) = crate::triage::compute_flight_status(crate::triage::FlightStatusInputs {
+        failed: &base_failed,
+        disk: &base_disk,
+        reboot_pending: false,
+        pacnew_files: &[],
+        orphans: &base_orphans,
+        updates: &updates_2,
+        security: &base_security,
+        firmware: &base_firmware,
+        firewall: &base_firewall,
+    });
+    assert_eq!(st2, "FLIGHT_READY");
+    assert!(
+        info2
+            .iter()
+            .any(|r| r == "2 standalone tool update(s) available")
+    );
+}
+
+#[test]
+fn test_format_standalone_updates_state_matrix() {
+    use crate::view::{RowSeverity, format_standalone_updates_state};
+
+    // 1. (0, [])
+    let s0 = format_standalone_updates_state(0, &[]);
+    assert_eq!(s0.status, "PASS");
+    assert_eq!(s0.severity, RowSeverity::Pass);
+    assert_eq!(s0.details, "ALL STANDALONE TOOLS UP TO DATE");
+
+    // 2. (1, ["goose"])
+    let s1_named = format_standalone_updates_state(1, &[String::from("goose")]);
+    assert_eq!(s1_named.status, "UPDATE");
+    assert_eq!(s1_named.severity, RowSeverity::Update);
+    assert_eq!(s1_named.details, "1 UPDATE PENDING (GOOSE)");
+
+    // 3. (1, [])
+    let s1_unnamed = format_standalone_updates_state(1, &[]);
+    assert_eq!(s1_unnamed.status, "UPDATE");
+    assert_eq!(s1_unnamed.severity, RowSeverity::Update);
+    assert_eq!(s1_unnamed.details, "1 STANDALONE TOOL UPDATE PENDING");
+
+    // 4. (2, ["goose", "uv"])
+    let s2_named = format_standalone_updates_state(2, &[String::from("goose"), String::from("uv")]);
+    assert_eq!(s2_named.status, "UPDATE");
+    assert_eq!(s2_named.severity, RowSeverity::Update);
+    assert_eq!(s2_named.details, "2 UPDATES PENDING (GOOSE, UV)");
+
+    // 5. (2, [])
+    let s2_unnamed = format_standalone_updates_state(2, &[]);
+    assert_eq!(s2_unnamed.status, "UPDATE");
+    assert_eq!(s2_unnamed.severity, RowSeverity::Update);
+    assert_eq!(s2_unnamed.details, "2 STANDALONE TOOL UPDATES PENDING");
+}
+
+#[test]
+fn test_build_ai_telemetry_markdown_standalone_tools() {
+    let temp = tempfile::tempdir().unwrap();
+    let status_path = temp.path().join("status.json");
+
+    // Case A: standalone_count: 0, standalone_tools: [] -> does NOT contain "Standalone Tools"
+    let status_a = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "updates": {
+            "total": 0,
+            "core_count": 0,
+            "regular_count": 0,
+            "aur_count": 0,
+            "standalone_count": 0,
+            "standalone_tools": [],
+            "check_state": "ok"
+        }
+    }"#;
+    std::fs::write(&status_path, status_a).unwrap();
+    let md_a = crate::copilot::build_ai_telemetry_markdown_at(temp.path(), &status_path);
+    assert!(!md_a.contains("Standalone Tools"));
+
+    // Case B: standalone_count: 2, standalone_tools: ["goose", "uv"] -> contains "- **Standalone Tools**: 2 pending (goose, uv)"
+    let status_b = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "updates": {
+            "total": 0,
+            "core_count": 0,
+            "regular_count": 0,
+            "aur_count": 0,
+            "standalone_count": 2,
+            "standalone_tools": ["goose", "uv"],
+            "check_state": "ok"
+        }
+    }"#;
+    std::fs::write(&status_path, status_b).unwrap();
+    let md_b = crate::copilot::build_ai_telemetry_markdown_at(temp.path(), &status_path);
+    assert!(md_b.contains("- **Standalone Tools**: 2 pending (goose, uv)"));
+
+    // Case C: standalone_count: 1, standalone_tools: [] -> contains "- **Standalone Tools**: 1 pending (standalone tools)"
+    let status_c = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "updates": {
+            "total": 0,
+            "core_count": 0,
+            "regular_count": 0,
+            "aur_count": 0,
+            "standalone_count": 1,
+            "standalone_tools": [],
+            "check_state": "ok"
+        }
+    }"#;
+    std::fs::write(&status_path, status_c).unwrap();
+    let md_c = crate::copilot::build_ai_telemetry_markdown_at(temp.path(), &status_path);
+    assert!(md_c.contains("- **Standalone Tools**: 1 pending (standalone tools)"));
 }

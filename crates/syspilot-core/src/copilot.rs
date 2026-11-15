@@ -596,6 +596,17 @@ pub fn build_ai_telemetry_markdown_at(root: &Path, status_path: &Path) -> String
         snap.aur_updates,
         snap.updates_check_state
     ));
+    if snap.standalone_updates > 0 {
+        let tools = if snap.standalone_tools.is_empty() {
+            "standalone tools".to_string()
+        } else {
+            snap.standalone_tools.join(", ")
+        };
+        md.push_str(&format!(
+            "- **Standalone Tools**: {} pending ({tools})\n",
+            snap.standalone_updates
+        ));
+    }
     md.push_str(&format!(
         "- **Reboot Safety**: Pending={}, BlackScreenRisk={}\n",
         snap.reboot_pending, safety.black_screen_risk

@@ -46,10 +46,21 @@ impl SysPilotTray {
             {
                 (0, 0)
             } else {
-                (u.total(), u.core_count)
+                (u.package_total(), u.core_count)
             }
         } else {
             (self.snapshot.updates_total, self.snapshot.core_updates)
+        }
+    }
+
+    pub fn effective_standalone_updates(&self) -> (u32, &[String]) {
+        if let Some(u) = &self.updates {
+            (u.standalone_count, u.standalone_tools.as_slice())
+        } else {
+            (
+                self.snapshot.standalone_updates,
+                self.snapshot.standalone_tools.as_slice(),
+            )
         }
     }
 
@@ -221,6 +232,23 @@ impl Tray for SysPilotTray {
         if self.snapshot.mirrors.is_some() {
             let m = syspilot_core::format_mirrorlist_state(self.snapshot.mirrors.as_ref());
             description.push_str(&format!("\nMirrors: {} ({})", m.status, m.details));
+        }
+
+        let (standalone_count, standalone_tools) = self.effective_standalone_updates();
+        if standalone_count > 0 {
+            let update_word = if standalone_count == 1 {
+                "update"
+            } else {
+                "updates"
+            };
+            let tools_list = if standalone_tools.is_empty() {
+                "standalone tools".to_string()
+            } else {
+                standalone_tools.join(", ")
+            };
+            description.push_str(&format!(
+                "\nTools: {standalone_count} standalone {update_word} ({tools_list})"
+            ));
         }
 
         ToolTip {

@@ -186,10 +186,12 @@ fn test_update_summary_total() {
         regular_count: 10,
         aur_count: 3,
         standalone_count: 1,
+        standalone_tools: vec!["goose".into()],
         core_packages: vec!["linux".into(), "systemd".into()],
         last_checked: None,
         check_state: syspilot_core::UpdateCheckState::Ok,
     };
+    assert_eq!(summary.package_total(), 15);
     assert_eq!(summary.total(), 16);
 }
 
@@ -504,6 +506,7 @@ fn test_stage3_tray_state_machine_and_mutants() {
         regular_count: 5,
         aur_count: 2,
         standalone_count: 0,
+        standalone_tools: vec![],
         core_packages: vec![],
         last_checked: None,
         check_state: syspilot_core::UpdateCheckState::Ok,
@@ -799,6 +802,7 @@ fn test_effective_updates_check_state_distinction() {
             regular_count: 2,
             aur_count: 0,
             standalone_count: 0,
+            standalone_tools: vec![],
             core_packages: vec!["linux".into()],
             last_checked: None,
             check_state: UpdateCheckState::Failed,
@@ -862,6 +866,7 @@ fn test_apply_tray_snapshot_update_cache_invalidation() {
         regular_count: 1,
         aur_count: 0,
         standalone_count: 0,
+        standalone_tools: vec![],
         core_packages: vec!["linux".into()],
         last_checked: None,
         check_state: UpdateCheckState::Ok,
@@ -1028,4 +1033,206 @@ fn test_tray_mirrors_permutations_status_icon_tooltip_menu() {
     } else {
         panic!("Expected standard item for menu header");
     }
+}
+
+#[test]
+fn test_effective_updates_excludes_standalone_count() {
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let tray = crate::tray::SysPilotTray::new(
+        SystemSnapshot {
+            updates_total: 6,
+            core_updates: 2,
+            ..Default::default()
+        },
+        SentinelStatus::default(),
+        Some(UpdateSummary {
+            core_count: 2,
+            regular_count: 3,
+            aur_count: 1,
+            standalone_count: 5,
+            standalone_tools: vec!["goose".into(), "uv".into()],
+            ..Default::default()
+        }),
+        false,
+        None,
+        tx,
+    );
+
+    // Must return (package_total, core_count) = (6, 2), NOT (11, 2)
+    assert_eq!(tray.effective_updates(), (6, 2));
+}
+
+#[test]
+fn test_effective_standalone_updates_matrix() {
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+    // 1. Standalone count 0
+    let mut tray = crate::tray::SysPilotTray::new(
+        SystemSnapshot::default(),
+        SentinelStatus::default(),
+        Some(UpdateSummary {
+            standalone_count: 0,
+            standalone_tools: vec![],
+            ..Default::default()
+        }),
+        false,
+        None,
+        tx.clone(),
+    );
+    let (count0, tools0) = tray.effective_standalone_updates();
+    assert_eq!(count0, 0);
+    assert!(tools0.is_empty());
+
+    // 2. Standalone count 1
+    tray.updates = Some(UpdateSummary {
+        standalone_count: 1,
+        standalone_tools: vec!["goose".into()],
+        ..Default::default()
+    });
+    let (count1, tools1) = tray.effective_standalone_updates();
+    assert_eq!(count1, 1);
+    assert_eq!(tools1, &["goose".to_string()]);
+
+    // 3. Standalone count N (2)
+    tray.updates = Some(UpdateSummary {
+        standalone_count: 2,
+        standalone_tools: vec!["goose".into(), "uv".into()],
+        ..Default::default()
+    });
+    let (count_n, tools_n) = tray.effective_standalone_updates();
+    assert_eq!(count_n, 2);
+    assert_eq!(tools_n, &["goose".to_string(), "uv".to_string()]);
+
+    // 4. Fallback when updates is None
+    tray.updates = None;
+    tray.snapshot.standalone_updates = 3;
+    tray.snapshot.standalone_tools = vec!["flatpak".into(), "goose".into(), "uv".into()];
+    let (count_snap, tools_snap) = tray.effective_standalone_updates();
+    assert_eq!(count_snap, 3);
+    assert_eq!(
+        tools_snap,
+        &["flatpak".to_string(), "goose".to_string(), "uv".to_string()]
+    );
+}
+
+#[test]
+fn test_tool_tip_standalone_tools_line_matrix() {
+    use ksni::Tray;
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+    // 1. 0 standalone updates -> no "Tools:" line
+    let mut tray = crate::tray::SysPilotTray::new(
+        SystemSnapshot::default(),
+        SentinelStatus::default(),
+        Some(UpdateSummary {
+            standalone_count: 0,
+            standalone_tools: vec![],
+            ..Default::default()
+        }),
+        false,
+        None,
+        tx.clone(),
+    );
+    let tip0 = tray.tool_tip();
+    assert!(!tip0.description.contains("Tools:"));
+
+    // 2. 1 standalone update -> singular "1 standalone update (goose)"
+    tray.updates = Some(UpdateSummary {
+        standalone_count: 1,
+        standalone_tools: vec!["goose".into()],
+        ..Default::default()
+    });
+    let tip1 = tray.tool_tip();
+    assert!(
+        tip1.description
+            .contains("Tools: 1 standalone update (goose)")
+    );
+
+    // 3. N standalone updates -> plural "2 standalone updates (goose, uv)"
+    tray.updates = Some(UpdateSummary {
+        standalone_count: 2,
+        standalone_tools: vec!["goose".into(), "uv".into()],
+        ..Default::default()
+    });
+    let tip_n = tray.tool_tip();
+    assert!(
+        tip_n
+            .description
+            .contains("Tools: 2 standalone updates (goose, uv)")
+    );
+}
+
+#[test]
+fn test_apply_tray_snapshot_update_syncs_standalone_and_package_diff() {
+    use syspilot_core::models::{SystemSnapshot, UpdateCheckState};
+    use syspilot_core::updater::UpdateSummary;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let mut tray = crate::tray::SysPilotTray::new(
+        SystemSnapshot::default(),
+        SentinelStatus::default(),
+        Some(UpdateSummary {
+            core_count: 2,
+            regular_count: 3,
+            aur_count: 0,
+            standalone_count: 1,
+            standalone_tools: vec!["goose".into()],
+            ..Default::default()
+        }),
+        false,
+        None,
+        tx,
+    );
+
+    assert_eq!(tray.updates.as_ref().unwrap().package_total(), 5);
+
+    // Snapshot transitions to 3 packages (1 core, 1 regular, 1 aur) and 2 standalone tools
+    let snap = SystemSnapshot {
+        updates_total: 3,
+        core_updates: 1,
+        regular_updates: 1,
+        aur_updates: 1,
+        standalone_updates: 2,
+        standalone_tools: vec!["goose".into(), "uv".into()],
+        updates_check_state: UpdateCheckState::Ok,
+        ..Default::default()
+    };
+
+    crate::apply_tray_snapshot_update(&mut tray, snap);
+
+    let u = tray
+        .updates
+        .as_ref()
+        .expect("updates cache should be updated, not None");
+    assert_eq!(u.package_total(), 3);
+    assert_eq!(u.core_count, 1);
+    assert_eq!(u.regular_count, 1);
+    assert_eq!(u.aur_count, 1);
+    assert_eq!(u.standalone_count, 2);
+    assert_eq!(
+        u.standalone_tools,
+        vec!["goose".to_string(), "uv".to_string()]
+    );
+
+    // Snapshot transitions to same total (3 -> 3) but changed component split (core 1 -> 2, regular 1 -> 0, aur 1 -> 1)
+    let snap2 = SystemSnapshot {
+        updates_total: 3,
+        core_updates: 2,
+        regular_updates: 0,
+        aur_updates: 1,
+        standalone_updates: 2,
+        standalone_tools: vec!["goose".into(), "uv".into()],
+        updates_check_state: UpdateCheckState::Ok,
+        ..Default::default()
+    };
+    crate::apply_tray_snapshot_update(&mut tray, snap2);
+
+    let u2 = tray
+        .updates
+        .as_ref()
+        .expect("updates cache should be updated, not None");
+    assert_eq!(u2.package_total(), 3);
+    assert_eq!(u2.core_count, 2);
+    assert_eq!(u2.regular_count, 0);
+    assert_eq!(u2.aur_count, 1);
 }

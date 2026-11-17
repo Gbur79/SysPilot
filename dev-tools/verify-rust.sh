@@ -5,7 +5,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-project_root=$(cd -- "$script_dir/.." && pwd -P)
+project_root="${SYSPILOT_PROJECT_ROOT:-$(cd -- "$script_dir/.." && pwd -P)}"
 
 if [[ -f "$project_root/Cargo.toml" ]]; then
     target_dir="$project_root"
@@ -20,11 +20,27 @@ fi
 quiet=0
 mutants_target=""
 mutants_diff=0
+run_cov=0
+gui_smoke=0
+cov_fail_under="${SYSPILOT_COV_FAIL_UNDER:-}"
 while (( $# > 0 )); do
     case "$1" in
         -q|--quiet)
             quiet=1
             shift
+            ;;
+        --gui-smoke)
+            gui_smoke=1
+            shift
+            ;;
+        --cov|--coverage)
+            run_cov=1
+            shift
+            ;;
+        --cov-fail-under)
+            run_cov=1
+            cov_fail_under="${2:?--cov-fail-under requires a percentage (0-100)}"
+            shift 2
             ;;
         --mutants)
             mutants_target="${2:?--mutants requires a file path (e.g. crates/syspilot-core/src/firewall.rs)}"
@@ -73,7 +89,7 @@ fi
 
 # 2. Clippy
 clippy_out=""
-if ! clippy_out=$(cargo clippy --locked --all-targets -- -D warnings 2>&1); then
+if ! clippy_out=$(cargo clippy --locked --all-targets -- -D warnings -D clippy::dbg_macro -D clippy::unimplemented -D clippy::await_holding_lock -D clippy::let_underscore_future 2>&1); then
     echo "$clippy_out" > "$err_log"
     if (( quiet )); then
         echo "RUST_VERIFY: FAIL | TESTS: UNTESTED | CLIPPY: FAIL | FMT: PASS | TARGET: syspilot-workspace"
@@ -174,6 +190,185 @@ if ! footprint_out=$("$script_dir/bench-footprint.sh" --smoke -q 2>&1); then
     exit 1
 fi
 
+# 4a. GUI Dual-Skin Smoke Test (--gui-smoke)
+gui_smoke_tag=""
+if (( gui_smoke )); then
+    smoke_out=""
+    smoke_rc=0
+    smoke_out=$("$script_dir/smoke-gui.sh" -q 2>&1) || smoke_rc=$?
+    if (( smoke_rc != 0 )); then
+        echo "$smoke_out" > "$err_log"
+        if (( quiet )); then
+            echo "RUST_VERIFY: FAIL | TESTS: PASS | CLIPPY: PASS | FMT: PASS | GUI_SMOKE: FAIL | TARGET: syspilot-gui"
+            echo "DIAG_1: STEP=gui-smoke;EXIT=${smoke_rc};TARGET=syspilot-gui"
+            first_line=$(echo "$smoke_out" | head -n 1 | tr '|' '_')
+            echo "DIAG_2: SUMMARY=${first_line:-smoke-gui failed}"
+            echo "FULL_LOG: $err_log"
+        else
+            echo "smoke-gui failed:" >&2
+            echo "$smoke_out" >&2
+        fi
+        exit 1
+    fi
+    gui_smoke_tag=" | GUI_SMOKE: PASS"
+fi
+
+# 4b. Optional Fast LLVM Coverage Pre-Gate (--cov / --coverage)
+cov_tag=""
+if (( run_cov )); then
+    export PATH="$HOME/.local/bin:$PATH"
+    if [[ -z "${LLVM_COV:-}" ]] && command -v llvm-cov >/dev/null 2>&1; then
+        LLVM_COV="$(command -v llvm-cov)"
+        export LLVM_COV
+    fi
+    if [[ -z "${LLVM_PROFDATA:-}" ]] && command -v llvm-profdata >/dev/null 2>&1; then
+        LLVM_PROFDATA="$(command -v llvm-profdata)"
+        export LLVM_PROFDATA
+    fi
+    cov_json=$(mktemp "/tmp/syspilot-cov.XXXXXX")
+    cov_log="${SYSPILOT_COV_LOG:-/tmp/syspilot-cov-report.log}"
+    cov_out=""
+    cov_rc=0
+    cov_out=$(cargo llvm-cov --workspace --locked --no-cfg-coverage --json --summary-only --output-path "$cov_json" 2>&1) || cov_rc=$?
+    if (( cov_rc != 0 )); then
+        rm -f "$cov_json"
+        echo "$cov_out" > "$err_log"
+        cov_hint=""
+        if [[ "$cov_out" == *"no such command"* ]]; then
+            cov_hint=" (Hint: sudo pacman -S cargo-llvm-cov)"
+        elif [[ "$cov_out" == *"llvm-tools-preview"* ]]; then
+            cov_hint=" (Hint: install llvm or set LLVM_COV/LLVM_PROFDATA)"
+        fi
+        if (( quiet )); then
+            echo "RUST_VERIFY: FAIL | TESTS: PASS | COV: FAIL | TARGET: syspilot-workspace"
+            echo "DIAG_1: STEP=cov;EXIT=${cov_rc};TARGET=syspilot-workspace"
+            first_line=$(echo "$cov_out" | { grep -m1 "error:" || true; } | tr '|' '_')
+            if [[ -z "$first_line" ]]; then
+                first_line=$(echo "$cov_out" | head -n 1 | tr '|' '_')
+            fi
+            echo "DIAG_2: SUMMARY=${first_line:-cargo llvm-cov failed}${cov_hint}"
+            echo "FULL_LOG: $err_log"
+        else
+            echo "cargo llvm-cov failed${cov_hint}:" >&2
+            echo "$cov_out" >&2
+        fi
+        exit 1
+    fi
+
+    missing_out=$(cargo llvm-cov report --show-missing-lines 2>&1 || true)
+    mapfile -t cov_changed_rs < <(git diff --name-only HEAD -- '*.rs')
+    mapfile -t cov_untracked_rs < <(git ls-files --others --exclude-standard -- 'crates/*.rs')
+
+    cov_parse_rc=0
+    cov_summary=$(python3 - "$cov_json" "$target_dir" "$cov_log" "${cov_fail_under:-}" "${cov_changed_rs[@]}" "${cov_untracked_rs[@]}" <<'PY'
+import json
+import os
+import sys
+
+cov_json_path = sys.argv[1]
+target_dir = os.path.realpath(sys.argv[2])
+cov_log_path = sys.argv[3]
+fail_under_str = sys.argv[4].strip()
+diff_files = []
+for p in sys.argv[5:]:
+    if p and p not in diff_files:
+        diff_files.append(p)
+
+try:
+    fail_under = float(fail_under_str) if fail_under_str else None
+    if fail_under is not None and (fail_under < 0.0 or fail_under > 100.0):
+        print("INVALID_THRESHOLD: must be between 0 and 100")
+        sys.exit(2)
+except ValueError:
+    print(f"INVALID_THRESHOLD: {fail_under_str}")
+    sys.exit(2)
+
+with open(cov_json_path, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+
+data0 = (payload.get("data") or [{}])[0]
+totals = data0.get("totals") or {}
+lines_pct = float((totals.get("lines") or {}).get("percent", 0.0))
+regions_pct = float((totals.get("regions") or {}).get("percent", 0.0))
+funcs_pct = float((totals.get("functions") or {}).get("percent", 0.0))
+
+files_entries = data0.get("files") or []
+diff_reg_cov = 0
+diff_reg_cnt = 0
+diff_line_cov = 0
+diff_line_cnt = 0
+diff_rows = []
+
+for entry in files_entries:
+    raw_fn = entry.get("filename", "")
+    real_fn = os.path.realpath(raw_fn) if os.path.isabs(raw_fn) else os.path.realpath(os.path.join(target_dir, raw_fn))
+    try:
+        rel_fn = os.path.relpath(real_fn, target_dir)
+    except ValueError:
+        rel_fn = raw_fn
+    matched = False
+    for df in diff_files:
+        if rel_fn == df or raw_fn == df or raw_fn.endswith("/" + df):
+            matched = True
+            break
+    if matched:
+        s = entry.get("summary") or {}
+        l_obj = s.get("lines") or {}
+        r_obj = s.get("regions") or {}
+        f_obj = s.get("functions") or {}
+        l_c, l_n, l_p = int(l_obj.get("covered", 0)), int(l_obj.get("count", 0)), float(l_obj.get("percent", 0.0))
+        r_c, r_n, r_p = int(r_obj.get("covered", 0)), int(r_obj.get("count", 0)), float(r_obj.get("percent", 0.0))
+        f_p = float(f_obj.get("percent", 0.0))
+        diff_reg_cov += r_c
+        diff_reg_cnt += r_n
+        diff_line_cov += l_c
+        diff_line_cnt += l_n
+        diff_rows.append(f"  {rel_fn}: L:{l_p:.1f}% ({l_c}/{l_n}) R:{r_p:.1f}% ({r_c}/{r_n}) F:{f_p:.1f}%")
+
+diff_suffix = ""
+gate_metric = regions_pct
+gate_label = f"workspace R:{regions_pct:.1f}%"
+if diff_rows:
+    diff_r_pct = (100.0 * diff_reg_cov / diff_reg_cnt) if diff_reg_cnt > 0 else 100.0
+    diff_l_pct = (100.0 * diff_line_cov / diff_line_cnt) if diff_line_cnt > 0 else 100.0
+    diff_suffix = f" DIFF_L:{diff_l_pct:.1f}% DIFF_R:{diff_r_pct:.1f}%"
+    gate_metric = diff_r_pct
+    gate_label = f"diff R:{diff_r_pct:.1f}%"
+
+with open(cov_log_path, "w", encoding="utf-8") as logf:
+    logf.write(f"=== WORKSPACE COVERAGE: L:{lines_pct:.1f}% R:{regions_pct:.1f}% F:{funcs_pct:.1f}% ===\n")
+    if diff_rows:
+        logf.write("=== DIFF FILE COVERAGE ===\n")
+        for r in diff_rows:
+            logf.write(r + "\n")
+    logf.write("\n")
+
+summary_str = f"L:{lines_pct:.1f}% R:{regions_pct:.1f}% F:{funcs_pct:.1f}%{diff_suffix}"
+if fail_under is not None and gate_metric < fail_under:
+    print(f"{summary_str} | {gate_label} < {fail_under:.1f}%")
+    sys.exit(3)
+
+print(summary_str)
+PY
+    ) || cov_parse_rc=$?
+    rm -f "$cov_json"
+    printf '%s\n' "$missing_out" >> "$cov_log"
+
+    if (( cov_parse_rc != 0 )); then
+        cp -f "$cov_log" "$err_log" 2>/dev/null || echo "$cov_summary" > "$err_log"
+        if (( quiet )); then
+            echo "RUST_VERIFY: FAIL | TESTS: PASS | COV: FAIL (${cov_summary}) | TARGET: syspilot-workspace"
+            echo "DIAG_1: STEP=cov;EXIT=${cov_parse_rc};TARGET=syspilot-workspace"
+            echo "DIAG_2: SUMMARY=coverage threshold check failed (${cov_summary})"
+            echo "FULL_LOG: $cov_log"
+        else
+            echo "Coverage gate failed (${cov_summary}). Full report: $cov_log" >&2
+        fi
+        exit 1
+    fi
+    cov_tag=" | COV: PASS (${cov_summary})"
+fi
+
 # 5. Optional Surgical Mutation Testing (--mutants <file> or --mutants-diff)
 mutants_tag=""
 if [[ -n "$mutants_target" ]] || (( mutants_diff )); then
@@ -181,29 +376,42 @@ if [[ -n "$mutants_target" ]] || (( mutants_diff )); then
     mut_out=""
     mut_rc=0
     summary_line=""
+    resolve_mutants_pkg() {
+        local path="$1"
+        mut_pkg=""
+        mut_test_args=()
+        case "$path" in
+            crates/syspilot-core/*|*syspilot-core*)
+                mut_pkg="syspilot-core"
+                mut_test_args=(--lib)
+                ;;
+            crates/syspilot-tray/*|*syspilot-tray*)
+                mut_pkg="syspilot-tray"
+                mut_test_args=(--bin syspilot-tray)
+                ;;
+            crates/syspilot-gui/*|*syspilot-gui*)
+                mut_pkg="syspilot-gui"
+                mut_test_args=(--bin syspilot-gui)
+                ;;
+        esac
+    }
+
     if [[ -n "$mutants_target" ]]; then
-        mut_pkg="syspilot-core"
-        mut_test_args=(--lib)
-        if [[ "$mutants_target" == *"syspilot-tray"* ]]; then
-            mut_pkg="syspilot-tray"
-            mut_test_args=(--bin syspilot-tray)
-        elif [[ "$mutants_target" == *"syspilot-gui"* ]]; then
-            mut_pkg="syspilot-gui"
-            mut_test_args=(--bin syspilot-gui)
+        resolve_mutants_pkg "$mutants_target"
+        if [[ -z "$mut_pkg" ]]; then
+            mut_pkg="syspilot-core"
+            mut_test_args=(--lib)
         fi
         mut_out=$(cargo mutants --in-place -p "$mut_pkg" -f "$mutants_target" -- "${mut_test_args[@]}" 2>&1) || mut_rc=$?
     else
         diff_tmp=$(mktemp "/tmp/syspilot-mutants-diff.XXXXXX")
         git diff HEAD > "$diff_tmp"
         mapfile -t changed_rs < <(git diff --name-only HEAD -- '*.rs')
+        mapfile -t untracked_rs < <(git ls-files --others --exclude-standard -- 'crates/*.rs')
         diff_pkgs=()
         for f in "${changed_rs[@]}"; do
-            case "$f" in
-                crates/syspilot-core/*) pkg="syspilot-core" ;;
-                crates/syspilot-tray/*) pkg="syspilot-tray" ;;
-                crates/syspilot-gui/*)  pkg="syspilot-gui" ;;
-                *) pkg="" ;;
-            esac
+            resolve_mutants_pkg "$f"
+            pkg="$mut_pkg"
             if [[ -n "$pkg" ]]; then
                 already_in=0
                 for p in "${diff_pkgs[@]}"; do
@@ -218,31 +426,38 @@ if [[ -n "$mutants_target" ]] || (( mutants_diff )); then
             fi
         done
 
-        if (( ${#diff_pkgs[@]} == 0 )); then
+        if (( ${#diff_pkgs[@]} == 0 && ${#untracked_rs[@]} == 0 )); then
             summary_line="Found 0 mutants in diff"
             mut_rc=0
         else
             for pkg in "${diff_pkgs[@]}"; do
-                pkg_test_args=(--lib)
-                if [[ "$pkg" == "syspilot-tray" ]]; then
-                    pkg_test_args=(--bin syspilot-tray)
-                elif [[ "$pkg" == "syspilot-gui" ]]; then
-                    pkg_test_args=(--bin syspilot-gui)
-                fi
+                resolve_mutants_pkg "$pkg"
                 pkg_rc=0
-                pkg_out=$(cargo mutants --in-place --in-diff "$diff_tmp" -p "$pkg" -- "${pkg_test_args[@]}" 2>&1) || pkg_rc=$?
+                pkg_out=$(cargo mutants --in-place --in-diff "$diff_tmp" -p "$pkg" -- "${mut_test_args[@]}" 2>&1) || pkg_rc=$?
                 mut_out="${mut_out}${pkg_out}"$'\n'
                 if (( pkg_rc != 0 )); then
                     mut_rc=1
                 fi
                 rm -rf "$target_dir/mutants.out" "$target_dir/mutants.out.old"
             done
+            for ufile in "${untracked_rs[@]}"; do
+                resolve_mutants_pkg "$ufile"
+                if [[ -n "$mut_pkg" ]]; then
+                    u_rc=0
+                    u_out=$(cargo mutants --in-place -p "$mut_pkg" -f "$ufile" -- "${mut_test_args[@]}" 2>&1) || u_rc=$?
+                    mut_out="${mut_out}${u_out}"$'\n'
+                    if (( u_rc != 0 )); then
+                        mut_rc=1
+                    fi
+                    rm -rf "$target_dir/mutants.out" "$target_dir/mutants.out.old"
+                fi
+            done
         fi
         rm -f "$diff_tmp"
     fi
     rm -rf "$target_dir/mutants.out" "$target_dir/mutants.out.old"
     if [[ -z "$summary_line" ]]; then
-        summary_line=$(echo "$mut_out" | grep -E "mutants tested|Found 0 mutants" | paste -sd '; ' - | tr '|' '_' || true)
+        summary_line=$(echo "$mut_out" | grep -E "mutants tested|Found 0 mutants" | awk '{printf "%s%s", (NR>1?"; ":""), $0}' | tr '|' '_' || true)
     fi
     if (( mut_rc != 0 )); then
         echo "$mut_out" > "$err_log"
@@ -259,8 +474,8 @@ if [[ -n "$mutants_target" ]] || (( mutants_diff )); then
 fi
 
 if (( quiet )); then
-    echo "RUST_VERIFY: PASS | TESTS: core: ${core_count} | tray: ${tray_count} | gui: ${gui_count} | Total: ${total_tests}/${total_tests} | CLIPPY: CLEAN | FMT: CLEAN | LINT: CLEAN${mutants_tag} | TARGET: syspilot-workspace"
+    echo "RUST_VERIFY: PASS | TESTS: core: ${core_count} | tray: ${tray_count} | gui: ${gui_count} | Total: ${total_tests}/${total_tests} | CLIPPY: CLEAN | FMT: CLEAN | LINT: CLEAN${gui_smoke_tag}${cov_tag}${mutants_tag} | TARGET: syspilot-workspace"
 else
-    echo "✔ All Rust checks passed: fmt, clippy, universalism lint, ${total_tests} tests (core: ${core_count}, tray: ${tray_count}, gui: ${gui_count}), and footprint benchmark${mutants_tag}."
+    echo "✔ All Rust checks passed: fmt, clippy, universalism lint, ${total_tests} tests (core: ${core_count}, tray: ${tray_count}, gui: ${gui_count}), and footprint benchmark${gui_smoke_tag}${cov_tag}${mutants_tag}."
 fi
 exit 0

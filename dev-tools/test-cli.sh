@@ -27,7 +27,7 @@ mkdir -p "$HOME" "$XDG_STATE_HOME/system-health" "$XDG_CONFIG_HOME/syspilot" "$X
 unset SYSPILOT_SYS_HEALTH SYSPILOT_MAX_STATUS_AGE SYSPILOT_TERMINAL SYSPILOT_COPILOT_CMD SYSPILOT_GOOSE_RECIPE
 
 tests_passed=0
-total_tests=13
+total_tests=15
 current_test=""
 
 fail() {
@@ -273,6 +273,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     shellcheck -s bash "$CLI" >/dev/null 2>&1 || fail "shellcheck failed on bin/syspilot"
     shellcheck -s bash "$project_root/dev-tools/build-and-install.sh" >/dev/null 2>&1 || fail "shellcheck failed on build-and-install.sh"
     shellcheck -s bash "$project_root/dev-tools/verify-rust.sh" >/dev/null 2>&1 || fail "shellcheck failed on verify-rust.sh"
+    shellcheck -s bash "$project_root/dev-tools/smoke-gui.sh" >/dev/null 2>&1 || fail "shellcheck failed on smoke-gui.sh"
 else
     shellcheck_status="SKIP(not_installed)"
 fi
@@ -292,6 +293,170 @@ pass_step
 current_test="self_update_flag_help"
 [[ "$out_h" =~ "--self-update" ]] || fail "-h missing --self-update flag"
 [[ "$out_h" =~ "Perform safe self-update and atomic build" ]] || fail "-h missing --self-update description"
+pass_step
+
+# -----------------------------------------------------------------------------
+# Test 14: verify-rust.sh --mutants-diff untracked crate file coverage (PATCH-036)
+# -----------------------------------------------------------------------------
+current_test="verify_rust_mutants_diff_untracked"
+mut_td=$(mktemp -d "/tmp/syspilot-test-mutants.XXXXXX")
+mkdir -p "$mut_td/bin" "$mut_td/dev-tools" "$mut_td/crates/syspilot-core/src"
+printf '[workspace]\n' > "$mut_td/Cargo.toml"
+printf 'pub fn ok() {}\n' > "$mut_td/crates/syspilot-core/src/lib.rs"
+printf '#!/usr/bin/env bash\necho "LINT_UNIVERSALISM: PASS"\n' > "$mut_td/dev-tools/lint-universalism.sh"
+printf '#!/usr/bin/env bash\necho "FOOTPRINT: PASS"\n' > "$mut_td/dev-tools/bench-footprint.sh"
+cp "$project_root/dev-tools/verify-rust.sh" "$mut_td/dev-tools/verify-rust.sh"
+chmod +x "$mut_td/dev-tools/lint-universalism.sh" "$mut_td/dev-tools/bench-footprint.sh" "$mut_td/dev-tools/verify-rust.sh"
+cat > "$mut_td/bin/cargo" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == "test" ]]; then
+    echo "Running unittests (syspilot_core)"
+    echo "test result: ok. 1 passed; 0 failed;"
+    echo "Running unittests (syspilot_tray)"
+    echo "test result: ok. 1 passed; 0 failed;"
+    echo "Running unittests (syspilot_gui)"
+    echo "test result: ok. 1 passed; 0 failed;"
+    exit 0
+elif [[ "\$1" == "mutants" ]]; then
+    echo "MUTANTS:\$*" >> "$mut_td/calls.log"
+    if [[ "\${STUB_MUTANTS_FAIL:-0}" == "1" ]]; then
+        echo "1 mutants tested in 1s: 1 missed"
+        exit 2
+    fi
+    echo "1 mutants tested in 1s: 1 caught"
+    exit 0
+fi
+exit 0
+EOF
+chmod +x "$mut_td/bin/cargo"
+(
+    cd "$mut_td"
+    git init -q
+    git config user.email "test@localhost"
+    git config user.name "Test"
+    git add .
+    git commit -q -m "init"
+)
+out_clean=$(PATH="$mut_td/bin:$PATH" SYSPILOT_PROJECT_ROOT="$mut_td" "$mut_td/dev-tools/verify-rust.sh" --mutants-diff -q 2>&1) || { rm -rf "$mut_td"; fail "verify-rust.sh clean --mutants-diff failed"; }
+[[ "$out_clean" == *"Found 0 mutants in diff"* ]] || { rm -rf "$mut_td"; fail "expected Found 0 mutants in diff on clean repo"; }
+
+printf 'pub fn probe() -> bool { true }\n' > "$mut_td/crates/syspilot-core/src/untracked_probe.rs"
+out_untracked=$(PATH="$mut_td/bin:$PATH" SYSPILOT_PROJECT_ROOT="$mut_td" "$mut_td/dev-tools/verify-rust.sh" --mutants-diff -q 2>&1) || { rm -rf "$mut_td"; fail "verify-rust.sh untracked --mutants-diff failed"; }
+grep -q -- "-p syspilot-core -f crates/syspilot-core/src/untracked_probe.rs -- --lib" "$mut_td/calls.log" || { rm -rf "$mut_td"; fail "verify-rust.sh did not pass untracked_probe.rs to cargo mutants"; }
+
+if PATH="$mut_td/bin:$PATH" SYSPILOT_PROJECT_ROOT="$mut_td" STUB_MUTANTS_FAIL=1 "$mut_td/dev-tools/verify-rust.sh" --mutants-diff -q >"$mut_td/fail.out" 2>&1; then
+    rm -rf "$mut_td"
+    fail "verify-rust.sh should fail when untracked file has surviving mutants"
+fi
+grep -q "MUTANTS: FAIL" "$mut_td/fail.out" || { rm -rf "$mut_td"; fail "expected MUTANTS: FAIL on surviving mutant"; }
+rm -rf "$mut_td"
+pass_step
+
+# -----------------------------------------------------------------------------
+# Test 15: verify-rust.sh --cov fast LLVM coverage gate (PATCH-038)
+# -----------------------------------------------------------------------------
+current_test="verify_rust_cov_gate"
+cov_td=$(mktemp -d "/tmp/syspilot-test-cov.XXXXXX")
+mkdir -p "$cov_td/bin" "$cov_td/dev-tools" "$cov_td/crates/syspilot-core/src"
+printf '[workspace]\n' > "$cov_td/Cargo.toml"
+printf 'pub fn ok() {}\n' > "$cov_td/crates/syspilot-core/src/lib.rs"
+printf '#!/usr/bin/env bash\necho "LINT_UNIVERSALISM: PASS"\n' > "$cov_td/dev-tools/lint-universalism.sh"
+printf '#!/usr/bin/env bash\necho "FOOTPRINT: PASS"\n' > "$cov_td/dev-tools/bench-footprint.sh"
+cp "$project_root/dev-tools/verify-rust.sh" "$cov_td/dev-tools/verify-rust.sh"
+chmod +x "$cov_td/dev-tools/lint-universalism.sh" "$cov_td/dev-tools/bench-footprint.sh" "$cov_td/dev-tools/verify-rust.sh"
+cat > "$cov_td/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "test" ]]; then
+    echo "Running unittests (syspilot_core)"
+    echo "test result: ok. 1 passed; 0 failed;"
+    echo "Running unittests (syspilot_tray)"
+    echo "test result: ok. 1 passed; 0 failed;"
+    echo "Running unittests (syspilot_gui)"
+    echo "test result: ok. 1 passed; 0 failed;"
+    exit 0
+elif [[ "$1" == "llvm-cov" ]]; then
+    if [[ "${STUB_COV_MISSING:-0}" == "1" ]]; then
+        echo "error: no such command: \`llvm-cov\`" >&2
+        exit 101
+    fi
+    if [[ "$2" == "report" ]]; then
+        echo "Filename   Regions   Missed Regions     Cover   Functions  Missed Functions  Executed       Lines      Missed Lines     Cover"
+        exit 0
+    fi
+    out_path=""
+    while (( $# > 0 )); do
+        if [[ "$1" == "--output-path" ]]; then
+            out_path="$2"
+            shift 2
+        else
+            shift
+        fi
+    done
+    cat > "$out_path" <<'JSON'
+{
+  "data": [
+    {
+      "files": [
+        {
+          "filename": "crates/syspilot-core/src/lib.rs",
+          "summary": {
+            "lines": { "count": 20, "covered": 19, "percent": 95.0 },
+            "functions": { "count": 2, "covered": 2, "percent": 100.0 },
+            "regions": { "count": 10, "covered": 9, "percent": 90.0 }
+          }
+        },
+        {
+          "filename": "crates/syspilot-core/src/new_cov.rs",
+          "summary": {
+            "lines": { "count": 10, "covered": 5, "percent": 50.0 },
+            "functions": { "count": 1, "covered": 1, "percent": 100.0 },
+            "regions": { "count": 8, "covered": 4, "percent": 50.0 }
+          }
+        }
+      ],
+      "totals": {
+        "lines": { "count": 30, "covered": 24, "percent": 80.0 },
+        "functions": { "count": 3, "covered": 3, "percent": 100.0 },
+        "regions": { "count": 18, "covered": 13, "percent": 72.2 }
+      }
+    }
+  ],
+  "version": "2.0.1"
+}
+JSON
+    exit 0
+fi
+exit 0
+EOF
+chmod +x "$cov_td/bin/cargo"
+(
+    cd "$cov_td"
+    git init -q
+    git config user.email "test@localhost"
+    git config user.name "Test"
+    git add .
+    git commit -q -m "init"
+)
+out_cov_clean=$(PATH="$cov_td/bin:$PATH" SYSPILOT_PROJECT_ROOT="$cov_td" SYSPILOT_COV_LOG="$cov_td/cov.log" "$cov_td/dev-tools/verify-rust.sh" --cov -q 2>&1) || { rm -rf "$cov_td"; fail "verify-rust.sh clean --cov failed: $out_cov_clean"; }
+[[ "$out_cov_clean" == *"COV: PASS (L:80.0% R:72.2% F:100.0%)"* ]] || { rm -rf "$cov_td"; fail "unexpected clean --cov output: $out_cov_clean"; }
+[[ -f "$cov_td/cov.log" ]] || { rm -rf "$cov_td"; fail "expected coverage report log at $cov_td/cov.log"; }
+
+printf 'pub fn uncovered() -> bool { false }\n' > "$cov_td/crates/syspilot-core/src/new_cov.rs"
+out_cov_diff=$(PATH="$cov_td/bin:$PATH" SYSPILOT_PROJECT_ROOT="$cov_td" SYSPILOT_COV_LOG="$cov_td/cov.log" "$cov_td/dev-tools/verify-rust.sh" --cov -q 2>&1) || { rm -rf "$cov_td"; fail "verify-rust.sh diff --cov failed: $out_cov_diff"; }
+[[ "$out_cov_diff" == *"DIFF_L:50.0% DIFF_R:50.0%"* ]] || { rm -rf "$cov_td"; fail "expected DIFF_L:50.0% DIFF_R:50.0% in --cov output, got: $out_cov_diff"; }
+
+if PATH="$cov_td/bin:$PATH" SYSPILOT_PROJECT_ROOT="$cov_td" SYSPILOT_COV_LOG="$cov_td/cov.log" "$cov_td/dev-tools/verify-rust.sh" --cov-fail-under 80 -q >"$cov_td/fail_thresh.out" 2>&1; then
+    rm -rf "$cov_td"
+    fail "verify-rust.sh should fail when diff region coverage (50%) is below --cov-fail-under 80"
+fi
+grep -q "COV: FAIL" "$cov_td/fail_thresh.out" || { rm -rf "$cov_td"; fail "expected COV: FAIL on threshold breach"; }
+
+if PATH="$cov_td/bin:$PATH" SYSPILOT_PROJECT_ROOT="$cov_td" SYSPILOT_COV_LOG="$cov_td/cov.log" STUB_COV_MISSING=1 "$cov_td/dev-tools/verify-rust.sh" --cov -q >"$cov_td/fail_missing.out" 2>&1; then
+    rm -rf "$cov_td"
+    fail "verify-rust.sh should fail when cargo-llvm-cov is missing"
+fi
+grep -q "cargo-llvm-cov" "$cov_td/fail_missing.out" || { rm -rf "$cov_td"; fail "expected cargo-llvm-cov install hint on missing subcommand"; }
+rm -rf "$cov_td"
 pass_step
 
 # -----------------------------------------------------------------------------

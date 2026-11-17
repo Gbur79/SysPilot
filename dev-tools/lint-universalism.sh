@@ -56,9 +56,21 @@ for root, dirs, files in os.walk(crates_dir):
                     violations.append(f"{rel_path}:{line_no}: Direct env::set_var/remove_var is forbidden; use hermetic *_at(root) parameters or EnvGuard under TERMINAL_TEST_MUTEX")
             if is_excluded_file(rel_path):
                 continue
+            import re
+            raw_sys_io_re = re.compile(
+                r'(?:fs::\w+|File::open|Path::new|PathBuf::from)\s*\(\s*"/(?:proc|sys|etc|boot|efi|var/lib/pacman|usr/lib/modules)(?:/|")'
+            )
+            todo_macro_re = re.compile(r'\btodo!\s*\(')
             for line_no, line in enumerate(lines, 1):
                 if "syspilot-lint:allow" in line:
                     continue
+                stripped_code = line.strip()
+                if stripped_code.startswith("//"):
+                    continue
+                if os.path.basename(rel_path) != "sys_root.rs" and raw_sys_io_re.search(line):
+                    violations.append(f"{rel_path}:{line_no}: Direct unparameterized system path I/O is forbidden; use *_at(root) with sys_root::sub_path")
+                if todo_macro_re.search(line):
+                    violations.append(f"{rel_path}:{line_no}: Unfinished todo!() macro is forbidden in production source")
                 # Check rig bias
                 for bias in forbidden_rig_bias:
                     if bias in line:

@@ -8,6 +8,20 @@ pub struct GameModeWatcher {
     proxy: Option<zbus::Proxy<'static>>,
 }
 
+async fn build_gamemode_proxy(conn: &Connection) -> zbus::Proxy<'static> {
+    zbus::proxy::Builder::<zbus::Proxy<'static>>::new(conn)
+        .destination("com.feralinteractive.GameMode")
+        .expect("valid GameMode destination")
+        .path("/com/feralinteractive/GameMode")
+        .expect("valid GameMode path")
+        .interface("com.feralinteractive.GameMode")
+        .expect("valid GameMode interface")
+        .cache_properties(zbus::proxy::CacheProperties::No)
+        .build()
+        .await
+        .expect("CacheProperties::No proxy build is infallible")
+}
+
 impl Default for GameModeWatcher {
     fn default() -> Self {
         Self::new()
@@ -39,25 +53,10 @@ impl GameModeWatcher {
                 _ => return false,
             };
 
-        match zbus::Proxy::new_owned(
-            session.clone(),
-            "com.feralinteractive.GameMode",
-            "/com/feralinteractive/GameMode",
-            "com.feralinteractive.GameMode",
-        )
-        .await
-        {
-            Ok(proxy) => {
-                self.proxy = Some(proxy);
-                self.conn = Some(session);
-                true
-            }
-            Err(e) => {
-                eprintln!("SysPilot: failed to construct GameMode proxy: {e}");
-                self.conn = Some(session);
-                false
-            }
-        }
+        let proxy = build_gamemode_proxy(&session).await;
+        self.proxy = Some(proxy);
+        self.conn = Some(session);
+        true
     }
 
     /// Queries whether GameMode is currently active (ClientCount > 0).
@@ -96,18 +95,8 @@ impl GameModeWatcher {
             return false;
         }
 
-        if let Ok(proxy) = zbus::Proxy::new(
-            conn,
-            "com.feralinteractive.GameMode",
-            "/com/feralinteractive/GameMode",
-            "com.feralinteractive.GameMode",
-        )
-        .await
-        {
-            return proxy.get_property::<i32>("ClientCount").await.unwrap_or(0) > 0;
-        }
-
-        false
+        let proxy = build_gamemode_proxy(conn).await;
+        proxy.get_property::<i32>("ClientCount").await.unwrap_or(0) > 0
     }
 }
 

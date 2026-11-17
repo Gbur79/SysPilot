@@ -116,7 +116,12 @@ pub fn find_executable(name: &str) -> Option<PathBuf> {
 }
 
 pub fn is_process_running(proc_name: &str) -> bool {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
+    is_process_running_at(Path::new("/"), proc_name)
+}
+
+pub fn is_process_running_at(root: &Path, proc_name: &str) -> bool {
+    let proc_dir = crate::sys_root::sub_path(root, "/proc");
+    let Ok(entries) = std::fs::read_dir(proc_dir) else {
         return false;
     };
     for entry in entries.flatten() {

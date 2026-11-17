@@ -1061,19 +1061,86 @@ fn compute_maintenance_window_height(count: usize) -> f32 {
     rounded.clamp(590.0, 1200.0)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkinOverride {
+    Lcars,
+    Classic,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct GuiLaunchArgs {
+    smoke: bool,
+    skin: Option<SkinOverride>,
+}
+
+fn parse_skin_value(value: &str) -> Result<SkinOverride, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "lcars" => Ok(SkinOverride::Lcars),
+        "classic" => Ok(SkinOverride::Classic),
+        other => Err(format!(
+            "invalid skin '{other}': expected 'lcars' or 'classic'"
+        )),
+    }
+}
+
+fn parse_gui_args<I, S>(args: I) -> Result<GuiLaunchArgs, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut parsed = GuiLaunchArgs::default();
+    let mut iter = args.into_iter().skip(1);
+    while let Some(arg) = iter.next() {
+        let arg = arg.as_ref();
+        if arg == "--smoke" {
+            parsed.smoke = true;
+        } else if arg == "--skin" {
+            let val = iter
+                .next()
+                .ok_or_else(|| "--skin requires a value ('lcars' or 'classic')".to_string())?;
+            parsed.skin = Some(parse_skin_value(val.as_ref())?);
+        } else if let Some(val) = arg.strip_prefix("--skin=") {
+            parsed.skin = Some(parse_skin_value(val)?);
+        } else {
+            return Err(format!("unknown option: {arg}"));
+        }
+    }
+    Ok(parsed)
+}
+
+fn should_exit_due_to_lock<F>(smoke: bool, acquire_lock: F) -> bool
+where
+    F: FnOnce() -> bool,
+{
+    if smoke { false } else { !acquire_lock() }
+}
+
+fn resolve_initial_skin(override_skin: Option<SkinOverride>, persisted_is_lcars: bool) -> bool {
+    match override_skin {
+        Some(SkinOverride::Lcars) => true,
+        Some(SkinOverride::Classic) => false,
+        None => persisted_is_lcars,
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if unsafe { libc::getuid() == 0 } {
         eprintln!("FATAL: SysPilot GUI must not be executed as root (UID 0).");
         std::process::exit(1);
     }
 
-    if !acquire_single_instance_lock() {
+    let args = parse_gui_args(std::env::args()).unwrap_or_else(|err| {
+        eprintln!("SysPilot GUI: {err}");
+        std::process::exit(2);
+    });
+
+    if should_exit_due_to_lock(args.smoke, acquire_single_instance_lock) {
         eprintln!("SysPilot GUI is already running.");
         return Ok(());
     }
 
     let ui = AppWindow::new()?;
-    let is_lcars = syspilot_core::skin::load_skin_preference();
+    let is_lcars = resolve_initial_skin(args.skin, syspilot_core::skin::load_skin_preference());
     ui.set_is_lcars_skin(is_lcars);
 
     let initial_tab = syspilot_core::skin::load_last_tab_preference();
@@ -1418,6 +1485,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         );
     });
+
+    if args.smoke {
+        ui.window().request_redraw();
+        slint::Timer::single_shot(std::time::Duration::from_millis(150), || {
+            let _ = slint::quit_event_loop();
+        });
+        ui.run()?;
+        return Ok(());
+    }
 
     // Live telemetry file watcher: poll status.json and summary.json mtime every 1s
     let ui_weak_watcher = ui.as_weak();
@@ -2855,5 +2931,46 @@ mod tests {
         // Reset both thread-locals to None before finishing
         TEST_CAN_SPAWN_OVERRIDE.with(|cell| cell.set(None));
         TEST_SHELL_TASK_RECORDER.with(|rec| *rec.borrow_mut() = None);
+    }
+
+    #[test]
+    fn test_parse_gui_args_and_skin_helpers_matrix() {
+        assert_eq!(
+            parse_gui_args(["syspilot-gui"]).unwrap(),
+            GuiLaunchArgs {
+                smoke: false,
+                skin: None,
+            }
+        );
+        assert_eq!(
+            parse_gui_args(["syspilot-gui", "--smoke", "--skin", "lcars"]).unwrap(),
+            GuiLaunchArgs {
+                smoke: true,
+                skin: Some(SkinOverride::Lcars),
+            }
+        );
+        assert_eq!(
+            parse_gui_args(["syspilot-gui", "--skin=CLASSIC", "--smoke"]).unwrap(),
+            GuiLaunchArgs {
+                smoke: true,
+                skin: Some(SkinOverride::Classic),
+            }
+        );
+        assert!(parse_gui_args(["syspilot-gui", "--skin"]).is_err());
+        assert!(parse_gui_args(["syspilot-gui", "--skin", "neon"]).is_err());
+        assert!(parse_gui_args(["syspilot-gui", "--unknown-flag"]).is_err());
+
+        // Smoke mode bypasses single-instance lock without calling closure
+        assert!(!should_exit_due_to_lock(true, || unreachable!(
+            "smoke mode must not acquire lock"
+        )));
+        assert!(!should_exit_due_to_lock(false, || true));
+        assert!(should_exit_due_to_lock(false, || false));
+
+        // Skin override precedence over persisted setting
+        assert!(resolve_initial_skin(Some(SkinOverride::Lcars), false));
+        assert!(!resolve_initial_skin(Some(SkinOverride::Classic), true));
+        assert!(resolve_initial_skin(None, true));
+        assert!(!resolve_initial_skin(None, false));
     }
 }

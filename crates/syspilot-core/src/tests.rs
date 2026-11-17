@@ -5544,3 +5544,39 @@ esac
         Some("native-syspilot")
     );
 }
+
+#[test]
+fn test_is_process_running_at_hermetic_proc() {
+    let tmp = tempfile::tempdir().unwrap();
+    // 1. Missing /proc directory -> false
+    assert!(!crate::updater::is_process_running_at(tmp.path(), "yay"));
+
+    // 2. Populated /proc with non-digit entries and multiple PIDs
+    let proc_dir = tmp.path().join("proc");
+    std::fs::create_dir_all(proc_dir.join("self")).unwrap();
+    std::fs::write(proc_dir.join("self/comm"), "yay\n").unwrap();
+    std::fs::create_dir_all(proc_dir.join("101")).unwrap();
+    std::fs::write(proc_dir.join("101/comm"), "systemd\n").unwrap();
+    std::fs::create_dir_all(proc_dir.join("2042")).unwrap();
+    std::fs::write(proc_dir.join("2042/comm"), "paru\n").unwrap();
+
+    // Non-digit "self" must be ignored; "paru" (2042) and "systemd" (101) matched
+    assert!(!crate::updater::is_process_running_at(tmp.path(), "yay"));
+    assert!(crate::updater::is_process_running_at(tmp.path(), "systemd"));
+    assert!(crate::updater::is_process_running_at(tmp.path(), "paru"));
+    assert!(!crate::updater::is_process_running_at(
+        tmp.path(),
+        "pamac-daemon"
+    ));
+
+    // 3. Root wrapper is_process_running("/") coverage (negative & live self-comm positive)
+    assert!(!crate::updater::is_process_running(
+        "__syspilot_nonexistent_proc_999__"
+    ));
+    if let Ok(self_comm) = std::fs::read_to_string("/proc/self/comm") {
+        let name = self_comm.trim();
+        if !name.is_empty() {
+            assert!(crate::updater::is_process_running(name));
+        }
+    }
+}

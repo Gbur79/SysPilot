@@ -80,7 +80,7 @@ pub fn check_pacman_lock_at(lock_path: &Path) -> (bool, bool) {
     }
 
     let proc_dir = if lock_path.starts_with("/var/lib/pacman") {
-        std::path::PathBuf::from("/proc")
+        crate::sys_root::sub_path(Path::new("/"), "/proc")
     } else if let Some(root) = lock_path
         .parent()
         .and_then(|p| p.parent())

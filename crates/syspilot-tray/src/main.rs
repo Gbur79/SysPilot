@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod dbus_test;
 mod gamemode;
 mod sentinels;
 mod state;
@@ -182,6 +184,12 @@ fn try_spawn_triage_and_updater(in_flight: &Arc<AtomicBool>, handle: Handle<SysP
     true
 }
 
+pub(crate) async fn spawn_tray_service(
+    tray: SysPilotTray,
+) -> Result<Handle<SysPilotTray>, ksni::Error> {
+    tray.assume_sni_available(true).spawn().await
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if unsafe { libc::getuid() == 0 } {
@@ -233,7 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         terminal::resolve_syspilot(),
         exit_tx,
     );
-    let handle = tray.spawn().await?;
+    let handle = spawn_tray_service(tray).await?;
 
     let (fs_tx, mut fs_rx) = mpsc::channel(1);
     let _fs_tx_guard = fs_tx.clone();

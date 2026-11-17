@@ -3740,44 +3740,57 @@ fn test_map_checkupdates_exit_and_resolve_hysteresis() {
     assert_eq!(res_timeout.total, 9);
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn test_check_official_updates_at_timeout_and_healing() {
+#[test]
+fn test_check_official_updates_at_timeout_and_healing() {
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     use crate::updater::{UpdateCheckError, check_official_updates_at};
+    use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
 
-    let temp = tempfile::tempdir().unwrap();
-    let runtime_dir = temp.path().join("runtime");
-    let script_path = temp.path().join("fake_checkupdates.sh");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
 
-    let script_content = "#!/bin/sh\nmkdir -p \"$CHECKUPDATES_DB\"\ntouch \"$CHECKUPDATES_DB/db.lck\"\nsleep 30\nexit 0\n";
-    std::fs::write(&script_path, script_content).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    rt.block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let runtime_dir = temp.path().join("runtime");
+        let script_path = temp.path().join("fake_checkupdates.sh");
 
-    // 1. Run with 150ms timeout -> triggers timeout & process-group kill
-    let res =
-        check_official_updates_at(Some(&script_path), &runtime_dir, Duration::from_millis(150))
-            .await;
-    assert!(matches!(res, Err(UpdateCheckError::Timeout(_))));
+        let script_content = "#!/bin/sh\nmkdir -p \"$CHECKUPDATES_DB\"\ntouch \"$CHECKUPDATES_DB/db.lck\"\nsleep 30\nexit 0\n";
+        std::fs::write(&script_path, script_content).unwrap();
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let db_lck = runtime_dir.join("db/db.lck");
-    assert!(db_lck.exists());
+        // 1. Run with 300ms timeout -> triggers timeout & process-group kill (headroom under cargo-mutants load)
+        let res =
+            check_official_updates_at(Some(&script_path), &runtime_dir, Duration::from_millis(300))
+                .await;
+        assert!(matches!(res, Err(UpdateCheckError::Timeout(_))), "expected Timeout, got: {res:?}");
 
-    // 2. Next run with fast script -> heals stale db.lck before spawning
-    let fast_script = temp.path().join("fast_checkupdates.sh");
-    std::fs::write(
-        &fast_script,
-        "#!/bin/sh\necho 'glibc 2.38 -> 2.39'\nexit 0\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&fast_script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let db_lck = runtime_dir.join("db/db.lck");
+        assert!(db_lck.exists(), "expected stale db.lck at {db_lck:?} after timeout");
 
-    let res_healed =
-        check_official_updates_at(Some(&fast_script), &runtime_dir, Duration::from_secs(5)).await;
-    assert!(res_healed.is_ok());
-    let rep = res_healed.unwrap();
-    assert_eq!(rep.core_count, 1);
-    assert!(!db_lck.exists());
+        // 2. Next run with fast script -> heals stale db.lck before spawning
+        let fast_script = temp.path().join("fast_checkupdates.sh");
+        std::fs::write(
+            &fast_script,
+            "#!/bin/sh\necho 'glibc 2.38 -> 2.39'\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fast_script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let res_healed =
+            check_official_updates_at(Some(&fast_script), &runtime_dir, Duration::from_secs(5))
+                .await;
+        let rep = res_healed.expect("expected healed update check to succeed");
+        assert_eq!(rep.core_count, 1);
+        assert!(
+            !db_lck.exists(),
+            "expected stale db.lck at {db_lck:?} to be removed on retry"
+        );
+    });
 }
 
 #[test]

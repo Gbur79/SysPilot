@@ -27,7 +27,7 @@ mkdir -p "$HOME" "$XDG_STATE_HOME/system-health" "$XDG_CONFIG_HOME/syspilot" "$X
 unset SYSPILOT_SYS_HEALTH SYSPILOT_MAX_STATUS_AGE SYSPILOT_TERMINAL SYSPILOT_COPILOT_CMD SYSPILOT_GOOSE_RECIPE
 
 tests_passed=0
-total_tests=15
+total_tests=16
 current_test=""
 
 fail() {
@@ -457,6 +457,39 @@ if PATH="$cov_td/bin:$PATH" SYSPILOT_PROJECT_ROOT="$cov_td" SYSPILOT_COV_LOG="$c
 fi
 grep -q "cargo-llvm-cov" "$cov_td/fail_missing.out" || { rm -rf "$cov_td"; fail "expected cargo-llvm-cov install hint on missing subcommand"; }
 rm -rf "$cov_td"
+pass_step
+
+# -----------------------------------------------------------------------------
+# Test 16: lint-universalism.sh /usr/bin & /usr/local/bin guard + allow override
+# -----------------------------------------------------------------------------
+current_test="lint_universalism_usr_bin_guard"
+lint_td=$(mktemp -d "/tmp/syspilot-test-lint.XXXXXX")
+cat > "$lint_td/sample.rs" <<'EOF'
+use std::path::{Path, PathBuf};
+pub fn bad_bins() -> (PathBuf, &'static Path) {
+    (PathBuf::from("/usr/bin/bash"), Path::new("/usr/local/bin/tool"))
+}
+EOF
+if "$project_root/dev-tools/lint-universalism.sh" --target-dir "$lint_td" -q >"$lint_td/fail.out" 2>&1; then
+    rm -rf "$lint_td"
+    fail "lint-universalism.sh should reject unparameterized /usr/bin and /usr/local/bin paths"
+fi
+grep -q "LINT_UNIVERSALISM: FAIL" "$lint_td/fail.out" || { rm -rf "$lint_td"; fail "expected LINT_UNIVERSALISM: FAIL on /usr/bin fixture"; }
+"$project_root/dev-tools/lint-universalism.sh" --target-dir "$lint_td" >"$lint_td/detail.out" 2>&1 || true
+grep -q "sample.rs:3:" "$lint_td/detail.out" || { rm -rf "$lint_td"; fail "expected sample.rs:3 violation line"; }
+
+cat > "$lint_td/sample.rs" <<'EOF'
+use std::path::{Path, PathBuf};
+pub fn allowed_bins() -> (PathBuf, &'static Path) {
+    (
+        PathBuf::from("/usr/bin/bash"), // syspilot-lint:allow
+        Path::new("/usr/local/bin/tool"), // syspilot-lint:allow
+    )
+}
+EOF
+"$project_root/dev-tools/lint-universalism.sh" --target-dir "$lint_td" -q >"$lint_td/pass.out" 2>&1 || { rm -rf "$lint_td"; fail "lint-universalism.sh should allow lines marked with syspilot-lint:allow"; }
+grep -q "LINT_UNIVERSALISM: PASS" "$lint_td/pass.out" || { rm -rf "$lint_td"; fail "expected LINT_UNIVERSALISM: PASS on allowed /usr/bin fixture"; }
+rm -rf "$lint_td"
 pass_step
 
 # -----------------------------------------------------------------------------

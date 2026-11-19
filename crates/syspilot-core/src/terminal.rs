@@ -60,7 +60,7 @@ pub fn find_program(name: &str) -> Option<PathBuf> {
 }
 
 fn find_bash() -> PathBuf {
-    find_program("bash").unwrap_or_else(|| PathBuf::from("/usr/bin/bash"))
+    find_program("bash").unwrap_or_else(|| PathBuf::from("/usr/bin/bash")) // syspilot-lint:allow (last-resort host bash fallback)
 }
 
 pub fn resolve_syspilot_at(

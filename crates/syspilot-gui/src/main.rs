@@ -2892,7 +2892,7 @@ mod tests {
         assert_eq!(sh_single_quote("with spaces"), "'with spaces'");
         assert_eq!(sh_single_quote("don't fail"), "'don'\\''t fail'");
 
-        let bin_clean = Path::new("/usr/bin/syspilot");
+        let bin_clean = Path::new("/usr/bin/syspilot"); // syspilot-lint:allow (unit test fixture path)
         assert_eq!(
             build_chained_upgrade_software_cmd(bin_clean),
             "'/usr/bin/syspilot' --upgrade && '/usr/bin/syspilot' --software"

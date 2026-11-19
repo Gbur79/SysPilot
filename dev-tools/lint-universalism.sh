@@ -58,7 +58,7 @@ for root, dirs, files in os.walk(crates_dir):
                 continue
             import re
             raw_sys_io_re = re.compile(
-                r'(?:fs::\w+|File::open|Path::new|PathBuf::from)\s*\(\s*"/(?:proc|sys|etc|boot|efi|var/lib/pacman|usr/lib/modules)(?:/|")'
+                r'(?:fs::\w+|File::open|Path::new|PathBuf::from)\s*\(\s*"/(?:proc|sys|etc|boot|efi|var/lib/pacman|usr/lib/modules|usr/bin|usr/local/bin)(?:/|")'
             )
             todo_macro_re = re.compile(r'\btodo!\s*\(')
             for line_no, line in enumerate(lines, 1):

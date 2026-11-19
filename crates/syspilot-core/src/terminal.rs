@@ -35,43 +35,70 @@ pub fn is_executable(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-pub fn find_program(name: &str) -> Option<PathBuf> {
-    let system = PathBuf::from("/usr/bin").join(name);
+pub fn find_program_at(
+    root: &Path,
+    name: &str,
+    path_env: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    if name.contains('/') {
+        let direct = Path::new(name);
+        return (direct.is_absolute() && is_executable(direct)).then(|| direct.to_path_buf());
+    }
+    let system = crate::sys_root::sub_path(root, "usr/bin").join(name);
     if is_executable(&system) {
         return Some(system);
     }
-    std::env::var_os("PATH")
+    path_env
         .into_iter()
-        .flat_map(|v| std::env::split_paths(&v).collect::<Vec<_>>())
+        .flat_map(|v| std::env::split_paths(v).collect::<Vec<_>>())
         .map(|dir| dir.join(name))
         .find(|p| is_executable(p))
 }
 
-pub fn resolve_syspilot() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("SYSPILOT_BIN").map(PathBuf::from) {
+pub fn find_program(name: &str) -> Option<PathBuf> {
+    find_program_at(Path::new("/"), name, std::env::var_os("PATH").as_deref())
+}
+
+fn find_bash() -> PathBuf {
+    find_program("bash").unwrap_or_else(|| PathBuf::from("/usr/bin/bash"))
+}
+
+pub fn resolve_syspilot_at(
+    root: &Path,
+    current_exe: Option<&Path>,
+    syspilot_bin_env: Option<&std::ffi::OsStr>,
+    home_env: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    if let Some(p) = syspilot_bin_env.map(PathBuf::from) {
         if p.is_absolute() && is_executable(&p) {
             return Some(p);
         }
     }
 
     let mut candidates = Vec::new();
-    if let Ok(current) = std::env::current_exe() {
+    if let Some(current) = current_exe {
         if let Some(parent) = current.parent() {
             candidates.push(parent.join("syspilot"));
         }
         for ancestor in current.ancestors().take(5) {
-            let candidate = ancestor.join("bin/syspilot");
-            if is_executable(&candidate) {
-                candidates.push(candidate);
-            }
+            candidates.push(ancestor.join("bin/syspilot"));
         }
     }
-    candidates.push(PathBuf::from("/usr/bin/syspilot"));
-    candidates.push(PathBuf::from("/usr/local/bin/syspilot"));
-    if let Some(home) = std::env::var_os("HOME") {
+    candidates.push(crate::sys_root::sub_path(root, "usr/bin/syspilot"));
+    candidates.push(crate::sys_root::sub_path(root, "usr/local/bin/syspilot"));
+    if let Some(home) = home_env {
         candidates.push(PathBuf::from(home).join(".local/bin/syspilot"));
     }
     candidates.into_iter().find(|p| is_executable(p))
+}
+
+pub fn resolve_syspilot() -> Option<PathBuf> {
+    resolve_syspilot_at(
+        Path::new("/"),
+        std::env::current_exe().ok().as_deref(),
+        std::env::var_os("SYSPILOT_BIN").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
 }
 
 #[allow(deprecated)]
@@ -95,11 +122,40 @@ pub fn active_terminals_count() -> usize {
     ACTIVE_TERMINALS.load(Ordering::Acquire)
 }
 
+fn extract_child_from_send_error(error: mpsc::TrySendError<TrackedProcess>) -> Child {
+    match error {
+        mpsc::TrySendError::Full(TrackedProcess::Terminal(c))
+        | mpsc::TrySendError::Disconnected(TrackedProcess::Terminal(c))
+        | mpsc::TrySendError::Full(TrackedProcess::Detached(c))
+        | mpsc::TrySendError::Disconnected(TrackedProcess::Detached(c))
+        | mpsc::TrySendError::Full(TrackedProcess::TerminalWithCallback(c, _))
+        | mpsc::TrySendError::Disconnected(TrackedProcess::TerminalWithCallback(c, _)) => c,
+    }
+}
+
+fn invoke_reaper_callback(callback: Box<dyn FnOnce() + Send + 'static>) {
+    if let Err(err) = thread::Builder::new()
+        .name("syspilot-reaper-cb".into())
+        .spawn(move || {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)) {
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("non-string panic payload");
+                eprintln!("SysPilot: terminal exit callback panicked: {msg}");
+            }
+        })
+    {
+        eprintln!("SysPilot: failed to spawn terminal callback thread: {err}");
+    }
+}
+
 pub(crate) fn reaper() -> &'static mpsc::SyncSender<TrackedProcess> {
     static REAPER: OnceLock<mpsc::SyncSender<TrackedProcess>> = OnceLock::new();
     REAPER.get_or_init(|| {
         let (tx, rx) = mpsc::sync_channel::<TrackedProcess>(64);
-        let _ = thread::Builder::new()
+        if let Err(err) = thread::Builder::new()
             .name("syspilot-child-reaper".into())
             .spawn(move || {
                 let mut children: Vec<TrackedProcess> = Vec::new();
@@ -133,7 +189,7 @@ pub(crate) fn reaper() -> &'static mpsc::SyncSender<TrackedProcess> {
                                 }
                                 if let TrackedProcess::TerminalWithCallback(_, cb) = proc {
                                     if let Some(callback) = cb.take() {
-                                        callback();
+                                        invoke_reaper_callback(callback);
                                     }
                                 }
                                 false
@@ -141,7 +197,10 @@ pub(crate) fn reaper() -> &'static mpsc::SyncSender<TrackedProcess> {
                         }
                     });
                 }
-            });
+            })
+        {
+            eprintln!("SysPilot: failed to spawn child reaper thread: {err}");
+        }
         tx
     })
 }
@@ -188,12 +247,14 @@ pub fn build_terminal(
             command.args(["-T", title, "-e"]);
         }
         _ => {
-            // Universal fallback for custom terminals (wezterm, urxvt, terminator, etc.)
+            // Universal fallback for custom terminals (urxvt, terminator, etc.)
             command.args(["--title", title, "-e"]);
         }
     }
+    let bash = find_bash();
     command
-        .args(["/usr/bin/bash", "-c", WRAPPER, "syspilot-runner"])
+        .arg(&bash)
+        .args(["-c", WRAPPER, "syspilot-runner"])
         .arg(executable)
         .args(args)
         .stdin(Stdio::null())
@@ -217,11 +278,47 @@ pub fn spawn_detached_gui(executable: &Path) -> Result<(), String> {
         .spawn()
     {
         Ok(child) => {
-            let _ = reaper().try_send(TrackedProcess::Detached(child));
+            if let Err(err) = reaper().try_send(TrackedProcess::Detached(child)) {
+                eprintln!(
+                    "SysPilot: child reaper unavailable for detached GUI ({err}); waiting on fallback thread"
+                );
+                let mut child = extract_child_from_send_error(err);
+                if let Err(spawn_err) = thread::Builder::new()
+                    .name("syspilot-detached-wait".into())
+                    .spawn(move || {
+                        let _ = child.wait();
+                    })
+                {
+                    eprintln!("SysPilot: failed to spawn fallback waiter thread: {spawn_err}");
+                }
+            }
             Ok(())
         }
         Err(err) => Err(format!("Failed to launch SysPilot GUI: {err}")),
     }
+}
+
+pub(crate) fn resolve_terminal_candidates(preferred: Option<&str>) -> Vec<&str> {
+    const DEFAULTS: [&str; 8] = [
+        "konsole",
+        "ghostty",
+        "kitty",
+        "alacritty",
+        "gnome-terminal",
+        "foot",
+        "wezterm",
+        "xterm",
+    ];
+    let mut out = Vec::new();
+    if let Some(pref) = preferred.map(str::trim).filter(|s| !s.is_empty()) {
+        out.push(pref);
+    }
+    for term in DEFAULTS {
+        if !out.contains(&term) {
+            out.push(term);
+        }
+    }
+    out
 }
 
 fn spawn_terminal_command_internal(
@@ -240,61 +337,34 @@ fn spawn_terminal_command_internal(
         return Err(format!("terminal launch limit ({MAX_TERMINALS}) reached"));
     }
 
-    // Check user preference from environment
     let preferred = std::env::var("SYSPILOT_TERMINAL").ok();
-
-    let candidates: Vec<&str> = if let Some(pref) = preferred.as_deref() {
-        vec![
-            pref,
-            "konsole",
-            "ghostty",
-            "kitty",
-            "alacritty",
-            "gnome-terminal",
-            "foot",
-            "wezterm",
-            "xterm",
-        ]
-    } else {
-        vec![
-            "konsole",
-            "ghostty",
-            "kitty",
-            "alacritty",
-            "gnome-terminal",
-            "foot",
-            "wezterm",
-            "xterm",
-        ]
-    };
+    let candidates = resolve_terminal_candidates(preferred.as_deref());
 
     for name in candidates {
         let Some(terminal) = find_program(name) else {
             continue;
         };
-        if let Ok(child) = build_terminal(name, &terminal, executable, args, title).spawn() {
-            let proc = match callback {
-                Some(cb) => TrackedProcess::TerminalWithCallback(child, Some(cb)),
-                None => TrackedProcess::Terminal(child),
-            };
-            if let Err(error) = reaper().try_send(proc) {
-                let mut child = match error {
-                    mpsc::TrySendError::Full(TrackedProcess::Terminal(c))
-                    | mpsc::TrySendError::Disconnected(TrackedProcess::Terminal(c))
-                    | mpsc::TrySendError::Full(TrackedProcess::Detached(c))
-                    | mpsc::TrySendError::Disconnected(TrackedProcess::Detached(c))
-                    | mpsc::TrySendError::Full(TrackedProcess::TerminalWithCallback(c, _))
-                    | mpsc::TrySendError::Disconnected(TrackedProcess::TerminalWithCallback(
-                        c,
-                        _,
-                    )) => c,
+        match build_terminal(name, &terminal, executable, args, title).spawn() {
+            Ok(child) => {
+                let proc = match callback {
+                    Some(cb) => TrackedProcess::TerminalWithCallback(child, Some(cb)),
+                    None => TrackedProcess::Terminal(child),
                 };
-                let _ = child.kill();
-                let _ = child.wait();
-                release_slot();
-                return Err("child reaper unavailable".into());
+                if let Err(error) = reaper().try_send(proc) {
+                    let mut child = extract_child_from_send_error(error);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    release_slot();
+                    return Err("child reaper unavailable".into());
+                }
+                return Ok(());
             }
-            return Ok(());
+            Err(err) => {
+                eprintln!(
+                    "SysPilot: failed to spawn terminal '{name}' ({}): {err}",
+                    terminal.display()
+                );
+            }
         }
     }
 
@@ -318,15 +388,23 @@ where
     spawn_terminal_command_internal(executable, args, title, Some(Box::new(callback)))
 }
 
-pub fn spawn_syspilot_task(args: &[&str], title: &str) -> Result<(), String> {
+fn spawn_syspilot_task_internal(
+    args: &[&str],
+    title: &str,
+    callback: Option<Box<dyn FnOnce() + Send + 'static>>,
+) -> Result<(), String> {
     if let Some(syspilot_bin) = resolve_syspilot() {
-        spawn_terminal_command(&syspilot_bin, args, title)
+        spawn_terminal_command_internal(&syspilot_bin, args, title, callback)
     } else {
-        let bash = PathBuf::from("/usr/bin/bash");
+        let bash = find_bash();
         let mut bash_args = vec!["-c", r#"exec syspilot "$@""#, "--"];
         bash_args.extend_from_slice(args);
-        spawn_terminal_command(&bash, &bash_args, title)
+        spawn_terminal_command_internal(&bash, &bash_args, title, callback)
     }
+}
+
+pub fn spawn_syspilot_task(args: &[&str], title: &str) -> Result<(), String> {
+    spawn_syspilot_task_internal(args, title, None)
 }
 
 pub fn spawn_syspilot_task_with_callback<F>(
@@ -337,19 +415,12 @@ pub fn spawn_syspilot_task_with_callback<F>(
 where
     F: FnOnce() + Send + 'static,
 {
-    if let Some(syspilot_bin) = resolve_syspilot() {
-        spawn_terminal_command_with_callback(&syspilot_bin, args, title, callback)
-    } else {
-        let bash = PathBuf::from("/usr/bin/bash");
-        let mut bash_args = vec!["-c", r#"exec syspilot "$@""#, "--"];
-        bash_args.extend_from_slice(args);
-        spawn_terminal_command_with_callback(&bash, &bash_args, title, callback)
-    }
+    spawn_syspilot_task_internal(args, title, Some(Box::new(callback)))
 }
 
 pub fn spawn_shell_task(command: &str, title: &str) -> Result<(), String> {
-    let bash = PathBuf::from("/usr/bin/bash");
-    spawn_terminal_command(&bash, &["-c", command], title)
+    let bash = find_bash();
+    spawn_terminal_command_internal(&bash, &["-c", command], title, None)
 }
 
 pub fn spawn_shell_task_with_callback<F>(
@@ -360,6 +431,6 @@ pub fn spawn_shell_task_with_callback<F>(
 where
     F: FnOnce() + Send + 'static,
 {
-    let bash = PathBuf::from("/usr/bin/bash");
-    spawn_terminal_command_with_callback(&bash, &["-c", command], title, callback)
+    let bash = find_bash();
+    spawn_terminal_command_internal(&bash, &["-c", command], title, Some(Box::new(callback)))
 }

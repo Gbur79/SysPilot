@@ -5593,3 +5593,356 @@ fn test_is_process_running_at_hermetic_proc() {
         }
     }
 }
+
+#[test]
+fn test_terminal_find_program_at_and_resolve_syspilot_at() {
+    use crate::terminal::{find_program_at, resolve_syspilot_at};
+    use std::ffi::OsStr;
+    use std::path::PathBuf;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let usr_bin = root.join("usr/bin");
+    let usr_local_bin = root.join("usr/local/bin");
+    let path_dir1 = tmp.path().join("path1");
+    let path_dir2 = tmp.path().join("path2");
+    let home_dir = tmp.path().join("home");
+    let home_bin = home_dir.join(".local/bin");
+    let exe_dir = tmp.path().join("workspace/target/debug");
+    let ancestor_bin = tmp.path().join("workspace/bin");
+
+    for d in [
+        &usr_bin,
+        &usr_local_bin,
+        &path_dir1,
+        &path_dir2,
+        &home_bin,
+        &exe_dir,
+        &ancestor_bin,
+    ] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+
+    // find_program_at: slash path bypasses root/usr/bin and PATH; relative slash path rejected
+    let decoy = write_mock_executable(&usr_bin, "myterm", "#!/bin/sh\nexit 0\n");
+    let direct = write_mock_executable(&path_dir2, "direct-term", "#!/bin/sh\nexit 0\n");
+    let direct_str = direct.to_string_lossy().to_string();
+    assert_eq!(
+        find_program_at(&root, &direct_str, None),
+        Some(direct.clone())
+    );
+    assert_eq!(
+        find_program_at(&root, "/nonexistent/direct-term", None),
+        None
+    );
+    assert_eq!(find_program_at(&root, "relative/direct-term", None), None);
+
+    // find_program_at: root/usr/bin precedes PATH; PATH resolves multi-dir priority
+    assert_eq!(find_program_at(&root, "myterm", None), Some(decoy));
+    let p2_tool = write_mock_executable(&path_dir2, "custom-tool", "#!/bin/sh\nexit 0\n");
+    let p1_tool = write_mock_executable(&path_dir1, "custom-tool", "#!/bin/sh\nexit 0\n");
+    let _ = p2_tool;
+    let joined_path = std::env::join_paths([&path_dir1, &path_dir2]).unwrap();
+    assert_eq!(
+        find_program_at(&root, "custom-tool", Some(joined_path.as_os_str())),
+        Some(p1_tool)
+    );
+    let p2_only = write_mock_executable(&path_dir2, "second-tool", "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        find_program_at(&root, "second-tool", Some(joined_path.as_os_str())),
+        Some(p2_only)
+    );
+    assert_eq!(
+        find_program_at(&root, "missing-tool", Some(joined_path.as_os_str())),
+        None
+    );
+
+    // resolve_syspilot_at: empty -> None
+    let fake_exe = exe_dir.join("syspilot-gui");
+    assert_eq!(
+        resolve_syspilot_at(&root, Some(&fake_exe), None, Some(home_dir.as_os_str())),
+        None
+    );
+
+    // Priority chain: HOME -> /usr/local/bin -> /usr/bin -> ancestor/bin -> sibling -> SYSPILOT_BIN
+    let home_sp = write_mock_executable(&home_bin, "syspilot", "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        resolve_syspilot_at(&root, Some(&fake_exe), None, Some(home_dir.as_os_str())),
+        Some(home_sp)
+    );
+
+    let local_sp = write_mock_executable(&usr_local_bin, "syspilot", "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        resolve_syspilot_at(&root, Some(&fake_exe), None, Some(home_dir.as_os_str())),
+        Some(local_sp)
+    );
+
+    let usr_sp = write_mock_executable(&usr_bin, "syspilot", "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        resolve_syspilot_at(&root, Some(&fake_exe), None, Some(home_dir.as_os_str())),
+        Some(usr_sp)
+    );
+
+    let anc_sp = write_mock_executable(&ancestor_bin, "syspilot", "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        resolve_syspilot_at(&root, Some(&fake_exe), None, Some(home_dir.as_os_str())),
+        Some(anc_sp)
+    );
+
+    let sib_sp = write_mock_executable(&exe_dir, "syspilot", "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        resolve_syspilot_at(&root, Some(&fake_exe), None, Some(home_dir.as_os_str())),
+        Some(sib_sp)
+    );
+
+    // Relative SYSPILOT_BIN and non-executable absolute SYSPILOT_BIN must be rejected
+    let non_exec = tmp.path().join("nonexec-syspilot");
+    std::fs::write(&non_exec, "#!/bin/sh\n").unwrap();
+    assert_ne!(
+        resolve_syspilot_at(
+            &root,
+            Some(&fake_exe),
+            Some(OsStr::new("relative/syspilot")),
+            Some(home_dir.as_os_str())
+        ),
+        Some(PathBuf::from("relative/syspilot"))
+    );
+    assert_ne!(
+        resolve_syspilot_at(
+            &root,
+            Some(&fake_exe),
+            Some(non_exec.as_os_str()),
+            Some(home_dir.as_os_str())
+        ),
+        Some(non_exec)
+    );
+
+    // Absolute executable SYSPILOT_BIN wins
+    let override_sp = write_mock_executable(tmp.path(), "override-sp", "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        resolve_syspilot_at(
+            &root,
+            Some(&fake_exe),
+            Some(override_sp.as_os_str()),
+            Some(home_dir.as_os_str())
+        ),
+        Some(override_sp)
+    );
+}
+
+#[test]
+fn test_terminal_candidates_and_build_arms() {
+    use crate::terminal::{build_terminal, resolve_terminal_candidates};
+    use std::path::Path;
+
+    assert_eq!(resolve_terminal_candidates(None).len(), 8);
+    assert_eq!(resolve_terminal_candidates(Some("   ")).len(), 8);
+    let dedup = resolve_terminal_candidates(Some(" konsole "));
+    assert_eq!(dedup.len(), 8);
+    assert_eq!(dedup[0], "konsole");
+    let custom = resolve_terminal_candidates(Some("myterm"));
+    assert_eq!(custom.len(), 9);
+    assert_eq!(custom[0], "myterm");
+
+    let cases: &[(&str, &[&str])] = &[
+        ("konsole", &["--nofork", "-p", "tabtitle=MyTitle", "-e"]),
+        ("ghostty", &["--title=MyTitle", "-e"]),
+        ("kitty", &["--title", "MyTitle"]),
+        ("alacritty", &["--title", "MyTitle", "-e"]),
+        ("gnome-terminal", &["--title", "MyTitle", "--"]),
+        ("foot", &["--title=MyTitle"]),
+        ("wezterm", &["start", "--"]),
+        ("xterm", &["-T", "MyTitle", "-e"]),
+        ("urxvt", &["--title", "MyTitle", "-e"]),
+    ];
+
+    for (name, expected_prefix) in cases {
+        let bin = format!("/usr/bin/{name}");
+        let cmd = build_terminal(
+            name,
+            Path::new(&bin),
+            Path::new("/usr/bin/true"),
+            &["--flag"],
+            "MyTitle",
+        );
+        assert_eq!(
+            cmd.get_program(),
+            bin.as_str(),
+            "program mismatch for {name}"
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            args.starts_with(
+                &expected_prefix
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect::<Vec<_>>()
+            ),
+            "prefix mismatch for {name}: got {args:?}"
+        );
+        assert!(args.iter().any(|a| a.ends_with("bash")));
+        assert!(args.iter().any(|a| a == "syspilot-runner"));
+        assert!(args.iter().any(|a| a == "/usr/bin/true"));
+        assert!(args.iter().any(|a| a == "--flag"));
+    }
+}
+
+#[test]
+fn test_terminal_spawn_lifecycle_and_reaper_panic_isolation() {
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut env = EnvGuard::new();
+
+    use crate::terminal::{
+        TrackedProcess, active_terminals_count, reaper, release_slot, reserve_slot,
+        spawn_detached_gui, spawn_shell_task, spawn_shell_task_with_callback, spawn_syspilot_task,
+        spawn_syspilot_task_with_callback, spawn_terminal_command,
+        spawn_terminal_command_with_callback,
+    };
+    use std::path::Path;
+    use std::process::Command;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    while active_terminals_count() > 0 {
+        release_slot();
+    }
+
+    // 1. TrackedProcess Debug coverage across all 3 variants
+    let c1 = Command::new("/usr/bin/true").spawn().unwrap();
+    let c2 = Command::new("/usr/bin/true").spawn().unwrap();
+    let c3 = Command::new("/usr/bin/true").spawn().unwrap();
+    let mut tp1 = TrackedProcess::Terminal(c1);
+    let mut tp2 = TrackedProcess::Detached(c2);
+    let mut tp3 = TrackedProcess::TerminalWithCallback(c3, Some(Box::new(|| {})));
+    assert!(format!("{tp1:?}").contains("Terminal"));
+    assert!(format!("{tp2:?}").contains("Detached"));
+    assert!(format!("{tp3:?}").contains("TerminalWithCallback"));
+    if let TrackedProcess::Terminal(ref mut c) = tp1 {
+        let _ = c.wait();
+    }
+    if let TrackedProcess::Detached(ref mut c) = tp2 {
+        let _ = c.wait();
+    }
+    if let TrackedProcess::TerminalWithCallback(ref mut c, _) = tp3 {
+        let _ = c.wait();
+    }
+
+    // 2. Non-executable error + slot exhaustion error
+    assert!(spawn_detached_gui(Path::new("/nonexistent/gui")).is_err());
+    assert!(spawn_terminal_command(Path::new("/nonexistent/exec"), &[], "T").is_err());
+    for _ in 0..8 {
+        assert!(reserve_slot());
+    }
+    assert!(spawn_terminal_command(Path::new("/usr/bin/true"), &[], "T").is_err());
+    for _ in 0..8 {
+        release_slot();
+    }
+
+    // 3. Mock terminal executing and logging invocations
+    let tmp = tempfile::tempdir().unwrap();
+    let log_file = tmp.path().join("term.log");
+    let mock_dir = tmp.path().join("mock_bin");
+    std::fs::create_dir_all(&mock_dir).unwrap();
+    let mock_term_script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit 0\n",
+        log_file.display()
+    );
+    let working_term = write_mock_executable(&mock_dir, "my-ok-term", &mock_term_script);
+    let mock_sp = write_mock_executable(&mock_dir, "syspilot", "#!/bin/sh\nexit 0\n");
+
+    env.set("SYSPILOT_TERMINAL", working_term.as_os_str());
+    env.set("SYSPILOT_BIN", mock_sp.as_os_str());
+    assert_eq!(crate::terminal::resolve_syspilot(), Some(mock_sp.clone()));
+
+    assert!(spawn_detached_gui(&mock_sp).is_ok());
+    assert!(spawn_terminal_command(&mock_sp, &["--status"], "T1").is_ok());
+
+    let cb_count = Arc::new(AtomicUsize::new(0));
+    let cbc1 = Arc::clone(&cb_count);
+    assert!(
+        spawn_terminal_command_with_callback(&mock_sp, &["--cb"], "T2", move || {
+            cbc1.fetch_add(1, Ordering::SeqCst);
+        })
+        .is_ok()
+    );
+    assert!(spawn_syspilot_task(&["--audit-only-task"], "T3").is_ok());
+    let cbc2 = Arc::clone(&cb_count);
+    assert!(
+        spawn_syspilot_task_with_callback(&["--audit-cb"], "T4", move || {
+            cbc2.fetch_add(1, Ordering::SeqCst);
+        })
+        .is_ok()
+    );
+    assert!(spawn_shell_task("echo shell_only_ok", "T5").is_ok());
+    let cbc3 = Arc::clone(&cb_count);
+    assert!(
+        spawn_shell_task_with_callback("echo shell_cb_ok", "T6", move || {
+            cbc3.fetch_add(1, Ordering::SeqCst);
+        })
+        .is_ok()
+    );
+
+    let start = Instant::now();
+    while (cb_count.load(Ordering::SeqCst) < 3 || active_terminals_count() != 0)
+        && start.elapsed() < Duration::from_secs(4)
+    {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(cb_count.load(Ordering::SeqCst), 3);
+    assert_eq!(active_terminals_count(), 0);
+    let log_text = std::fs::read_to_string(&log_file).unwrap();
+    assert!(log_text.contains("--status"));
+    assert!(log_text.contains("--cb"));
+    assert!(log_text.contains(&mock_sp.display().to_string()));
+    assert!(log_text.contains("--audit-only-task"));
+    assert!(log_text.contains("--audit-cb"));
+    assert!(log_text.contains("shell_only_ok"));
+    assert!(log_text.contains("shell_cb_ok"));
+
+    // 4. Reaper survives a panicking callback and still executes subsequent callbacks
+    assert!(reserve_slot());
+    let panic_child = Command::new("/usr/bin/true").spawn().unwrap();
+    reaper()
+        .try_send(TrackedProcess::TerminalWithCallback(
+            panic_child,
+            Some(Box::new(|| panic!("simulated callback panic"))),
+        ))
+        .unwrap();
+
+    let start = Instant::now();
+    while active_terminals_count() != 0 && start.elapsed() < Duration::from_secs(3) {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(active_terminals_count(), 0);
+
+    assert!(reserve_slot());
+    let after_panic = Arc::new(AtomicBool::new(false));
+    let after_panic_clone = Arc::clone(&after_panic);
+    let next_child = Command::new("/usr/bin/true").spawn().unwrap();
+    reaper()
+        .try_send(TrackedProcess::TerminalWithCallback(
+            next_child,
+            Some(Box::new(move || {
+                after_panic_clone.store(true, Ordering::SeqCst);
+            })),
+        ))
+        .unwrap();
+
+    let start = Instant::now();
+    while (!after_panic.load(Ordering::SeqCst) || active_terminals_count() != 0)
+        && start.elapsed() < Duration::from_secs(3)
+    {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        after_panic.load(Ordering::SeqCst),
+        "Reaper must survive a panicking callback and execute subsequent callbacks"
+    );
+    assert_eq!(active_terminals_count(), 0);
+}

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.6] - 2026-11-19
+
+### Fixed & Hardened / Non-Blocking Tray Startup, Terminal Reaper Safety & Universalism Gates (`BP-NEON-20261119-TRAY01`, `PATCH-042`, `PATCH-041`)
+- **Tray Daemon Non-Blocking SNI Startup & Loop Hardening (`BP-NEON-20261119-TRAY01`)**: Deferred initial update checks to background triage after `spawn_tray_service(tray)` so the `StatusNotifierItem` icon registers immediately even offline or on slow mirrors; replaced `tokio::time::interval` with `interval_at(..., MissedTickBehavior::Delay)` to eliminate `t=0` stampedes and post-suspend tick storms; unified update and telemetry checks via `try_spawn_triage_with` (`TriageGuard` RAII) and a level-triggered `DaemonState::pending_pkg_check` latch; hardened `StatusWatcher` and `drain_fs_signals` against swallowed `FsSignal::Fault` events and late parent directory creation; extracted `run_daemon_loop` and expanded `tests.rs` + isolated `dbus_test.rs` (`144/144` workspace tests, `35` tray tests, `72.30%` line coverage in `syspilot-tray/src/main.rs`, `0` survived mutants).
+- **Terminal Reaper Hardening & Parameterized Path Lookup (`PATCH-042`)**: Hardened `syspilot-core::terminal` bounded reaper (`MAX_TERMINALS=8`) with panic-isolated callbacks and waiter fallback, and parameterized `find_program_at` / `resolve_syspilot_at` via `sys_root::sub_path`.
+- **Universalism Linter & Core Test Stabilization (`PATCH-041`)**: Enforced `/usr/bin` and `/usr/local/bin` root I/O guards in `dev-tools/lint-universalism.sh` with regression coverage and `shellcheck` self-lint in `dev-tools/test-cli.sh`, and stabilized `check_official_updates_at` timeout diagnostics in `syspilot-core`.
+
 ## [2.1.5] - 2026-11-15
 
 ### Added & Hardened / LCARS Cockpit Polish, Standalone Tools Integration & SRE Tooling Hardening (`PATCH-040`, `PATCH-039`, `PATCH-038`, `PATCH-036`, `PATCH-035`, `PATCH-034`, `PATCH-033`, `PATCH-032`)

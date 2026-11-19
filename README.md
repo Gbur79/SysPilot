@@ -264,7 +264,7 @@ sysPilot/
 ├── autostart/
 │   └── syspilot.desktop         # XDG autostart entry for background tray sentinel
 ├── packaging/
-│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.1.5)
+│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.1.6)
 │   └── syspilot.desktop         # Application menu desktop launcher (Exec=syspilot --gui)
 └── systemd/
     └── syspilot-tray.service    # User systemd service for 24/7 Rust Sentinel

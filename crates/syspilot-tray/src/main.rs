@@ -12,6 +12,7 @@ mod updater;
 use ksni::{Handle, TrayMethods};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use state::{SystemSnapshot, get_status_path, read_system_snapshot};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,23 +20,23 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tray::SysPilotTray;
 
-enum FsSignal {
+pub(crate) enum FsSignal {
     Dirty,
     Fault(String),
 }
 
-fn relevant(event: &Event, target: &Path) -> bool {
+pub(crate) fn relevant(event: &Event, target: &Path) -> bool {
     matches!(
         event.kind,
         EventKind::Any | EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
     ) && event.paths.iter().any(|path| path == target)
 }
 
-fn bounded_error(error: impl ToString) -> String {
+pub(crate) fn bounded_error(error: impl ToString) -> String {
     error.to_string().chars().take(240).collect()
 }
 
-async fn read_with_retry(path: PathBuf) -> Result<SystemSnapshot, String> {
+pub(crate) async fn read_with_retry(path: PathBuf) -> Result<SystemSnapshot, String> {
     let delays = [0, 40, 120];
     let mut last_error = String::new();
 
@@ -54,7 +55,7 @@ async fn read_with_retry(path: PathBuf) -> Result<SystemSnapshot, String> {
     Err(bounded_error(last_error))
 }
 
-async fn refresh(
+pub(crate) async fn refresh(
     handle: &Handle<SysPilotTray>,
     path: &Path,
     current: &mut SystemSnapshot,
@@ -146,40 +147,33 @@ pub fn try_acquire_triage_lock(in_flight: &Arc<AtomicBool>) -> Option<TriageGuar
 }
 
 #[inline]
-fn trim_heap() {
+pub(crate) fn trim_heap() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     unsafe {
         let _ = libc::malloc_trim(0);
     }
 }
 
-fn try_spawn_triage(in_flight: &Arc<AtomicBool>, fast: bool, force_refresh: bool) -> bool {
+pub(crate) fn try_spawn_triage_with<F, Fut>(
+    in_flight: &Arc<AtomicBool>,
+    check_pkgs: bool,
+    gamemode_active: bool,
+    runner: F,
+) -> bool
+where
+    F: FnOnce(bool, bool) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    if gamemode_active {
+        return false;
+    }
     let Some(guard) = try_acquire_triage_lock(in_flight) else {
         return false;
     };
 
     tokio::spawn(async move {
         let _guard = guard;
-        let _ = syspilot_core::run_triage(fast, force_refresh).await;
-        trim_heap();
-    });
-    true
-}
-
-fn try_spawn_triage_and_updater(in_flight: &Arc<AtomicBool>, handle: Handle<SysPilotTray>) -> bool {
-    let Some(guard) = try_acquire_triage_lock(in_flight) else {
-        return false;
-    };
-
-    tokio::spawn(async move {
-        let _guard = guard;
-        let _ = syspilot_core::run_triage(true, false).await;
-        if let Some(updates) = updater::run_full_update_check(false).await {
-            let _ = handle
-                .update(move |tray| tray.updates = Some(updates))
-                .await;
-        }
-        trim_heap();
+        runner(check_pkgs, gamemode_active).await;
     });
     true
 }
@@ -202,86 +196,292 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let status_path = get_status_path();
-    let (mut snapshot, mut last_error) = match read_system_snapshot(&status_path) {
-        Ok(snapshot) => (snapshot, None),
-        Err(error) => {
-            let error = bounded_error(error);
-            #[allow(clippy::field_reassign_with_default)]
-            {
-                let mut snap = SystemSnapshot::default();
-                snap.source_error = Some(error.clone());
-                (snap, Some(error))
-            }
-        }
-    };
-
     let mut gamemode_watcher = gamemode::GameModeWatcher::new();
-    let mut sentinels_state = sentinels::collect_sentinels();
-    let mut gamemode_active = gamemode_watcher.is_active().await;
+    let sentinels_state = sentinels::collect_sentinels();
+    let gamemode_active = gamemode_watcher.is_active().await;
 
-    // Run initial background update check if not in gaming session
-    let initial_updates = updater::run_full_update_check(gamemode_active).await;
-    trim_heap();
+    let mut state = build_initial_state(&status_path, sentinels_state.clone(), gamemode_active);
 
-    // Atomic deduplication lock preventing overlapping background triage runs
-    let triage_in_flight = Arc::new(AtomicBool::new(false));
-
-    // Trigger initial background triage unconditionally on startup (cold boot or restart)
-    // as long as not in an active gaming session, ensuring telemetry is immediately fresh.
-    if !gamemode_active {
-        try_spawn_triage(&triage_in_flight, true, false);
-    }
-
-    let (exit_tx, mut exit_rx) = mpsc::channel(1);
+    let (exit_tx, exit_rx) = mpsc::channel(1);
     let tray = SysPilotTray::new(
-        snapshot.clone(),
-        sentinels_state.clone(),
-        initial_updates,
+        state.snapshot.clone(),
+        sentinels_state,
+        None,
         gamemode_active,
         terminal::resolve_syspilot(),
         exit_tx,
     );
     let handle = spawn_tray_service(tray).await?;
 
-    let (fs_tx, mut fs_rx) = mpsc::channel(1);
-    let _fs_tx_guard = fs_tx.clone();
-    let target = status_path.clone();
-    let mut watcher: Option<RecommendedWatcher> = RecommendedWatcher::new(
-        move |result: notify::Result<Event>| match result {
-            Ok(event) if relevant(&event, &target) => {
-                let _ = fs_tx.try_send(FsSignal::Dirty);
+    let (fs_tx, fs_rx) = mpsc::channel(8);
+    let watcher = StatusWatcher::new(status_path.clone(), fs_tx.clone());
+    let triage_in_flight = Arc::new(AtomicBool::new(false));
+    let trigger_triage: TriageTrigger = Arc::new(move |check_pkgs, gm, tx| {
+        try_spawn_triage_with(
+            &triage_in_flight,
+            check_pkgs,
+            gm,
+            move |pkgs, gm_flag| async move {
+                let _ = syspilot_core::run_triage(pkgs, gm_flag).await;
+                trim_heap();
+                let _ = tx.try_send(FsSignal::Dirty);
+            },
+        )
+    });
+
+    trigger_startup_triage(&trigger_triage, &mut state, &fs_tx);
+
+    let mut rt = DaemonRuntime {
+        gamemode_watcher,
+        exit_rx,
+        fs_tx,
+        fs_rx,
+        watcher,
+        collect_sentinels: sentinels::collect_sentinels,
+        trigger_triage,
+    };
+
+    run_daemon_loop(
+        DaemonConfig::production(status_path),
+        &handle,
+        &mut state,
+        &mut rt,
+        shutdown_signal(),
+    )
+    .await;
+
+    drop(rt);
+    let _ = shutdown_tray_handle(&handle, Duration::from_secs(2)).await;
+    Ok(())
+}
+
+pub(crate) fn build_initial_state(
+    status_path: &Path,
+    sentinels_state: sentinels::SentinelStatus,
+    gamemode_active: bool,
+) -> DaemonState {
+    let (snapshot, last_error) = match read_system_snapshot(status_path) {
+        Ok(snapshot) => (snapshot, None),
+        Err(error) => {
+            let error = bounded_error(error);
+            let snap = SystemSnapshot {
+                source_error: Some(error.clone()),
+                ..Default::default()
+            };
+            (snap, Some(error))
+        }
+    };
+    DaemonState {
+        snapshot,
+        last_error,
+        sentinels_state,
+        gamemode_active,
+        pending_pkg_check: false,
+    }
+}
+
+pub(crate) fn trigger_startup_triage(
+    trigger: &TriageTrigger,
+    state: &mut DaemonState,
+    fs_tx: &mpsc::Sender<FsSignal>,
+) {
+    state.pending_pkg_check = !trigger(true, state.gamemode_active, fs_tx.clone());
+}
+
+pub(crate) fn dispatch_notify_result(
+    result: notify::Result<Event>,
+    target: &Path,
+    fs_tx: &mpsc::Sender<FsSignal>,
+) {
+    match result {
+        Ok(event) if relevant(&event, target) => {
+            let _ = fs_tx.try_send(FsSignal::Dirty);
+        }
+        Err(error) => {
+            if let Err(send_err) = fs_tx.try_send(FsSignal::Fault(bounded_error(error))) {
+                eprintln!("SysPilot: status watcher fault signal dropped: {send_err}");
             }
-            Err(error) => {
-                let _ = fs_tx.try_send(FsSignal::Fault(bounded_error(error)));
-            }
-            _ => {}
-        },
+        }
+        _ => {}
+    }
+}
+
+fn build_watcher(target: PathBuf, fs_tx: mpsc::Sender<FsSignal>) -> Option<RecommendedWatcher> {
+    RecommendedWatcher::new(
+        move |result| dispatch_notify_result(result, &target, &fs_tx),
         notify::Config::default(),
     )
     .map_err(|error| eprintln!("SysPilot: watcher unavailable; polling fallback active: {error}"))
-    .ok();
+    .ok()
+}
 
-    let parent = status_path.parent().map(Path::to_path_buf);
-    let mut watching = false;
-    if let (Some(watcher), Some(parent)) = (watcher.as_mut(), parent.as_deref()) {
-        if parent.is_dir() {
-            watching = watcher.watch(parent, RecursiveMode::NonRecursive).is_ok();
-        }
+pub(crate) struct StatusWatcher {
+    watcher: Option<RecommendedWatcher>,
+    parent: Option<PathBuf>,
+    watching: bool,
+    target: PathBuf,
+    fs_tx: mpsc::Sender<FsSignal>,
+}
+
+impl StatusWatcher {
+    pub(crate) fn new(target: PathBuf, fs_tx: mpsc::Sender<FsSignal>) -> Self {
+        let mut sw = Self {
+            watcher: None,
+            parent: target.parent().map(Path::to_path_buf),
+            watching: false,
+            target,
+            fs_tx,
+        };
+        sw.ensure_watching();
+        sw
     }
 
-    let mut poll = tokio::time::interval(Duration::from_secs(30));
-    let mut gamemode_timer = tokio::time::interval(Duration::from_secs(3));
-    let mut sentinels_timer = tokio::time::interval(Duration::from_secs(10));
-    let mut updater_timer = tokio::time::interval(Duration::from_secs(3600));
-    let mut triage_timer = tokio::time::interval(Duration::from_secs(900));
+    #[cfg(test)]
+    pub(crate) fn is_watching(&self) -> bool {
+        self.watching
+    }
 
-    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    gamemode_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    sentinels_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    updater_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    triage_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    pub(crate) fn ensure_watching(&mut self) -> bool {
+        if self.watching {
+            return true;
+        }
+        let Some(parent) = self.parent.as_deref() else {
+            return false;
+        };
+        if !parent.is_dir() {
+            return false;
+        }
+        if self.watcher.is_none() {
+            self.watcher = build_watcher(self.target.clone(), self.fs_tx.clone());
+        }
+        let Some(watcher) = self.watcher.as_mut() else {
+            return false;
+        };
+        if watcher.watch(parent, RecursiveMode::NonRecursive).is_ok() {
+            self.watching = true;
+        } else {
+            self.watcher = None;
+        }
+        self.watching
+    }
 
-    let shutdown = shutdown_signal();
+    pub(crate) fn handle_fault(&mut self, error: &str) {
+        if self.watching {
+            if let (Some(watcher), Some(parent)) = (self.watcher.as_mut(), self.parent.as_deref()) {
+                let _ = watcher.unwatch(parent);
+            }
+            self.watching = false;
+        }
+        self.watcher = None;
+        eprintln!("SysPilot: filesystem watcher error: {error}");
+    }
+}
+
+pub(crate) fn drain_fs_signals(fs_rx: &mut mpsc::Receiver<FsSignal>) -> Option<String> {
+    let mut fault = None;
+    while let Ok(sig) = fs_rx.try_recv() {
+        if let FsSignal::Fault(err) = sig {
+            fault = Some(err);
+        }
+    }
+    fault
+}
+
+pub(crate) fn evaluate_sentinel_transition(
+    prev: &sentinels::SentinelStatus,
+    next: &sentinels::SentinelStatus,
+) -> (bool, bool) {
+    let changed = next != prev;
+    let pacman_unlocked = prev.pacman_locked && !next.pacman_locked;
+    let pacman_db_changed = next.pacman_db_mtime != prev.pacman_db_mtime;
+    let summary_changed = next.summary_mtime != prev.summary_mtime;
+    (
+        changed,
+        pacman_unlocked || pacman_db_changed || summary_changed,
+    )
+}
+
+pub(crate) async fn shutdown_tray_handle(
+    handle: &Handle<SysPilotTray>,
+    timeout_dur: Duration,
+) -> bool {
+    if tokio::time::timeout(timeout_dur, handle.shutdown())
+        .await
+        .is_err()
+    {
+        eprintln!(
+            "SysPilot: handle shutdown timed out after {}s (D-Bus teardown race); exiting",
+            timeout_dur.as_secs()
+        );
+        return false;
+    }
+    true
+}
+
+pub(crate) fn make_interval(period: Duration) -> tokio::time::Interval {
+    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    interval
+}
+
+pub(crate) type TriageTrigger =
+    Arc<dyn Fn(bool, bool, mpsc::Sender<FsSignal>) -> bool + Send + Sync>;
+
+pub(crate) struct DaemonConfig {
+    pub status_path: PathBuf,
+    pub poll_interval: Duration,
+    pub gamemode_interval: Duration,
+    pub sentinels_interval: Duration,
+    pub updater_interval: Duration,
+    pub triage_interval: Duration,
+    pub fs_debounce: Duration,
+}
+
+impl DaemonConfig {
+    fn production(status_path: PathBuf) -> Self {
+        Self {
+            status_path,
+            poll_interval: Duration::from_secs(30),
+            gamemode_interval: Duration::from_secs(3),
+            sentinels_interval: Duration::from_secs(10),
+            updater_interval: Duration::from_secs(3600),
+            triage_interval: Duration::from_secs(900),
+            fs_debounce: Duration::from_millis(100),
+        }
+    }
+}
+
+pub(crate) struct DaemonState {
+    pub snapshot: SystemSnapshot,
+    pub last_error: Option<String>,
+    pub sentinels_state: sentinels::SentinelStatus,
+    pub gamemode_active: bool,
+    pub pending_pkg_check: bool,
+}
+
+pub(crate) struct DaemonRuntime {
+    pub gamemode_watcher: gamemode::GameModeWatcher,
+    pub exit_rx: mpsc::Receiver<()>,
+    pub fs_tx: mpsc::Sender<FsSignal>,
+    pub fs_rx: mpsc::Receiver<FsSignal>,
+    pub watcher: StatusWatcher,
+    pub collect_sentinels: fn() -> sentinels::SentinelStatus,
+    pub trigger_triage: TriageTrigger,
+}
+
+pub(crate) async fn run_daemon_loop(
+    config: DaemonConfig,
+    handle: &Handle<SysPilotTray>,
+    state: &mut DaemonState,
+    rt: &mut DaemonRuntime,
+    shutdown: impl Future<Output = ()>,
+) {
+    let mut poll = make_interval(config.poll_interval);
+    let mut gamemode_timer = make_interval(config.gamemode_interval);
+    let mut sentinels_timer = make_interval(config.sentinels_interval);
+    let mut updater_timer = make_interval(config.updater_interval);
+    let mut triage_timer = make_interval(config.triage_interval);
+
     tokio::pin!(shutdown);
 
     loop {
@@ -290,70 +490,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("SysPilot: shutdown signal received, terminating tray loop");
                 break;
             }
-            _ = exit_rx.recv() => {
+            _ = rt.exit_rx.recv() => {
                 eprintln!("SysPilot: user exit requested via tray menu");
                 break;
             }
             _ = triage_timer.tick() => {
-                if !gamemode_active {
-                    try_spawn_triage(&triage_in_flight, false, false);
-                }
+                let _ = (rt.trigger_triage)(false, state.gamemode_active, rt.fs_tx.clone());
             }
-            signal = fs_rx.recv() => match signal {
-                Some(FsSignal::Dirty) => {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    while fs_rx.try_recv().is_ok() {}
+            Some(signal) = rt.fs_rx.recv() => match signal {
+                FsSignal::Dirty => {
+                    tokio::time::sleep(config.fs_debounce).await;
+                    if let Some(err) = drain_fs_signals(&mut rt.fs_rx) {
+                        rt.watcher.handle_fault(&err);
+                    }
                     if !refresh(
-                        &handle,
-                        &status_path,
-                        &mut snapshot,
-                        &mut last_error,
+                        handle,
+                        &config.status_path,
+                        &mut state.snapshot,
+                        &mut state.last_error,
                     ).await {
                         eprintln!("SysPilot: handle closed during status refresh; exiting");
                         break;
                     }
-                }
-                Some(FsSignal::Fault(error)) => {
-                    if watching {
-                        if let (Some(watcher), Some(parent)) =
-                            (watcher.as_mut(), parent.as_deref())
-                        {
-                            let _ = watcher.unwatch(parent);
-                        }
-                        watching = false;
+                    if state.pending_pkg_check
+                        && !state.gamemode_active
+                        && (rt.trigger_triage)(true, false, rt.fs_tx.clone())
+                    {
+                        state.pending_pkg_check = false;
                     }
-                    eprintln!("SysPilot: filesystem watcher error: {error}");
                 }
-                None => {}
+                FsSignal::Fault(error) => {
+                    rt.watcher.handle_fault(&error);
+                    if !refresh(
+                        handle,
+                        &config.status_path,
+                        &mut state.snapshot,
+                        &mut state.last_error,
+                    ).await {
+                        eprintln!("SysPilot: handle closed during fault recovery refresh; exiting");
+                        break;
+                    }
+                }
             },
             _ = poll.tick() => {
-                if !watching {
-                    if let (Some(watcher), Some(parent)) =
-                        (watcher.as_mut(), parent.as_deref())
-                    {
-                        if parent.is_dir() {
-                            let _ = watcher.unwatch(parent);
-                            watching = watcher
-                                .watch(parent, RecursiveMode::NonRecursive)
-                                .is_ok();
-                        }
-                    }
-                }
+                rt.watcher.ensure_watching();
                 if !refresh(
-                    &handle,
-                    &status_path,
-                    &mut snapshot,
-                    &mut last_error,
+                    handle,
+                    &config.status_path,
+                    &mut state.snapshot,
+                    &mut state.last_error,
                 ).await {
                     eprintln!("SysPilot: handle closed during periodic poll; exiting");
                     break;
                 }
             }
             _ = gamemode_timer.tick() => {
-                let active = gamemode_watcher.is_active().await;
-                if active != gamemode_active {
-                    let was_active = gamemode_active;
-                    gamemode_active = active;
+                let active = rt.gamemode_watcher.is_active().await;
+                if active != state.gamemode_active {
+                    let was_active = state.gamemode_active;
+                    state.gamemode_active = active;
                     if handle
                         .update(move |tray| tray.gamemode_active = active)
                         .await
@@ -363,20 +558,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         break;
                     }
                     if was_active && !active {
-                        try_spawn_triage(&triage_in_flight, false, false);
+                        let check_pkgs = state.pending_pkg_check;
+                        if (rt.trigger_triage)(check_pkgs, false, rt.fs_tx.clone()) && check_pkgs {
+                            state.pending_pkg_check = false;
+                        }
                     }
                 }
             }
             _ = sentinels_timer.tick() => {
-                let current_sentinels = sentinels::collect_sentinels();
-                let pacman_unlocked = sentinels_state.pacman_locked && !current_sentinels.pacman_locked;
-                let pacman_db_changed = current_sentinels.pacman_db_mtime != sentinels_state.pacman_db_mtime;
-                let summary_changed = current_sentinels.summary_mtime != sentinels_state.summary_mtime;
-                if current_sentinels != sentinels_state {
-                    sentinels_state = current_sentinels.clone();
-                    let update_sentinels = current_sentinels.clone();
+                let current_sentinels = (rt.collect_sentinels)();
+                let (changed, needs_pkg_triage) =
+                    evaluate_sentinel_transition(&state.sentinels_state, &current_sentinels);
+                if changed {
+                    state.sentinels_state = current_sentinels.clone();
                     if handle
-                        .update(move |tray| tray.sentinels = update_sentinels)
+                        .update(move |tray| tray.sentinels = current_sentinels)
                         .await
                         .is_none()
                     {
@@ -384,24 +580,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         break;
                     }
                 }
-                if (pacman_unlocked || pacman_db_changed || summary_changed) && !gamemode_active {
-                    try_spawn_triage_and_updater(&triage_in_flight, handle.clone());
+                if needs_pkg_triage || (state.pending_pkg_check && !state.gamemode_active) {
+                    state.pending_pkg_check =
+                        !(rt.trigger_triage)(true, state.gamemode_active, rt.fs_tx.clone());
                 }
             }
             _ = updater_timer.tick() => {
-                if let Some(updates) = updater::run_full_update_check(gamemode_active).await {
-                    if handle
-                        .update(move |tray| tray.updates = Some(updates))
-                        .await
-                        .is_none()
-                    {
-                        eprintln!("SysPilot: handle closed during updater update; exiting");
-                        break;
-                    }
-                    if !gamemode_active {
-                        try_spawn_triage(&triage_in_flight, true, false);
-                    }
-                }
+                state.pending_pkg_check =
+                    !(rt.trigger_triage)(true, state.gamemode_active, rt.fs_tx.clone());
             }
         }
 
@@ -410,20 +596,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
     }
-
-    // Explicit cleanup of inotify watcher descriptor
-    if let (Some(mut watcher), Some(parent)) = (watcher.take(), parent.as_deref()) {
-        if watching {
-            let _ = watcher.unwatch(parent);
-        }
-    }
-
-    if !handle.is_closed()
-        && tokio::time::timeout(Duration::from_secs(2), handle.shutdown())
-            .await
-            .is_err()
-    {
-        eprintln!("SysPilot: handle shutdown timed out after 2s (D-Bus teardown race); exiting");
-    }
-    Ok(())
 }

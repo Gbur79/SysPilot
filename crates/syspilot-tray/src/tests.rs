@@ -1235,4 +1235,398 @@ fn test_apply_tray_snapshot_update_syncs_standalone_and_package_diff() {
     assert_eq!(u2.core_count, 2);
     assert_eq!(u2.regular_count, 0);
     assert_eq!(u2.aur_count, 1);
+
+    // When tray.updates is None and snapshot has updates_total > 0, tray.updates stays None
+    tray.updates = None;
+    let snap3 = SystemSnapshot {
+        updates_total: 4,
+        core_updates: 1,
+        regular_updates: 3,
+        updates_check_state: UpdateCheckState::Ok,
+        ..Default::default()
+    };
+    crate::apply_tray_snapshot_update(&mut tray, snap3);
+    assert!(tray.updates.is_none());
+    assert_eq!(tray.effective_updates(), (4, 1));
+}
+
+#[test]
+fn test_relevant_event_filtering() {
+    use notify::event::{AccessKind, CreateKind, ModifyKind, RemoveKind};
+    use notify::{Event, EventKind};
+    use std::path::PathBuf;
+
+    let target = PathBuf::from("/tmp/syspilot-test/status.json");
+    let other = PathBuf::from("/tmp/syspilot-test/other.json");
+
+    for kind in [
+        EventKind::Any,
+        EventKind::Create(CreateKind::File),
+        EventKind::Modify(ModifyKind::Any),
+        EventKind::Remove(RemoveKind::File),
+    ] {
+        let ev = Event::new(kind).add_path(target.clone());
+        assert!(crate::relevant(&ev, &target));
+    }
+
+    let multi = Event::new(EventKind::Modify(ModifyKind::Any))
+        .add_path(other.clone())
+        .add_path(target.clone());
+    assert!(crate::relevant(&multi, &target));
+
+    let access_ev = Event::new(EventKind::Access(AccessKind::Read)).add_path(target.clone());
+    assert!(!crate::relevant(&access_ev, &target));
+
+    let wrong_path = Event::new(EventKind::Create(CreateKind::File)).add_path(other);
+    assert!(!crate::relevant(&wrong_path, &target));
+
+    let empty_paths = Event::new(EventKind::Modify(ModifyKind::Any));
+    assert!(!crate::relevant(&empty_paths, &target));
+}
+
+#[test]
+fn test_bounded_error_truncation_and_utf8() {
+    assert_eq!(crate::bounded_error("short error"), "short error");
+
+    let long_utf8: String = std::iter::repeat_n('ą', 300).collect();
+    let bounded = crate::bounded_error(&long_utf8);
+    assert_eq!(bounded.chars().count(), 240);
+    assert!(bounded.chars().all(|c| c == 'ą'));
+}
+
+#[test]
+fn test_read_with_retry_valid_delayed_and_backoff() {
+    let dir = TempTestDir::new();
+    let valid_path = dir.path.join("status.json");
+    let content = make_status_json("1.0", "FLIGHT_READY", 2, 1, 1, 0);
+    fs::write(&valid_path, &content).unwrap();
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        let snap = crate::read_with_retry(valid_path.clone()).await.unwrap();
+        assert_eq!(snap.status, "FLIGHT_READY");
+        assert_eq!(snap.updates_total, 2);
+        assert_eq!(snap.core_updates, 1);
+
+        let missing_path = dir.path.join("missing.json");
+        let start = std::time::Instant::now();
+        let err = crate::read_with_retry(missing_path).await.unwrap_err();
+        assert!(start.elapsed() >= Duration::from_millis(120));
+        assert!(err.contains("open status"));
+
+        let delayed_path = dir.path.join("delayed.json");
+        let delayed_writer = delayed_path.clone();
+        let writer_content = content.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let _ = fs::write(&delayed_writer, writer_content);
+        });
+        let delayed_snap = crate::read_with_retry(delayed_path).await.unwrap();
+        assert_eq!(delayed_snap.status, "FLIGHT_READY");
+    });
+}
+
+#[test]
+fn test_evaluate_sentinel_transition_truth_table() {
+    let base_t = UNIX_EPOCH + Duration::from_secs(1_000);
+    let later_t = UNIX_EPOCH + Duration::from_secs(2_000);
+
+    let prev = SentinelStatus {
+        pacman_locked: false,
+        root_used_pct: 40,
+        pacman_db_mtime: Some(base_t),
+        summary_mtime: Some(base_t),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        crate::evaluate_sentinel_transition(&prev, &prev),
+        (false, false)
+    );
+
+    let mut disk_only = prev.clone();
+    disk_only.root_used_pct = 45;
+    assert_eq!(
+        crate::evaluate_sentinel_transition(&prev, &disk_only),
+        (true, false)
+    );
+
+    let mut locked = prev.clone();
+    locked.pacman_locked = true;
+    assert_eq!(
+        crate::evaluate_sentinel_transition(&prev, &locked),
+        (true, false)
+    );
+    assert_eq!(
+        crate::evaluate_sentinel_transition(&locked, &locked),
+        (false, false)
+    );
+    assert_eq!(
+        crate::evaluate_sentinel_transition(&locked, &prev),
+        (true, true)
+    );
+
+    let mut db_changed = prev.clone();
+    db_changed.pacman_db_mtime = Some(later_t);
+    assert_eq!(
+        crate::evaluate_sentinel_transition(&prev, &db_changed),
+        (true, true)
+    );
+
+    let mut summary_changed = prev.clone();
+    summary_changed.summary_mtime = Some(later_t);
+    assert_eq!(
+        crate::evaluate_sentinel_transition(&prev, &summary_changed),
+        (true, true)
+    );
+}
+
+#[test]
+fn test_try_spawn_triage_with_gamemode_dedup_and_panic_release() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        let in_flight = Arc::new(AtomicBool::new(false));
+        let runs = Arc::new(AtomicUsize::new(0));
+
+        // 1. GameMode active -> rejected without acquiring lock or running
+        let runs_skip = Arc::clone(&runs);
+        assert!(!crate::try_spawn_triage_with(
+            &in_flight,
+            true,
+            true,
+            move |_, _| async move {
+                runs_skip.fetch_add(1, Ordering::Relaxed);
+            }
+        ));
+        assert!(!in_flight.load(Ordering::Acquire));
+
+        // 2. Normal spawn -> acquires lock, blocks second concurrent spawn, releases on finish
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<()>();
+        let runs_ok = Arc::clone(&runs);
+        assert!(crate::try_spawn_triage_with(
+            &in_flight,
+            true,
+            false,
+            move |pkgs, gm| async move {
+                assert!(pkgs);
+                assert!(!gm);
+                runs_ok.fetch_add(1, Ordering::Relaxed);
+                let _ = ack_tx.send(());
+                let _ = done_rx.await;
+            }
+        ));
+        assert!(in_flight.load(Ordering::Acquire));
+
+        assert!(!crate::try_spawn_triage_with(
+            &in_flight,
+            false,
+            false,
+            |_, _| async {}
+        ));
+
+        let _ = ack_rx.await;
+        let _ = done_tx.send(());
+        tokio::task::yield_now().await;
+        for _ in 0..20 {
+            if !in_flight.load(Ordering::Acquire) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(!in_flight.load(Ordering::Acquire));
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+
+        // 3. Panic in spawned worker still releases in_flight via RAII Drop guard
+        assert!(crate::try_spawn_triage_with(
+            &in_flight,
+            false,
+            false,
+            |_, _| async move {
+                panic!("simulated worker panic");
+            }
+        ));
+        for _ in 0..20 {
+            if !in_flight.load(Ordering::Acquire) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(!in_flight.load(Ordering::Acquire));
+    });
+}
+
+#[test]
+fn test_drain_fs_signals_preserves_fault() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    assert!(crate::drain_fs_signals(&mut rx).is_none());
+
+    tx.try_send(crate::FsSignal::Dirty).unwrap();
+    tx.try_send(crate::FsSignal::Dirty).unwrap();
+    assert!(crate::drain_fs_signals(&mut rx).is_none());
+
+    tx.try_send(crate::FsSignal::Dirty).unwrap();
+    tx.try_send(crate::FsSignal::Fault("inotify overflow".into()))
+        .unwrap();
+    tx.try_send(crate::FsSignal::Dirty).unwrap();
+    assert_eq!(
+        crate::drain_fs_signals(&mut rx).as_deref(),
+        Some("inotify overflow")
+    );
+}
+
+#[test]
+fn test_make_interval_delays_first_tick_and_sets_delay_behavior() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        let mut interval = crate::make_interval(Duration::from_millis(40));
+        assert_eq!(
+            interval.missed_tick_behavior(),
+            tokio::time::MissedTickBehavior::Delay
+        );
+        // Must NOT fire immediately at t=0
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), interval.tick())
+                .await
+                .is_err()
+        );
+        // Fires after period elapses
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), interval.tick())
+                .await
+                .is_ok()
+        );
+    });
+}
+
+#[test]
+fn test_status_watcher_late_dir_inotify_and_fault_recovery() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let root_sw = crate::StatusWatcher::new(std::path::PathBuf::from("/"), tx.clone());
+        assert!(!root_sw.is_watching());
+
+        let dir = TempTestDir::new();
+        let late_dir = dir.path.join("late");
+        let target = late_dir.join("status.json");
+
+        let mut sw = crate::StatusWatcher::new(target.clone(), tx);
+        assert!(!sw.is_watching());
+        assert!(!sw.ensure_watching());
+
+        fs::create_dir_all(&late_dir).unwrap();
+        assert!(sw.ensure_watching());
+        assert!(sw.is_watching());
+        // Idempotent when already watching
+        assert!(sw.ensure_watching());
+
+        fs::write(late_dir.join("unrelated.txt"), "ignored").unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(rx.try_recv().is_err());
+
+        fs::write(&target, "{}").unwrap();
+        let sig = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("inotify signal timeout")
+            .expect("fs channel closed");
+        assert!(matches!(sig, crate::FsSignal::Dirty));
+
+        sw.handle_fault("simulated error");
+        assert!(!sw.is_watching());
+        assert!(sw.ensure_watching());
+        assert!(sw.is_watching());
+        drop(sw);
+    });
+}
+
+#[test]
+fn test_dispatch_notify_result_dirty_ignore_and_fault() {
+    use notify::event::CreateKind;
+    use notify::{Event, EventKind};
+
+    let target = std::path::PathBuf::from("/tmp/syspilot-dispatch/status.json");
+    let other = std::path::PathBuf::from("/tmp/syspilot-dispatch/other.json");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    // Unrelated file is ignored
+    let other_ev = Event::new(EventKind::Create(CreateKind::File)).add_path(other);
+    crate::dispatch_notify_result(Ok(other_ev), &target, &tx);
+    assert!(rx.try_recv().is_err());
+
+    // Target file produces Dirty
+    let target_ev = Event::new(EventKind::Create(CreateKind::File)).add_path(target.clone());
+    crate::dispatch_notify_result(Ok(target_ev), &target, &tx);
+    assert!(matches!(rx.try_recv().unwrap(), crate::FsSignal::Dirty));
+
+    // Error produces Fault
+    crate::dispatch_notify_result(Err(notify::Error::generic("watch fault")), &target, &tx);
+    match rx.try_recv().unwrap() {
+        crate::FsSignal::Fault(msg) => assert!(msg.contains("watch fault")),
+        crate::FsSignal::Dirty => panic!("expected Fault signal"),
+    }
+
+    // Full channel drops Fault with log (no panic)
+    let (full_tx, _full_rx) = tokio::sync::mpsc::channel(1);
+    full_tx.try_send(crate::FsSignal::Dirty).unwrap();
+    crate::dispatch_notify_result(
+        Err(notify::Error::generic("dropped fault")),
+        &target,
+        &full_tx,
+    );
+}
+
+#[test]
+fn test_build_initial_state_and_trigger_startup_triage() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let dir = TempTestDir::new();
+    let missing_path = dir.path.join("missing.json");
+    let mut err_state = crate::build_initial_state(&missing_path, SentinelStatus::default(), true);
+    assert!(err_state.last_error.is_some());
+    assert!(err_state.snapshot.source_error.is_some());
+    assert!(err_state.gamemode_active);
+
+    let valid_path = dir.path.join("status.json");
+    fs::write(
+        &valid_path,
+        make_status_json("1.0", "ALL_CLEAR", 0, 0, 0, 0),
+    )
+    .unwrap();
+    let ok_state = crate::build_initial_state(&valid_path, SentinelStatus::default(), false);
+    assert!(ok_state.last_error.is_none());
+    assert!(ok_state.snapshot.source_error.is_none());
+    assert_eq!(ok_state.snapshot.status, "ALL_CLEAR");
+
+    let (fs_tx, _fs_rx) = tokio::sync::mpsc::channel(4);
+    let allow = Arc::new(AtomicBool::new(false));
+    let allow_c = Arc::clone(&allow);
+    let trigger: crate::TriageTrigger = Arc::new(move |_, _, _| allow_c.load(Ordering::Acquire));
+
+    crate::trigger_startup_triage(&trigger, &mut err_state, &fs_tx);
+    assert!(err_state.pending_pkg_check);
+
+    allow.store(true, Ordering::Release);
+    crate::trigger_startup_triage(&trigger, &mut err_state, &fs_tx);
+    assert!(!err_state.pending_pkg_check);
 }

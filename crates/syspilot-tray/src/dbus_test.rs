@@ -291,6 +291,327 @@ async fn run_isolated_dbus_suite() {
         .close()
         .await
         .expect("close StatusNotifierWatcher #2");
+
+    run_refresh_and_daemon_loop_isolated_tests(&observer_conn).await;
+}
+
+static MOCK_LOCKED: AtomicBoolCompat = AtomicBoolCompat::new(false);
+
+struct AtomicBoolCompat(std::sync::atomic::AtomicBool);
+
+impl AtomicBoolCompat {
+    const fn new(v: bool) -> Self {
+        Self(std::sync::atomic::AtomicBool::new(v))
+    }
+    fn store(&self, v: bool) {
+        self.0.store(v, Ordering::Release);
+    }
+    fn load(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+fn mock_collect_sentinels() -> SentinelStatus {
+    SentinelStatus {
+        pacman_locked: MOCK_LOCKED.load(),
+        ..Default::default()
+    }
+}
+
+fn sample_status_json(status: &str, total: u32, core: u32, reg: u32) -> String {
+    format!(
+        r#"{{
+  "schema_version": "1.0",
+  "status": "{status}",
+  "gaming_mode": false,
+  "reboot_pending": false,
+  "updates": {{
+    "total": {total},
+    "core_count": {core},
+    "regular_count": {reg},
+    "aur_count": 0
+  }}
+}}"#
+    )
+}
+
+async fn run_refresh_and_daemon_loop_isolated_tests(observer_conn: &Connection) {
+    // Part 3: refresh() state matrix + shutdown_tray_handle()
+    let refresh_dir = IsolatedTestDir::new();
+    let refresh_status_path = refresh_dir.path.join("state/status.json");
+    fs::write(
+        &refresh_status_path,
+        sample_status_json("FLIGHT_READY", 2, 1, 1),
+    )
+    .expect("write initial refresh status");
+
+    let (exit_tx_r, _exit_rx_r) = mpsc::channel(1);
+    let tray_r = SysPilotTray::new(
+        SystemSnapshot::default(),
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        exit_tx_r,
+    );
+    let handle_r = spawn_tray_service(tray_r)
+        .await
+        .expect("spawn tray for refresh tests");
+
+    let mut cur = SystemSnapshot::default();
+    let mut last_err: Option<String> = None;
+
+    assert!(crate::refresh(&handle_r, &refresh_status_path, &mut cur, &mut last_err).await);
+    assert_eq!(cur.status, "FLIGHT_READY");
+    assert!(last_err.is_none());
+
+    // Unchanged snapshot with no error
+    assert!(crate::refresh(&handle_r, &refresh_status_path, &mut cur, &mut last_err).await);
+
+    // Unchanged snapshot with stale last_err (tests || vs && in refresh)
+    last_err = Some("stale error".into());
+    assert!(crate::refresh(&handle_r, &refresh_status_path, &mut cur, &mut last_err).await);
+    assert!(last_err.is_none());
+
+    // Missing file -> error recorded
+    fs::remove_file(&refresh_status_path).expect("remove status for error path");
+    assert!(crate::refresh(&handle_r, &refresh_status_path, &mut cur, &mut last_err).await);
+    let first_err = last_err.clone().expect("last_err must be set");
+    assert_eq!(cur.source_error.as_deref(), Some(first_err.as_str()));
+
+    // Repeat identical error -> early return path
+    assert!(crate::refresh(&handle_r, &refresh_status_path, &mut cur, &mut last_err).await);
+
+    // Different error -> updates last_err
+    fs::write(&refresh_status_path, "{invalid json").expect("write invalid json");
+    assert!(crate::refresh(&handle_r, &refresh_status_path, &mut cur, &mut last_err).await);
+    assert_ne!(last_err.as_deref(), Some(first_err.as_str()));
+
+    // shutdown_tray_handle on open handle and already-closed handle
+    assert!(crate::shutdown_tray_handle(&handle_r, Duration::from_secs(2)).await);
+    let close_deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+    while !handle_r.is_closed() {
+        assert!(
+            tokio::time::Instant::now() < close_deadline,
+            "timed out waiting for handle_r.is_closed() after shutdown"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(crate::shutdown_tray_handle(&handle_r, Duration::from_secs(2)).await);
+
+    // Closed handle causes refresh to return false across all branches
+    assert!(!crate::refresh(&handle_r, &refresh_status_path, &mut cur, &mut last_err).await);
+    fs::write(&refresh_status_path, "{other_invalid").expect("write other invalid json");
+    assert!(!crate::refresh(&handle_r, &refresh_status_path, &mut cur, &mut last_err).await);
+    fs::write(
+        &refresh_status_path,
+        sample_status_json("ALL_CLEAR", 0, 0, 0),
+    )
+    .expect("write valid json for closed handle");
+    assert!(!crate::refresh(&handle_r, &refresh_status_path, &mut cur, &mut last_err).await);
+    assert!(!crate::refresh(&handle_r, &refresh_status_path, &mut cur, &mut last_err).await);
+
+    // Part 4: Full run_daemon_loop end-to-end with MockGameMode, late parent dir + inotify, sentinels, pending_pkg_check
+    let loop_dir = IsolatedTestDir::new();
+    let late_parent = loop_dir.path.join("late_state");
+    let loop_status_path = late_parent.join("status.json");
+
+    let gm_count = Arc::new(AtomicI32::new(0));
+    let gm_conn = zbus::connection::Builder::session()
+        .expect("loop gm builder")
+        .serve_at(
+            "/com/feralinteractive/GameMode",
+            MockGameMode {
+                client_count: Arc::clone(&gm_count),
+            },
+        )
+        .expect("serve_at GameMode for loop")
+        .name("com.feralinteractive.GameMode")
+        .expect("name GameMode for loop")
+        .build()
+        .await
+        .expect("build MockGameMode for loop");
+
+    let (exit_tx, exit_rx) = mpsc::channel(1);
+    let tray_loop = SysPilotTray::new(
+        SystemSnapshot::default(),
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        exit_tx.clone(),
+    );
+    let handle_loop = spawn_tray_service(tray_loop)
+        .await
+        .expect("spawn tray for daemon loop");
+
+    let (fs_tx, fs_rx) = mpsc::channel(8);
+    let watcher = crate::StatusWatcher::new(loop_status_path.clone(), fs_tx.clone());
+    assert!(!watcher.is_watching());
+
+    let allow_triage = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let triage_calls = Arc::new(Mutex::new(Vec::<(bool, bool)>::new()));
+    let allow_clone = Arc::clone(&allow_triage);
+    let calls_clone = Arc::clone(&triage_calls);
+    let trigger_triage: crate::TriageTrigger = Arc::new(move |check_pkgs, gm, _tx| {
+        if !allow_clone.load(Ordering::Acquire) {
+            return false;
+        }
+        calls_clone
+            .lock()
+            .expect("triage calls mutex")
+            .push((check_pkgs, gm));
+        true
+    });
+
+    let mut state = crate::DaemonState {
+        snapshot: SystemSnapshot::default(),
+        last_error: None,
+        sentinels_state: SentinelStatus::default(),
+        gamemode_active: false,
+        pending_pkg_check: false,
+    };
+    let mut rt = crate::DaemonRuntime {
+        gamemode_watcher: GameModeWatcher::new(),
+        exit_rx,
+        fs_tx: fs_tx.clone(),
+        fs_rx,
+        watcher,
+        collect_sentinels: mock_collect_sentinels,
+        trigger_triage,
+    };
+
+    let gm_count_drv = Arc::clone(&gm_count);
+    let late_parent_drv = late_parent.clone();
+    let loop_status_drv = loop_status_path.clone();
+    let fs_tx_drv = fs_tx.clone();
+    let allow_drv = Arc::clone(&allow_triage);
+    let exit_tx_drv = exit_tx.clone();
+
+    let driver = tokio::spawn(async move {
+        // Wait for updater_timer + triage_timer while allow_triage=false -> latches pending_pkg_check=true
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        // Inject FsSignal::Fault before directory exists
+        let _ = fs_tx_drv.try_send(crate::FsSignal::Fault("synthetic fault".into()));
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // Create late_parent and write status.json, then wait for poll to attach inotify
+        fs::create_dir_all(&late_parent_drv).expect("create late_parent");
+        fs::write(
+            &loop_status_drv,
+            sample_status_json("FLIGHT_READY", 1, 1, 0),
+        )
+        .expect("write loop status #1");
+        tokio::time::sleep(Duration::from_millis(70)).await;
+
+        // Enable triage and toggle GameMode 0 -> 1 -> 0 (flushes pending_pkg_check=true!)
+        allow_drv.store(true, Ordering::Release);
+        gm_count_drv.store(1, Ordering::Release);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        gm_count_drv.store(0, Ordering::Release);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        // Toggle sentinel pacman_locked false -> true -> false (triggers check_pkgs=true)
+        MOCK_LOCKED.store(true);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        MOCK_LOCKED.store(false);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Trigger inotify Dirty via real file write
+        fs::write(
+            &loop_status_drv,
+            sample_status_json("PRE_FLIGHT_ATTENTION", 3, 1, 2),
+        )
+        .expect("write loop status #2");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let _ = exit_tx_drv.send(()).await;
+    });
+
+    crate::run_daemon_loop(
+        crate::DaemonConfig {
+            status_path: loop_status_path.clone(),
+            poll_interval: Duration::from_millis(40),
+            gamemode_interval: Duration::from_millis(25),
+            sentinels_interval: Duration::from_millis(25),
+            updater_interval: Duration::from_millis(60),
+            triage_interval: Duration::from_millis(50),
+            fs_debounce: Duration::from_millis(10),
+        },
+        &handle_loop,
+        &mut state,
+        &mut rt,
+        std::future::pending::<()>(),
+    )
+    .await;
+
+    driver.await.expect("driver task");
+    assert_eq!(state.snapshot.status, "PRE_FLIGHT_ATTENTION");
+    assert_eq!(state.snapshot.updates_total, 3);
+    assert!(!state.pending_pkg_check);
+    assert!(rt.watcher.is_watching());
+    let recorded = triage_calls.lock().expect("recorded calls").clone();
+    assert!(recorded.iter().any(|(pkgs, gm)| *pkgs && !*gm));
+
+    drop(rt);
+    assert!(crate::shutdown_tray_handle(&handle_loop, Duration::from_secs(2)).await);
+    gm_conn.close().await.expect("close MockGameMode for loop");
+    wait_for_name_disappearance(observer_conn, "com.feralinteractive.GameMode").await;
+
+    // Part 5: run_daemon_loop shutdown signal exit + external handle close exit
+    for exit_via_handle in [false, true] {
+        let (_etx, erx) = mpsc::channel(1);
+        let t = SysPilotTray::new(
+            SystemSnapshot::default(),
+            SentinelStatus::default(),
+            None,
+            false,
+            None,
+            _etx,
+        );
+        let h = spawn_tray_service(t)
+            .await
+            .expect("spawn tray for exit test");
+        let (ftx, frx) = mpsc::channel(8);
+        let w = crate::StatusWatcher::new(loop_status_path.clone(), ftx.clone());
+        let mut st = crate::DaemonState {
+            snapshot: SystemSnapshot::default(),
+            last_error: None,
+            sentinels_state: SentinelStatus::default(),
+            gamemode_active: false,
+            pending_pkg_check: false,
+        };
+        let mut runtime = crate::DaemonRuntime {
+            gamemode_watcher: GameModeWatcher::new(),
+            exit_rx: erx,
+            fs_tx: ftx,
+            fs_rx: frx,
+            watcher: w,
+            collect_sentinels: mock_collect_sentinels,
+            trigger_triage: Arc::new(|_, _, _| true),
+        };
+        let cfg = crate::DaemonConfig {
+            status_path: loop_status_path.clone(),
+            poll_interval: Duration::from_millis(20),
+            gamemode_interval: Duration::from_secs(60),
+            sentinels_interval: Duration::from_secs(60),
+            updater_interval: Duration::from_secs(60),
+            triage_interval: Duration::from_secs(60),
+            fs_debounce: Duration::from_millis(5),
+        };
+        if exit_via_handle {
+            let h_clone = h.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(15)).await;
+                h_clone.shutdown().await;
+            });
+            crate::run_daemon_loop(cfg, &h, &mut st, &mut runtime, std::future::pending::<()>())
+                .await;
+            assert!(h.is_closed());
+        } else {
+            crate::run_daemon_loop(cfg, &h, &mut st, &mut runtime, std::future::ready(())).await;
+            assert!(crate::shutdown_tray_handle(&h, Duration::from_secs(2)).await);
+        }
+    }
 }
 
 #[test]

@@ -56,7 +56,7 @@ pass_step() {
 # -----------------------------------------------------------------------------
 current_test="help_flags"
 out_h=$("$CLI" -h 2>&1) || fail "-h returned non-zero exit code"
-[[ "$out_h" =~ "Usage: syspilot [OPTION]" ]] || fail "-h missing usage header"
+[[ "$out_h" == *"Usage: syspilot [OPTION]"* ]] || fail "-h missing usage header"
 [[ "$out_h" =~ "-v, --version" ]] || fail "-h missing version flag"
 [[ "$out_h" =~ "--copilot" ]] || fail "-h missing copilot description"
 out_help=$("$CLI" --help 2>&1) || fail "--help returned non-zero exit code"
@@ -83,7 +83,7 @@ out_unk=$("$CLI" --nonexistent-option-xyz 2>&1)
 rc=$?
 set -e
 (( rc == 1 )) || fail "--nonexistent-option-xyz returned rc=$rc, expected 1"
-[[ "$out_unk" =~ "syspilot: unknown option: --nonexistent-option-xyz (use --help)" ]] || fail "unexpected unknown option error output: $out_unk"
+[[ "$out_unk" == *"syspilot: unknown option: --nonexistent-option-xyz (use --help)"* ]] || fail "unexpected unknown option error output: $out_unk"
 pass_step
 
 # -----------------------------------------------------------------------------
@@ -182,13 +182,14 @@ out_stale_j=$("$CLI" -j 2>&1)
 rc_j=$?
 set -e
 (( rc_j == 3 )) || fail "-j on stale cache returned rc=$rc_j, expected 3"
+[[ "$out_stale_j" == *"FLIGHT_READY"* ]] || fail "-j on stale cache missing FLIGHT_READY output"
 
 set +e
 out_stale_s=$("$CLI" -s 2>&1)
 rc_s=$?
 set -e
 (( rc_s == 3 )) || fail "-s on stale cache returned rc=$rc_s, expected 3"
-[[ "$out_stale_s" =~ "(STALE)" ]] || fail "-s missing (STALE) marker"
+[[ "$out_stale_s" == *"(STALE)"* ]] || fail "-s missing (STALE) marker"
 [[ "$out_stale_s" =~ "cached data is stale" ]] || fail "-s missing stale warning message"
 pass_step
 
@@ -274,6 +275,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     shellcheck -s bash "$project_root/dev-tools/build-and-install.sh" >/dev/null 2>&1 || fail "shellcheck failed on build-and-install.sh"
     shellcheck -s bash "$project_root/dev-tools/verify-rust.sh" >/dev/null 2>&1 || fail "shellcheck failed on verify-rust.sh"
     shellcheck -s bash "$project_root/dev-tools/smoke-gui.sh" >/dev/null 2>&1 || fail "shellcheck failed on smoke-gui.sh"
+    shellcheck -s bash "$project_root/dev-tools/test-cli.sh" >/dev/null 2>&1 || fail "shellcheck failed on test-cli.sh"
 else
     shellcheck_status="SKIP(not_installed)"
 fi
@@ -342,6 +344,7 @@ out_clean=$(PATH="$mut_td/bin:$PATH" SYSPILOT_PROJECT_ROOT="$mut_td" "$mut_td/de
 
 printf 'pub fn probe() -> bool { true }\n' > "$mut_td/crates/syspilot-core/src/untracked_probe.rs"
 out_untracked=$(PATH="$mut_td/bin:$PATH" SYSPILOT_PROJECT_ROOT="$mut_td" "$mut_td/dev-tools/verify-rust.sh" --mutants-diff -q 2>&1) || { rm -rf "$mut_td"; fail "verify-rust.sh untracked --mutants-diff failed"; }
+[[ "$out_untracked" == *"MUTANTS: PASS"* ]] || { rm -rf "$mut_td"; fail "expected MUTANTS: PASS on untracked file, got: $out_untracked"; }
 grep -q -- "-p syspilot-core -f crates/syspilot-core/src/untracked_probe.rs -- --lib" "$mut_td/calls.log" || { rm -rf "$mut_td"; fail "verify-rust.sh did not pass untracked_probe.rs to cargo mutants"; }
 
 if PATH="$mut_td/bin:$PATH" SYSPILOT_PROJECT_ROOT="$mut_td" STUB_MUTANTS_FAIL=1 "$mut_td/dev-tools/verify-rust.sh" --mutants-diff -q >"$mut_td/fail.out" 2>&1; then

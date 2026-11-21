@@ -123,6 +123,19 @@ async fn wait_for_name_disappearance(conn: &Connection, bus_name: &'static str) 
     }
 }
 
+/// `ksni 0.3.7` resolves `Handle::shutdown().await` right before `service::run` exits and drops
+/// `handle_rx`, so `handle.is_closed()` can lag by one scheduler poll under `current_thread`.
+async fn wait_for_handle_closed<T>(handle: &ksni::Handle<T>, context: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+    while !handle.is_closed() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for ksni tray handle to close ({context})"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 async fn run_isolated_dbus_suite() {
     let observer_conn = Connection::session()
         .await
@@ -279,14 +292,7 @@ async fn run_isolated_dbus_suite() {
     assert_eq!(registered_1, registered_2);
 
     handle.shutdown().await;
-    let shutdown_deadline = tokio::time::Instant::now() + Duration::from_millis(500);
-    while !handle.is_closed() {
-        assert!(
-            tokio::time::Instant::now() < shutdown_deadline,
-            "timed out waiting for ksni tray handle to close after shutdown"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    wait_for_handle_closed(&handle, "Part 2 handle.shutdown()").await;
     watcher_conn_2
         .close()
         .await
@@ -389,14 +395,7 @@ async fn run_refresh_and_daemon_loop_isolated_tests(observer_conn: &Connection) 
 
     // shutdown_tray_handle on open handle and already-closed handle
     assert!(crate::shutdown_tray_handle(&handle_r, Duration::from_secs(2)).await);
-    let close_deadline = tokio::time::Instant::now() + Duration::from_millis(500);
-    while !handle_r.is_closed() {
-        assert!(
-            tokio::time::Instant::now() < close_deadline,
-            "timed out waiting for handle_r.is_closed() after shutdown"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    wait_for_handle_closed(&handle_r, "Part 3 shutdown_tray_handle()").await;
     assert!(crate::shutdown_tray_handle(&handle_r, Duration::from_secs(2)).await);
 
     // Closed handle causes refresh to return false across all branches

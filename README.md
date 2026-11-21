@@ -20,7 +20,7 @@ LCARS UI
 **SysPilot** bridges the gap between passive Linux command-line diagnostics and everyday desktop operations. Instead of waiting for the system to break or running heavy scripts, **SysPilot** employs a decoupled two-tier architecture:
 
 1. **Ultra-Lightweight 24/7 Rust Sentinel (`syspilot-tray`):** Runs continuously in the background consuming only **~3.2 MB RAM and 0.0% CPU**. Communicates directly with the system and user session bus via native D-Bus (`zbus 5.19`, zero `busctl` fork/exec), tracks pending kernel reboots, pacman database locks, disk capacity, and queries pending updates with automatic GameMode freeze.
-2. **On-Demand Graphical Dashboard (`syspilot --gui`):** Native Slint 1.18 desktop dashboard with kernel-level single-instance enforcement (`libc::flock`), dynamic Hardware Platform & GPU telemetry, 1-click guarded system upgrades, orphan cleanup, mirror ranking, and an interactive **AI Copilot** console.
+2. **On-Demand Graphical Dashboard (`syspilot --gui`):** Native Slint 1.19 desktop dashboard with kernel-level single-instance enforcement (`libc::flock`), dynamic Hardware Platform & GPU telemetry, 1-click guarded system upgrades, orphan cleanup, mirror ranking, and an interactive **AI Copilot** console.
 
 Unlike generic AI assistants that hallucinate or blindly execute destructive shell commands, SysPilot pairs an execution runner with the specialized **`copilot-admin` SRE skill** (built upon battle-tested token-lean Linux systems engineering).
 
@@ -90,7 +90,7 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
   - High-speed (<5ms) multi-backend inspector verifying `firewalld`, `ufw`, or `nftables` state and active zones.
   - Follows the SRE Universalism Standard: machines relying on upstream perimeter routers (e.g. pfSense) report neutral `INFO ℹ` without false alerts.
 - **Native Slint Desktop Cockpit (`syspilot-gui`):**
-  - Ultra-fast native GUI built with Slint 1.18 and dual renderers (FemtoVG OpenGL + software CPU rasterizer fallback).
+  - Ultra-fast native GUI built with Slint 1.19 and dual renderers (FemtoVG OpenGL + software CPU rasterizer fallback).
   - Single instance locking via non-blocking `libc::flock`.
   - Dynamic **Hardware Platform & GPU** telemetry row detecting CPU architecture, GPU model, and active driver stack without hardcoded assumptions.
   - Responsive status synchronization & dual-skin `ATTENTION` / `RED ALERT` warning banners driven by the semantic `syspilot-core::view` layer (`RowSeverity`, `AttentionView`).
@@ -264,7 +264,7 @@ sysPilot/
 ├── autostart/
 │   └── syspilot.desktop         # XDG autostart entry for background tray sentinel
 ├── packaging/
-│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.1.6)
+│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.1.7)
 │   └── syspilot.desktop         # Application menu desktop launcher (Exec=syspilot --gui)
 └── systemd/
     └── syspilot-tray.service    # User systemd service for 24/7 Rust Sentinel

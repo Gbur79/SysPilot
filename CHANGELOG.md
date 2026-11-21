@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.7] - 2026-11-21
+
+### Added & Fixed / Dashboard Anomaly Surfacing, Slint 1.19 Upgrade & FemtoVG Pixel-Aligned Rendering
+- **Dashboard & Tray Anomaly Surfacing (`syspilot-core`, `syspilot-tray`, `syspilot-gui`)**: Added `pacnew_files` and `actionable_remediations` parsing in `SystemSnapshot` and `build_dashboard_anomalies()` in `syspilot-core::view` to surface unmerged `.pacnew` files and structured remediation alerts across LCARS `POD 00`, Classic alert banners, and `syspilot-tray` tooltips/menu headers; added non-clobbering adaptive Tab 0 window sizing (`compute_tab0_window_width` / `compute_tab0_window_height`, clamped `920x620`..`1040x900`).
+- **Slint 1.19 Upgrade & FemtoVG Even-Height Alignment (`syspilot-gui`, `dev-tools/smoke-gui.sh`)**: Upgraded workspace GUI dependencies (`slint` / `slint-build` `1.19`) with `slint-project.json` edition config and monolithic `LcarsBottomElbow` path scaling; fixed `0.5px` `GL_NEAREST` glyph baseline jitter across centered single-line Slint `Text` items via even container/text heights (`height: 100%` / `22px` / `44px`) and refreshed `Antonio.ttf`; updated `init_headless_platform()` for per-thread `GLOBAL_CONTEXT` in Slint 1.19; added font autohint table, `.slint` even-height, and glyph-baseline uniformity tests (`149/149` workspace tests) plus live `winit-femtovg` dual-skin checks in `dev-tools/smoke-gui.sh`.
+
 ## [2.1.6] - 2026-11-19
 
 ### Fixed & Hardened / Non-Blocking Tray Startup, Terminal Reaper Safety & Universalism Gates (`BP-NEON-20261119-TRAY01`, `PATCH-042`, `PATCH-041`)

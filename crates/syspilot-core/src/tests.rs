@@ -5946,3 +5946,239 @@ fn test_terminal_spawn_lifecycle_and_reaper_panic_isolation() {
     );
     assert_eq!(active_terminals_count(), 0);
 }
+
+#[test]
+fn test_build_dashboard_anomalies_and_snapshot_roundtrip() {
+    use crate::models::{ActionableRemediation, SystemSnapshot, read_system_snapshot};
+    use crate::view::{RowSeverity, build_dashboard_anomalies};
+
+    // 1. Nominal empty snapshot -> 0 anomalies
+    let empty = SystemSnapshot::default();
+    assert!(build_dashboard_anomalies(&empty).is_empty());
+
+    // 2. Whitespace-only remediation + blank pacnew_files -> 0 anomalies
+    let blank_only = SystemSnapshot {
+        actionable_remediations: vec![ActionableRemediation {
+            check: Some("previous_boot".into()),
+            severity: Some("WARN".into()),
+            code: Some("   ".into()),
+            summary: Some("  ".into()),
+            ..Default::default()
+        }],
+        pacnew_files: vec!["".into(), "   ".into()],
+        ..Default::default()
+    };
+    assert!(build_dashboard_anomalies(&blank_only).is_empty());
+
+    // 3. Multi-item matrix: previous_boot (code case-insensitive), ERROR/CRITICAL/INFO/WARN,
+    // summary-only fallback ("SYSTEM ALERT"), code-only remediation, plus 2 valid pacnew files
+    let multi = SystemSnapshot {
+        actionable_remediations: vec![
+            ActionableRemediation {
+                check: Some("previous_boot".into()),
+                severity: Some("WARN".into()),
+                code: Some("sys_unclean_shutdown".into()),
+                summary: Some("Previous session crashed".into()),
+                ..Default::default()
+            },
+            ActionableRemediation {
+                check: None,
+                severity: Some("error".into()),
+                code: Some("sys_spurious_wakeup".into()),
+                summary: None,
+                ..Default::default()
+            },
+            ActionableRemediation {
+                check: None,
+                severity: Some("CRITICAL".into()),
+                code: None,
+                summary: Some("Kernel keyring broken".into()),
+                ..Default::default()
+            },
+            ActionableRemediation {
+                check: Some("desktop_indexers".into()),
+                severity: Some("info".into()),
+                code: Some("BALOO_IDLE".into()),
+                summary: Some("Baloo disabled".into()),
+                ..Default::default()
+            },
+        ],
+        pacnew_files: vec![
+            " ".into(),
+            "/etc/pacman.conf.pacnew".into(),
+            "/etc/mkinitcpio.conf.pacnew".into(),
+        ],
+        ..Default::default()
+    };
+    let rows = build_dashboard_anomalies(&multi);
+    assert_eq!(rows.len(), 5);
+    assert_eq!(rows[0].label, "PREVIOUS BOOT");
+    assert_eq!(rows[0].status, "WARN");
+    assert_eq!(rows[0].severity, RowSeverity::Warn);
+    assert_eq!(
+        rows[0].details,
+        "PREVIOUS SESSION CRASHED • SYS_UNCLEAN_SHUTDOWN"
+    );
+
+    assert_eq!(rows[1].label, "PREVIOUS BOOT");
+    assert_eq!(rows[1].status, "ALERT");
+    assert_eq!(rows[1].severity, RowSeverity::Alert);
+    assert_eq!(rows[1].details, "SYS_SPURIOUS_WAKEUP");
+
+    assert_eq!(rows[2].label, "SYSTEM ALERT");
+    assert_eq!(rows[2].status, "ALERT");
+    assert_eq!(rows[2].severity, RowSeverity::Alert);
+    assert_eq!(rows[2].details, "KERNEL KEYRING BROKEN");
+
+    assert_eq!(rows[3].label, "DESKTOP INDEXERS");
+    assert_eq!(rows[3].status, "INFO");
+    assert_eq!(rows[3].severity, RowSeverity::Info);
+    assert_eq!(rows[3].details, "BALOO DISABLED • BALOO_IDLE");
+
+    assert_eq!(rows[4].label, "PACNEW DRIFT");
+    assert_eq!(rows[4].status, "WARN");
+    assert_eq!(rows[4].severity, RowSeverity::Warn);
+    assert_eq!(
+        rows[4].details,
+        "2 UNMERGED .PACNEW FILES (FIRST: /ETC/PACMAN.CONF.PACNEW) — RUN PACDIFF"
+    );
+
+    // 4. Single pacnew without remediation vs pacnew dedup when remediation exists
+    let single_pacnew = SystemSnapshot {
+        pacnew_files: vec!["/etc/fstab.pacnew".into()],
+        ..Default::default()
+    };
+    let single_rows = build_dashboard_anomalies(&single_pacnew);
+    assert_eq!(single_rows.len(), 1);
+    assert_eq!(
+        single_rows[0].details,
+        "1 UNMERGED .PACNEW (/ETC/FSTAB.PACNEW) — RUN PACDIFF"
+    );
+
+    // Independent check-only vs code-only pacnew dedup and previous_boot label checks
+    let dedup_pacnew_check = SystemSnapshot {
+        actionable_remediations: vec![ActionableRemediation {
+            check: Some("pacnew".into()),
+            severity: Some("WARN".into()),
+            code: Some("DRIFT_FOUND".into()),
+            summary: Some("Pending pacnew files".into()),
+            ..Default::default()
+        }],
+        pacnew_files: vec!["/etc/pacman.conf.pacnew".into()],
+        ..Default::default()
+    };
+    let dedup_check_rows = build_dashboard_anomalies(&dedup_pacnew_check);
+    assert_eq!(dedup_check_rows.len(), 1);
+    assert_eq!(dedup_check_rows[0].label, "PACNEW");
+
+    let dedup_pacnew_code = SystemSnapshot {
+        actionable_remediations: vec![ActionableRemediation {
+            check: Some("config_audit".into()),
+            severity: Some("WARN".into()),
+            code: Some("etc_pacnew_pending".into()),
+            summary: Some("Config drift".into()),
+            ..Default::default()
+        }],
+        pacnew_files: vec!["/etc/pacman.conf.pacnew".into()],
+        ..Default::default()
+    };
+    let dedup_code_rows = build_dashboard_anomalies(&dedup_pacnew_code);
+    assert_eq!(dedup_code_rows.len(), 1);
+    assert_eq!(dedup_code_rows[0].label, "CONFIG AUDIT");
+
+    let prev_boot_check_only = SystemSnapshot {
+        actionable_remediations: vec![ActionableRemediation {
+            check: Some("previous_boot".into()),
+            severity: Some("WARN".into()),
+            code: Some("OTHER_BOOT_ANOMALY".into()),
+            summary: Some("Boot warning".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert_eq!(
+        build_dashboard_anomalies(&prev_boot_check_only)[0].label,
+        "PREVIOUS BOOT"
+    );
+
+    let prev_boot_code_only = SystemSnapshot {
+        actionable_remediations: vec![ActionableRemediation {
+            check: Some("journal_check".into()),
+            severity: Some("WARN".into()),
+            code: Some("SYS_UNCLEAN_SHUTDOWN".into()),
+            summary: Some("Crash detected".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert_eq!(
+        build_dashboard_anomalies(&prev_boot_code_only)[0].label,
+        "PREVIOUS BOOT"
+    );
+
+    let edge_remediations = SystemSnapshot {
+        actionable_remediations: vec![
+            ActionableRemediation {
+                check: None,
+                severity: Some("WARN".into()),
+                code: Some("DISK_SMART_WARN".into()),
+                summary: None,
+                ..Default::default()
+            },
+            ActionableRemediation {
+                check: Some("boot".into()),
+                severity: Some("WARN".into()),
+                code: Some("SYS_SPURIOUS_WAKEUP".into()),
+                summary: Some("Spurious wake".into()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let edge_rows = build_dashboard_anomalies(&edge_remediations);
+    assert_eq!(edge_rows.len(), 2);
+    assert_eq!(edge_rows[0].label, "DISK SMART WARN");
+    assert_eq!(edge_rows[0].details, "DISK_SMART_WARN");
+    assert_eq!(edge_rows[1].label, "PREVIOUS BOOT");
+    assert_eq!(edge_rows[1].details, "SPURIOUS WAKE • SYS_SPURIOUS_WAKEUP");
+
+    // 5. read_system_snapshot roundtrip for pacnew_files & actionable_remediations
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let status_file = tmp_dir.path().join("status.json");
+    let json_payload = r#"{
+        "schema_version": "1.0",
+        "status": "PRE_FLIGHT_ATTENTION",
+        "pacnew": { "count": 1, "files": ["/etc/pacman.conf.pacnew"] },
+        "sys_health": {
+            "available": true,
+            "errors": 0,
+            "warnings": 1,
+            "actionable_remediations": [
+                {
+                    "check": "previous_boot",
+                    "severity": "WARN",
+                    "code": "SYS_UNCLEAN_SHUTDOWN",
+                    "summary": "Previous session crashed"
+                }
+            ]
+        }
+    }"#;
+    std::fs::write(&status_file, json_payload).unwrap();
+    let snap = read_system_snapshot(&status_file).unwrap();
+    assert_eq!(snap.pacnew_files, vec!["/etc/pacman.conf.pacnew"]);
+    assert_eq!(snap.actionable_remediations.len(), 1);
+    assert_eq!(build_dashboard_anomalies(&snap).len(), 2);
+
+    // available=false ignores stale actionable_remediations
+    let unavail_payload = r#"{
+        "schema_version": "1.0",
+        "status": "FLIGHT_READY",
+        "sys_health": {
+            "available": false,
+            "actionable_remediations": [{ "code": "SHOULD_IGNORE", "summary": "Ignore" }]
+        }
+    }"#;
+    std::fs::write(&status_file, unavail_payload).unwrap();
+    let snap_unavail = read_system_snapshot(&status_file).unwrap();
+    assert!(snap_unavail.actionable_remediations.is_empty());
+}

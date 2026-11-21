@@ -26,6 +26,104 @@ pub struct AttentionView {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardAnomaly {
+    pub label: String,
+    pub details: String,
+    pub status: String,
+    pub severity: RowSeverity,
+}
+
+fn format_remediation_label(check: &str, code: &str) -> String {
+    if code.eq_ignore_ascii_case("SYS_UNCLEAN_SHUTDOWN")
+        || code.eq_ignore_ascii_case("SYS_SPURIOUS_WAKEUP")
+    {
+        return "PREVIOUS BOOT".to_string();
+    }
+    let raw = if !check.is_empty() {
+        check
+    } else if !code.is_empty() {
+        code
+    } else {
+        "SYSTEM ALERT"
+    };
+    truncate_chars(&raw.replace('_', " ").to_ascii_uppercase(), 24)
+}
+
+pub fn build_dashboard_anomalies(snapshot: &SystemSnapshot) -> Vec<DashboardAnomaly> {
+    let mut rows = Vec::new();
+    let mut has_pacnew_remediation = false;
+
+    for rem in &snapshot.actionable_remediations {
+        let summary = rem.summary.as_deref().map(str::trim).unwrap_or("");
+        let code = rem.code.as_deref().map(str::trim).unwrap_or("");
+        let check = rem.check.as_deref().map(str::trim).unwrap_or("");
+        if summary.is_empty() && code.is_empty() {
+            continue;
+        }
+        if check.eq_ignore_ascii_case("pacnew") || code.to_ascii_uppercase().contains("PACNEW") {
+            has_pacnew_remediation = true;
+        }
+        let label = format_remediation_label(check, code);
+        let (status, severity) = match rem
+            .severity
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_uppercase()
+            .as_str()
+        {
+            "ERROR" | "CRITICAL" => ("ALERT", RowSeverity::Alert),
+            "INFO" => ("INFO", RowSeverity::Info),
+            _ => ("WARN", RowSeverity::Warn),
+        };
+        let details = if summary.is_empty() {
+            code.to_ascii_uppercase()
+        } else if code.is_empty() {
+            summary.to_ascii_uppercase()
+        } else {
+            format!(
+                "{} • {}",
+                summary.to_ascii_uppercase(),
+                code.to_ascii_uppercase()
+            )
+        };
+        rows.push(DashboardAnomaly {
+            label,
+            details: truncate_chars(&details, 96),
+            status: status.to_string(),
+            severity,
+        });
+    }
+
+    if !has_pacnew_remediation {
+        let valid_pacnew: Vec<&str> = snapshot
+            .pacnew_files
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !valid_pacnew.is_empty() {
+            let count = valid_pacnew.len();
+            let first = valid_pacnew[0].to_ascii_uppercase();
+            let details = if count == 1 {
+                format!("1 UNMERGED .PACNEW ({first}) — RUN PACDIFF")
+            } else {
+                format!("{count} UNMERGED .PACNEW FILES (FIRST: {first}) — RUN PACDIFF")
+            };
+            rows.push(DashboardAnomaly {
+                label: "PACNEW DRIFT".to_string(),
+                details: truncate_chars(&details, 96),
+                status: "WARN".to_string(),
+                severity: RowSeverity::Warn,
+            });
+        }
+    }
+
+    rows
+}
+
 pub fn truncate_chars(s: &str, max: usize) -> String {
     let char_count = s.chars().count();
     if char_count <= max {

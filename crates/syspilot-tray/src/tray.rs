@@ -182,6 +182,7 @@ impl Tray for SysPilotTray {
 
     fn tool_tip(&self) -> ToolTip {
         let (total_updates, core_updates) = self.effective_updates();
+        let anomalies = syspilot_core::build_dashboard_anomalies(&self.snapshot);
 
         let reboot_required = self.sentinels.reboot_pending || self.snapshot.reboot_pending;
 
@@ -213,6 +214,18 @@ impl Tray for SysPilotTray {
             format!("SysPilot — {total_updates} updates available ({core_updates} core)")
         } else if self.gamemode_active {
             "SysPilot — GameMode active".into()
+        } else if anomalies.len() == 1 {
+            format!(
+                "SysPilot — {} ({})",
+                self.snapshot.effective_status(),
+                anomalies[0].label
+            )
+        } else if !anomalies.is_empty() {
+            format!(
+                "SysPilot — {} ({} alerts)",
+                self.snapshot.effective_status(),
+                anomalies.len()
+            )
         } else {
             format!("SysPilot — Status: {}", self.snapshot.effective_status())
         };
@@ -251,6 +264,14 @@ impl Tray for SysPilotTray {
             ));
         }
 
+        for anomaly in anomalies.iter().take(3) {
+            description.push_str(&format!("\n{}: {}", anomaly.label, anomaly.details));
+        }
+        let remaining = anomalies.len().saturating_sub(3);
+        if remaining > 0 {
+            description.push_str(&format!("\nAlerts: +{remaining} more (open Dashboard)"));
+        }
+
         ToolTip {
             title,
             description,
@@ -264,6 +285,7 @@ impl Tray for SysPilotTray {
         use ksni::menu::StandardItem;
 
         let (total_updates, core_updates) = self.effective_updates();
+        let anomalies = syspilot_core::build_dashboard_anomalies(&self.snapshot);
 
         let header = if self.sentinels.pacman_orphaned_lock {
             "CRITICAL — Pacman database locked (orphaned db.lck)".into()
@@ -283,6 +305,30 @@ impl Tray for SysPilotTray {
             format!(
                 "Updates Pending — {} packages ({} core), {} errors",
                 total_updates, core_updates, self.snapshot.errors
+            )
+        } else if let Some(first_anomaly) = anomalies.first() {
+            if anomalies.len() == 1 {
+                format!(
+                    "{} — {}: {}",
+                    self.snapshot.effective_status(),
+                    first_anomaly.label,
+                    first_anomaly.details
+                )
+            } else {
+                format!(
+                    "{} — {} exceptions (first: {})",
+                    self.snapshot.effective_status(),
+                    anomalies.len(),
+                    first_anomaly.label
+                )
+            }
+        } else if !matches!(
+            self.snapshot.effective_status(),
+            "ALL_CLEAR" | "FLIGHT_READY"
+        ) {
+            format!(
+                "{} — Pre-flight review recommended",
+                self.snapshot.effective_status()
             )
         } else {
             format!(

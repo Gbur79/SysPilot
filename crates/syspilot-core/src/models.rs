@@ -355,6 +355,8 @@ pub struct SystemSnapshot {
     pub app_latest_version: String,
     pub app_release_url: String, // syspilot-lint:allow-unconsumed (release metadata field)
     pub mirrors: Option<SysHealthMirrors>,
+    pub pacnew_files: Vec<String>,
+    pub actionable_remediations: Vec<ActionableRemediation>,
 }
 
 impl Default for SystemSnapshot {
@@ -389,6 +391,8 @@ impl Default for SystemSnapshot {
             app_latest_version: String::new(),
             app_release_url: String::new(),
             mirrors: None,
+            pacnew_files: Vec::new(),
+            actionable_remediations: Vec::new(),
         }
     }
 }
@@ -631,6 +635,7 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
         ));
     }
 
+    let pacnew_files = parsed.pacnew.map(|p| p.files).unwrap_or_default();
     let health = parsed.sys_health.unwrap_or_default();
     let sys_health_parse_error = health.parse_error.clone();
     let mirrors = parsed.mirrors.or(if health.available {
@@ -638,19 +643,21 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
     } else {
         None
     });
-    let (errors, warnings, environment, gaming_detected) = if health.available {
-        (
-            health.errors,
-            health.warnings,
-            health.environment,
-            health
-                .gaming
-                .and_then(|gaming| gaming.detected)
-                .unwrap_or(false),
-        )
-    } else {
-        (0, 0, health.environment, false)
-    };
+    let (errors, warnings, environment, gaming_detected, actionable_remediations) =
+        if health.available {
+            (
+                health.errors,
+                health.warnings,
+                health.environment,
+                health
+                    .gaming
+                    .and_then(|gaming| gaming.detected)
+                    .unwrap_or(false),
+                health.actionable_remediations,
+            )
+        } else {
+            (0, 0, health.environment, false, Vec::new())
+        };
 
     let (os, kernel) = environment.map_or_else(
         || (detect_os(), detect_kernel()),
@@ -714,6 +721,8 @@ pub fn read_system_snapshot(path: &Path) -> Result<SystemSnapshot, String> {
         app_latest_version: app_update.latest_version,
         app_release_url: app_update.release_url,
         mirrors,
+        pacnew_files,
+        actionable_remediations,
     })
 }
 

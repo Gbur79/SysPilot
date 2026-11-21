@@ -1630,3 +1630,168 @@ fn test_build_initial_state_and_trigger_startup_triage() {
     crate::trigger_startup_triage(&trigger, &mut err_state, &fs_tx);
     assert!(!err_state.pending_pkg_check);
 }
+
+#[test]
+fn test_tray_anomalies_tooltip_and_menu_matrix() {
+    use crate::tray::SysPilotTray;
+    use ksni::Tray;
+    use syspilot_core::models::{ActionableRemediation, SystemSnapshot};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+    // 1. 0 anomalies + FLIGHT_READY -> healthy message, no Alerts overflow
+    let snap_ok = SystemSnapshot {
+        status: "FLIGHT_READY".into(),
+        cache_stale: false,
+        ..Default::default()
+    };
+    let tray_ok = SysPilotTray::new(
+        snap_ok,
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        tx.clone(),
+    );
+    assert_eq!(tray_ok.tool_tip().title, "SysPilot — Status: FLIGHT_READY");
+    assert!(!tray_ok.tool_tip().description.contains("Alerts:"));
+    if let ksni::MenuItem::Standard(header) = &tray_ok.menu()[0] {
+        assert!(header.label.contains("System primed and healthy"));
+    } else {
+        panic!("Expected StandardItem header");
+    }
+
+    // 2. PRE_FLIGHT_ATTENTION without structured anomalies -> never claims "primed and healthy"
+    let snap_attn_empty = SystemSnapshot {
+        status: "PRE_FLIGHT_ATTENTION".into(),
+        cache_stale: false,
+        ..Default::default()
+    };
+    let tray_attn = SysPilotTray::new(
+        snap_attn_empty,
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        tx.clone(),
+    );
+    if let ksni::MenuItem::Standard(header) = &tray_attn.menu()[0] {
+        assert_eq!(
+            header.label,
+            "PRE_FLIGHT_ATTENTION — Pre-flight review recommended"
+        );
+    } else {
+        panic!("Expected StandardItem header");
+    }
+
+    // 3. 1 anomaly (SYS_UNCLEAN_SHUTDOWN) -> surfaced in tooltip title, description, and menu header
+    let snap_one = SystemSnapshot {
+        status: "PRE_FLIGHT_ATTENTION".into(),
+        cache_stale: false,
+        actionable_remediations: vec![ActionableRemediation {
+            check: Some("previous_boot".into()),
+            severity: Some("WARN".into()),
+            code: Some("SYS_UNCLEAN_SHUTDOWN".into()),
+            summary: Some("Previous session crashed".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let tray_one = SysPilotTray::new(
+        snap_one,
+        SentinelStatus::default(),
+        None,
+        false,
+        None,
+        tx.clone(),
+    );
+    let tt_one = tray_one.tool_tip();
+    assert_eq!(
+        tt_one.title,
+        "SysPilot — PRE_FLIGHT_ATTENTION (PREVIOUS BOOT)"
+    );
+    assert!(
+        tt_one
+            .description
+            .contains("PREVIOUS BOOT: PREVIOUS SESSION CRASHED • SYS_UNCLEAN_SHUTDOWN")
+    );
+    assert!(!tt_one.description.contains("Alerts:"));
+    if let ksni::MenuItem::Standard(header) = &tray_one.menu()[0] {
+        assert_eq!(
+            header.label,
+            "PRE_FLIGHT_ATTENTION — PREVIOUS BOOT: PREVIOUS SESSION CRASHED • SYS_UNCLEAN_SHUTDOWN"
+        );
+    } else {
+        panic!("Expected StandardItem header");
+    }
+
+    // 4. 5 anomalies (4 remediations + 1 pacnew_files) -> capped at 3 lines + "+2 more"
+    let snap_five = SystemSnapshot {
+        status: "PRE_FLIGHT_ATTENTION".into(),
+        cache_stale: false,
+        actionable_remediations: vec![
+            ActionableRemediation {
+                check: Some("previous_boot".into()),
+                severity: Some("WARN".into()),
+                code: Some("SYS_UNCLEAN_SHUTDOWN".into()),
+                summary: Some("Unclean stop".into()),
+                ..Default::default()
+            },
+            ActionableRemediation {
+                check: Some("journal_rate_limit".into()),
+                severity: Some("WARN".into()),
+                code: Some("JOURNAL_RL".into()),
+                summary: Some("Rate limit".into()),
+                ..Default::default()
+            },
+            ActionableRemediation {
+                check: Some("boot_capacity".into()),
+                severity: Some("WARN".into()),
+                code: Some("BOOT_LOW".into()),
+                summary: Some("Low space".into()),
+                ..Default::default()
+            },
+            ActionableRemediation {
+                check: Some("thermal_zone".into()),
+                severity: Some("WARN".into()),
+                code: Some("TEMP_HIGH".into()),
+                summary: Some("High temp".into()),
+                ..Default::default()
+            },
+        ],
+        pacnew_files: vec!["/etc/pacman.conf.pacnew".into()],
+        ..Default::default()
+    };
+    let tray_five = SysPilotTray::new(snap_five, SentinelStatus::default(), None, false, None, tx);
+    let tt_five = tray_five.tool_tip();
+    assert_eq!(tt_five.title, "SysPilot — PRE_FLIGHT_ATTENTION (5 alerts)");
+    assert!(
+        tt_five
+            .description
+            .contains("PREVIOUS BOOT: UNCLEAN STOP • SYS_UNCLEAN_SHUTDOWN")
+    );
+    assert!(
+        tt_five
+            .description
+            .contains("JOURNAL RATE LIMIT: RATE LIMIT • JOURNAL_RL")
+    );
+    assert!(
+        tt_five
+            .description
+            .contains("BOOT CAPACITY: LOW SPACE • BOOT_LOW")
+    );
+    assert!(!tt_five.description.contains("THERMAL ZONE:"));
+    assert!(
+        tt_five
+            .description
+            .contains("Alerts: +2 more (open Dashboard)")
+    );
+    if let ksni::MenuItem::Standard(header) = &tray_five.menu()[0] {
+        assert_eq!(
+            header.label,
+            "PRE_FLIGHT_ATTENTION — 5 exceptions (first: PREVIOUS BOOT)"
+        );
+    } else {
+        panic!("Expected StandardItem header");
+    }
+}

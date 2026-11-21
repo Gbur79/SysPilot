@@ -1,32 +1,54 @@
-export component LcarsBottomElbow inherits Rectangle {
+export component LcarsBottomElbow inherits Path {
     in property <color> fill-color: #ff9900;
+    private property <float> w: max(root.width / 1px, 148.0);
+    private property <float> h: max(root.height / 1px, 64.0);
 
-    // 1. Continuous vertical spine from top to bottom
-    Rectangle {
-        x: 0px;
-        y: 0px;
-        width: 128px;
-        height: parent.height;
-        background: root.fill-color;
-        border-bottom-left-radius: 28px;
+    width: 220px;
+    fit: ImageFit.preserve;
+    fill: root.fill-color;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+
+    MoveTo {
+        x: 0;
+        y: 0;
     }
-
-    // 2. Bottom horizontal rail (SEC-01 segment)
-    Rectangle {
-        x: 127px;
-        y: parent.height - 44px;
-        width: parent.width - 127px;
-        height: 44px;
-        background: root.fill-color;
+    LineTo {
+        x: 0;
+        y: root.h - 28;
     }
-
-    // 3. Smooth concave inner curve
-    Path {
-        x: 127px;
-        y: parent.height - 64px;
-        width: 21px;
-        height: 21px;
-        commands: "M 0 0 C 0 11.046, 8.954 20, 20 20 L 0 20 Z";
-        fill: root.fill-color;
+    CubicTo {
+        control-1-x: 0;
+        control-1-y: root.h - 12.536;
+        control-2-x: 12.536;
+        control-2-y: root.h;
+        x: 28;
+        y: root.h;
+    }
+    LineTo {
+        x: root.w;
+        y: root.h;
+    }
+    LineTo {
+        x: root.w;
+        y: root.h - 44;
+    }
+    LineTo {
+        x: 148;
+        y: root.h - 44;
+    }
+    CubicTo {
+        control-1-x: 136.954;
+        control-1-y: root.h - 44;
+        control-2-x: 128;
+        control-2-y: root.h - 52.954;
+        x: 128;
+        y: root.h - 64;
+    }
+    LineTo {
+        x: 128;
+        y: 0;
+    }
+    Close {
     }
 }

@@ -7,6 +7,7 @@ export component GridRow inherits Rectangle {
     in property <color> status-color: Theme.status-green;
     in property <string> details: "";
 
+    height: 22px;
     background: Colors.transparent;
 
     HorizontalLayout {
@@ -19,6 +20,7 @@ export component GridRow inherits Rectangle {
             horizontal-stretch: 1;
 
             Text {
+                height: 100%;
                 text: root.name;
                 color: Theme.text-primary;
                 font-size: 12px;
@@ -27,6 +29,7 @@ export component GridRow inherits Rectangle {
             }
 
             if root.details != "" : Text {
+                height: 100%;
                 text: root.details;
                 color: Theme.text-muted;
                 font-size: 11px;

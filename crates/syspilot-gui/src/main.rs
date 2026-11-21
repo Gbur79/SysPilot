@@ -1,6 +1,6 @@
 slint::include_modules!();
 
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -446,6 +446,15 @@ pub fn format_self_update(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnomalyPresentation {
+    pub label: String,
+    pub details: String,
+    pub status: String,
+    pub accent_rgb: (u8, u8, u8),
+    pub status_rgb: (u8, u8, u8),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardViewModel {
     pub has_error: bool,
     pub error_message: String,
@@ -472,6 +481,9 @@ pub struct DashboardViewModel {
     pub mirror_upgrade_warning: String,
     pub firmware: RowPresentation,
     pub orphans: RowPresentation,
+    pub anomalies: Vec<AnomalyPresentation>,
+    pub pod00_accent_rgb: (u8, u8, u8),
+    pub tab0_max_detail_chars: usize,
     pub self_update: SelfUpdateView,
 }
 
@@ -511,6 +523,44 @@ impl DashboardViewModel {
         let (fwupd_status, fwupd_rgb, fwupd_details) =
             format_firmware_updates(snapshot.firmware_updates);
         let (orph_status, orph_rgb, orph_details) = format_orphans_row();
+        let raw_anomalies = syspilot_core::build_dashboard_anomalies(snapshot);
+        let has_alert = raw_anomalies
+            .iter()
+            .any(|a| a.severity == syspilot_core::RowSeverity::Alert);
+        let pod00_accent_rgb = if has_alert {
+            RowTone::Alert.rgb()
+        } else {
+            (255, 153, 0)
+        };
+        let anomalies: Vec<AnomalyPresentation> = raw_anomalies
+            .into_iter()
+            .map(|a| AnomalyPresentation {
+                label: a.label,
+                details: a.details,
+                status: a.status,
+                accent_rgb: pod00_accent_rgb,
+                status_rgb: RowTone::from(a.severity).rgb(),
+            })
+            .collect();
+        let tab0_max_detail_chars = [
+            k_details.chars().count(),
+            root_details.chars().count(),
+            fw_details.chars().count(),
+            svc_details.chars().count(),
+            gpu_details.chars().count(),
+            cve_details.chars().count(),
+            core_details.chars().count(),
+            repo_details.chars().count(),
+            aur_details.chars().count(),
+            standalone_details.chars().count(),
+            mirrors_details.chars().count(),
+            fwupd_details.chars().count(),
+            orph_details.chars().count(),
+        ]
+        .into_iter()
+        .chain(anomalies.iter().map(|a| a.details.chars().count()))
+        .max()
+        .unwrap_or(0);
         let self_update = format_self_update(snapshot, pkg_version);
 
         Self {
@@ -591,6 +641,9 @@ impl DashboardViewModel {
                 rgb: orph_rgb,
                 details: orph_details.to_string(),
             },
+            anomalies,
+            pod00_accent_rgb,
+            tab0_max_detail_chars,
             self_update,
         }
     }
@@ -628,6 +681,9 @@ impl DashboardViewModel {
             mirror_upgrade_warning: String::new(),
             firmware: offline_row(),
             orphans: offline_row(),
+            anomalies: Vec::new(),
+            pod00_accent_rgb: (255, 153, 0),
+            tab0_max_detail_chars: 0,
             self_update: SelfUpdateView {
                 available: false,
                 badge: format!("v{} LATEST", pkg_version),
@@ -761,11 +817,40 @@ fn apply_dashboard_view_model(ui: &AppWindow, vm: &DashboardViewModel) {
     ));
     ui.set_orphans_details(vm.orphans.details.as_str().into());
 
+    let anomaly_rows: Vec<AnomalyRow> = vm
+        .anomalies
+        .iter()
+        .map(|a| AnomalyRow {
+            label: a.label.as_str().into(),
+            value: a.details.as_str().into(),
+            status: a.status.as_str().into(),
+            accent_color: slint::Color::from_rgb_u8(a.accent_rgb.0, a.accent_rgb.1, a.accent_rgb.2),
+            status_color: slint::Color::from_rgb_u8(a.status_rgb.0, a.status_rgb.1, a.status_rgb.2),
+        })
+        .collect();
+    ui.set_anomalies(slint::ModelRc::new(slint::VecModel::from(anomaly_rows)));
+    ui.set_pod00_accent_color(slint::Color::from_rgb_u8(
+        vm.pod00_accent_rgb.0,
+        vm.pod00_accent_rgb.1,
+        vm.pod00_accent_rgb.2,
+    ));
+
+    let w_i32 = compute_tab0_window_width(vm.tab0_max_detail_chars) as i32;
+    let h_i32 =
+        compute_tab0_window_height(vm.anomalies.len(), vm.has_error, ui.get_is_lcars_skin()) as i32;
+    let prev_target = (ui.get_tab0_target_width(), ui.get_tab0_target_height());
+    ui.set_tab0_target_width(w_i32);
+    ui.set_tab0_target_height(h_i32);
+
     ui.set_has_app_update(vm.self_update.available);
     ui.set_app_update_badge(vm.self_update.badge.as_str().into());
     ui.set_self_update_title(vm.self_update.title.as_str().into());
     ui.set_self_update_desc(vm.self_update.desc.as_str().into());
     ui.set_self_update_btn_text(vm.self_update.btn_text.as_str().into());
+
+    if ui.get_active_tab() == 0 && (w_i32, h_i32) != prev_target {
+        apply_tab_selection_to_window(ui, 0);
+    }
 }
 
 fn update_ui_from_snapshot(ui: &AppWindow, snapshot: &syspilot_core::SystemSnapshot) {
@@ -816,19 +901,65 @@ fn update_playbook_telemetry(ui: &AppWindow) {
     ui.set_custom_playbook_desc(format_custom_playbook_desc(&playbooks).into());
 }
 
-fn compute_tab_window_height(
+const TAB0_DEFAULT_WIDTH: f32 = 920.0;
+const TAB0_MAX_WIDTH: f32 = 1040.0;
+const TAB1_WINDOW_WIDTH: f32 = 920.0;
+const TAB2_WINDOW_WIDTH: f32 = 980.0;
+
+const TAB0_LCARS_BASE_HEIGHT: f32 = 620.0;
+const TAB0_CLASSIC_BASE_HEIGHT: f32 = 760.0;
+const TAB0_MAX_HEIGHT: f32 = 900.0;
+
+fn compute_tab0_window_width(max_detail_chars: usize) -> f32 {
+    let extra_chars = max_detail_chars.saturating_sub(58);
+    let raw = TAB0_DEFAULT_WIDTH + (extra_chars as f32) * 6.5;
+    ((raw / 10.0).round() * 10.0).min(TAB0_MAX_WIDTH)
+}
+
+fn compute_tab0_window_height(anomaly_count: usize, has_error: bool, is_lcars_skin: bool) -> f32 {
+    let err_px = if has_error { 42.0 } else { 0.0 };
+    let (base, anomaly_px) = if is_lcars_skin {
+        let pod00 = if anomaly_count > 0 {
+            36.0 + (anomaly_count as f32) * 30.0
+        } else {
+            0.0
+        };
+        (TAB0_LCARS_BASE_HEIGHT, pod00)
+    } else {
+        let card0 = if anomaly_count > 0 {
+            56.0 + (anomaly_count as f32) * 28.0
+        } else {
+            0.0
+        };
+        (TAB0_CLASSIC_BASE_HEIGHT, card0)
+    };
+    (base + err_px + anomaly_px).min(TAB0_MAX_HEIGHT)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_tab_window_size(
     tab_idx: i32,
     maintenance_item_count: usize,
+    tab0_width: f32,
+    anomaly_count: usize,
+    has_error: bool,
+    is_lcars_skin: bool,
     is_maximized: bool,
     is_fullscreen: bool,
-) -> Option<f32> {
+) -> Option<(f32, f32)> {
     if is_maximized || is_fullscreen {
         return None;
     }
     Some(match tab_idx {
-        1 => compute_maintenance_window_height(maintenance_item_count),
-        2 => 780.0,
-        _ => 590.0,
+        1 => (
+            TAB1_WINDOW_WIDTH,
+            compute_maintenance_window_height(maintenance_item_count),
+        ),
+        2 => (TAB2_WINDOW_WIDTH, 780.0),
+        _ => (
+            tab0_width,
+            compute_tab0_window_height(anomaly_count, has_error, is_lcars_skin),
+        ),
     })
 }
 
@@ -836,15 +967,24 @@ fn apply_tab_selection_to_window(ui_inst: &AppWindow, tab_idx: i32) {
     if tab_idx == 2 {
         update_playbook_telemetry(ui_inst);
     }
-    if let Some(target_height) = compute_tab_window_height(
+    let anomaly_count = ui_inst.get_anomalies().row_count();
+    let has_error = ui_inst.get_has_error();
+    let is_lcars = ui_inst.get_is_lcars_skin();
+    let tab0_h = compute_tab0_window_height(anomaly_count, has_error, is_lcars);
+    ui_inst.set_tab0_target_height(tab0_h as i32);
+    if let Some((target_width, target_height)) = compute_tab_window_size(
         tab_idx,
         ui_inst.get_maintenance_item_count() as usize,
+        ui_inst.get_tab0_target_width() as f32,
+        anomaly_count,
+        has_error,
+        is_lcars,
         ui_inst.window().is_maximized(),
         ui_inst.window().is_fullscreen(),
     ) {
         ui_inst
             .window()
-            .set_size(slint::LogicalSize::new(1040.0, target_height));
+            .set_size(slint::LogicalSize::new(target_width, target_height));
     }
 }
 
@@ -1145,15 +1285,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let initial_tab = syspilot_core::skin::load_last_tab_preference();
     ui.set_active_tab(initial_tab);
-    if !ui.window().is_maximized() && !ui.window().is_fullscreen() {
-        let target_height = match initial_tab {
-            1 => compute_maintenance_window_height(ui.get_maintenance_item_count() as usize),
-            2 => 780.0,
-            _ => 590.0,
-        };
-        ui.window()
-            .set_size(slint::LogicalSize::new(1040.0, target_height));
-    }
 
     ui.set_stardate_label(compute_stardate().into());
 
@@ -1165,6 +1296,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let next = !current;
             ui_inst.set_is_lcars_skin(next);
             syspilot_core::skin::save_skin_preference(next);
+            apply_tab_selection_to_window(&ui_inst, ui_inst.get_active_tab());
         }
     });
 
@@ -1196,6 +1328,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(snapshot) => update_ui_from_snapshot(&ui, &snapshot),
         Err(error) => update_ui_from_error(&ui, &error),
     }
+    apply_tab_selection_to_window(&ui, initial_tab);
 
     // Populate Copilot Metadata & SRE Telemetry
     let copilot_info = syspilot_core::get_copilot_info();
@@ -1579,12 +1712,41 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_tab_window_height_branches() {
-        assert_eq!(compute_tab_window_height(0, 10, false, false), Some(590.0));
-        assert_eq!(compute_tab_window_height(1, 10, false, false), Some(740.0));
-        assert_eq!(compute_tab_window_height(2, 10, false, false), Some(780.0));
-        assert_eq!(compute_tab_window_height(0, 10, true, false), None);
-        assert_eq!(compute_tab_window_height(0, 10, false, true), None);
+    fn test_compute_tab_window_size_and_tab0_geometry() {
+        assert_eq!(compute_tab0_window_width(0), 920.0);
+        assert_eq!(compute_tab0_window_width(58), 920.0);
+        assert_eq!(compute_tab0_window_width(72), 1010.0);
+        assert_eq!(compute_tab0_window_width(140), 1040.0);
+
+        assert_eq!(compute_tab0_window_height(0, false, true), 620.0);
+        assert_eq!(compute_tab0_window_height(1, false, true), 686.0);
+        assert_eq!(compute_tab0_window_height(2, true, true), 758.0);
+        assert_eq!(compute_tab0_window_height(12, false, true), 900.0);
+
+        assert_eq!(compute_tab0_window_height(0, false, false), 760.0);
+        assert_eq!(compute_tab0_window_height(1, true, false), 886.0);
+        assert_eq!(compute_tab0_window_height(6, false, false), 900.0);
+
+        assert_eq!(
+            compute_tab_window_size(0, 10, 920.0, 1, false, true, false, false),
+            Some((920.0, 686.0))
+        );
+        assert_eq!(
+            compute_tab_window_size(1, 10, 900.0, 1, false, true, false, false),
+            Some((920.0, 740.0))
+        );
+        assert_eq!(
+            compute_tab_window_size(2, 10, 900.0, 1, false, true, false, false),
+            Some((980.0, 780.0))
+        );
+        assert_eq!(
+            compute_tab_window_size(0, 10, 900.0, 0, false, true, true, false),
+            None
+        );
+        assert_eq!(
+            compute_tab_window_size(0, 10, 900.0, 0, false, true, false, true),
+            None
+        );
     }
 
     #[test]
@@ -2443,8 +2605,13 @@ mod tests {
         );
     }
 
+    thread_local! {
+        static HEADLESS_WINDOW: std::cell::RefCell<
+            Option<std::rc::Rc<slint::platform::software_renderer::MinimalSoftwareWindow>>,
+        > = const { std::cell::RefCell::new(None) };
+    }
+
     struct HeadlessTestPlatform {
-        window: std::rc::Rc<slint::platform::software_renderer::MinimalSoftwareWindow>,
         start: std::time::Instant,
     }
 
@@ -2452,30 +2619,85 @@ mod tests {
         fn create_window_adapter(
             &self,
         ) -> Result<std::rc::Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
-            Ok(self.window.clone())
+            let window =
+                slint::platform::software_renderer::MinimalSoftwareWindow::new(Default::default());
+            HEADLESS_WINDOW.with(|cell| {
+                *cell.borrow_mut() = Some(window.clone());
+            });
+            Ok(window)
         }
         fn duration_since_start(&self) -> std::time::Duration {
             self.start.elapsed()
         }
     }
 
-    static INIT_HEADLESS: std::sync::Once = std::sync::Once::new();
-
     fn init_headless_platform() {
-        INIT_HEADLESS.call_once(|| {
-            let window =
-                slint::platform::software_renderer::MinimalSoftwareWindow::new(Default::default());
-            let _ = slint::platform::set_platform(Box::new(HeadlessTestPlatform {
-                window,
-                start: std::time::Instant::now(),
-            }));
-        });
+        let _ = slint::platform::set_platform(Box::new(HeadlessTestPlatform {
+            start: std::time::Instant::now(),
+        }));
+    }
+
+    #[test]
+    fn test_antonio_font_autohint_ready() {
+        let data = include_bytes!("../ui/fonts/Antonio.ttf");
+        assert!(data.len() >= 12);
+        let num_tables = u16::from_be_bytes([data[4], data[5]]) as usize;
+        let search_range = u16::from_be_bytes([data[6], data[7]]);
+        let entry_selector = u16::from_be_bytes([data[8], data[9]]);
+        let range_shift = u16::from_be_bytes([data[10], data[11]]);
+        let max_pow2 = (1usize << (usize::BITS - 1 - num_tables.leading_zeros())) as u16;
+        assert_eq!(search_range, max_pow2 * 16);
+        assert_eq!(entry_selector, max_pow2.trailing_zeros() as u16);
+        assert_eq!(range_shift, (num_tables as u16) * 16 - search_range);
+
+        let calc_csum = |slice: &[u8]| -> u32 {
+            let mut sum = 0u32;
+            for chunk in slice.chunks(4) {
+                let mut buf = [0u8; 4];
+                buf[..chunk.len()].copy_from_slice(chunk);
+                sum = sum.wrapping_add(u32::from_be_bytes(buf));
+            }
+            sum
+        };
+        assert_eq!(calc_csum(data), 0xB1B0AFBA);
+
+        let mut tags = Vec::with_capacity(num_tables);
+        for i in 0..num_tables {
+            let rec = &data[12 + i * 16..28 + i * 16];
+            let tag = [rec[0], rec[1], rec[2], rec[3]];
+            let csum = u32::from_be_bytes([rec[4], rec[5], rec[6], rec[7]]);
+            let off = u32::from_be_bytes([rec[8], rec[9], rec[10], rec[11]]) as usize;
+            let len = u32::from_be_bytes([rec[12], rec[13], rec[14], rec[15]]) as usize;
+            if &tag == b"head" {
+                let mut head = data[off..off + len].to_vec();
+                head[8..12].fill(0);
+                assert_eq!(calc_csum(&head), csum);
+            } else {
+                assert_eq!(calc_csum(&data[off..off + len]), csum);
+            }
+            if &tag == b"maxp" {
+                assert_eq!(&data[off..off + 4], &[0x00, 0x01, 0x00, 0x00]);
+                let max_instr = u16::from_be_bytes([data[off + 26], data[off + 27]]);
+                assert_eq!(max_instr, 0);
+            }
+            tags.push(tag);
+        }
+        assert!(tags.windows(2).all(|w| w[0] < w[1]));
+        assert!(!tags.contains(b"prep"));
+        assert!(!tags.contains(b"fpgm"));
+        assert!(!tags.contains(b"DSIG"));
+        assert!(tags.contains(b"fvar"));
+        assert!(tags.contains(b"glyf"));
+        assert!(tags.contains(b"gvar"));
     }
 
     #[test]
     fn test_headless_appwindow_snapshot_and_error_binding() {
         init_headless_platform();
         let ui = AppWindow::new().unwrap();
+        let headless_window = HEADLESS_WINDOW
+            .with(|cell| cell.borrow().clone())
+            .expect("headless window initialized");
 
         let snap = syspilot_core::SystemSnapshot {
             os: "EndeavourOS".to_string(),
@@ -2488,6 +2710,48 @@ mod tests {
         };
 
         update_ui_from_snapshot(&ui, &snap);
+        headless_window.set_size(slint::PhysicalSize::new(920, 620));
+        ui.set_is_lcars_skin(true);
+        ui.set_hardware_info("ENDEAVOUROS // 7.3.5-ZEN1-1-ZEN".into());
+        ui.show().unwrap();
+        let mut buf = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(920, 620);
+        headless_window.request_redraw();
+        let drawn = headless_window.draw_if_needed(|renderer| {
+            let stride = buf.width() as usize;
+            renderer.render(buf.make_mut_slice(), stride);
+        });
+        assert!(drawn);
+        let px = |x: usize, y: usize| buf.as_slice()[y * 920 + x];
+        let is_black = |p: slint::Rgb8Pixel| p.r == 0 && p.g == 0 && p.b == 0;
+        for y in 20..48 {
+            for x in 233..244 {
+                assert!(is_black(px(x, y)), "left cutout gap not black at ({x},{y})");
+            }
+            for x in 564..575 {
+                assert!(
+                    is_black(px(x, y)),
+                    "right cutout gap not black at ({x},{y})"
+                );
+            }
+        }
+        assert!(
+            (20..48).any(|y| (248..560).any(|x| !is_black(px(x, y)))),
+            "top cutout title failed to render"
+        );
+        assert!(!is_black(px(580, 34)), "trailing top rail missing");
+        assert!(
+            !is_black(px(141, 560)),
+            "bottom elbow inner concave fillet has seam/notch"
+        );
+        assert!(
+            is_black(px(158, 546)),
+            "bottom elbow concave corner not black"
+        );
+        assert!(
+            is_black(px(14, 606)),
+            "bottom elbow outer 28px corner not rounded"
+        );
+
         assert_eq!(ui.get_overall_status().as_str(), "ALL_CLEAR");
         assert_eq!(ui.get_overall_status_label().as_str(), "SYSTEM OPERATIONAL");
         assert!(!ui.get_has_error());
@@ -2587,8 +2851,100 @@ mod tests {
         );
         assert!(!ui.get_custom_playbook_desc().as_str().is_empty());
 
-        // Resize AppWindow and toggle is_lcars_skin (true and false) at min-height: 520px
-        ui.window().set_size(slint::LogicalSize::new(960.0, 520.0));
+        // POD 00 / Classic Exception Telemetry ModelRc binding & non-clobbering resize
+        let snap_anom = syspilot_core::SystemSnapshot {
+            status: "PRE_FLIGHT_ATTENTION".into(),
+            cache_stale: false,
+            actionable_remediations: vec![syspilot_core::ActionableRemediation {
+                check: Some("previous_boot".into()),
+                severity: Some("WARN".into()),
+                code: Some("SYS_UNCLEAN_SHUTDOWN".into()),
+                summary: Some("Previous session crashed".into()),
+                ..Default::default()
+            }],
+            pacnew_files: vec!["/etc/pacman.conf.pacnew".into()],
+            ..Default::default()
+        };
+        let vm_anom = DashboardViewModel::from_snapshot_inputs(
+            &snap_anom,
+            &syspilot_core::RebootSafetyStatus::default(),
+            &syspilot_core::SentinelStatus::default(),
+            &syspilot_core::GamingReadinessStatus::default(),
+            "NVIDIA GeForce GTX 970",
+            "2.1.6",
+        );
+        assert_eq!(vm_anom.anomalies.len(), 2);
+        assert_eq!(vm_anom.pod00_accent_rgb, (255, 153, 0));
+
+        let snap_alert = syspilot_core::SystemSnapshot {
+            status: "ACTION_REQUIRED".into(),
+            cache_stale: false,
+            actionable_remediations: vec![syspilot_core::ActionableRemediation {
+                check: Some("previous_boot".into()),
+                severity: Some("ERROR".into()),
+                code: Some("SYS_KERNEL_PANIC".into()),
+                summary: Some("Kernel panic in previous boot".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let vm_alert = DashboardViewModel::from_snapshot_inputs(
+            &snap_alert,
+            &syspilot_core::RebootSafetyStatus::default(),
+            &syspilot_core::SentinelStatus::default(),
+            &syspilot_core::GamingReadinessStatus::default(),
+            "NVIDIA GeForce GTX 970",
+            "2.1.6",
+        );
+        assert_eq!(vm_alert.pod00_accent_rgb, RowTone::Alert.rgb());
+
+        ui.set_active_tab(0);
+        ui.set_is_lcars_skin(true);
+        apply_dashboard_view_model(&ui, &vm_anom);
+        assert_eq!(ui.get_anomalies().row_count(), 2);
+        assert_eq!(
+            ui.get_anomalies().row_data(0).unwrap().label.as_str(),
+            "PREVIOUS BOOT"
+        );
+        assert_eq!(
+            ui.get_anomalies().row_data(1).unwrap().label.as_str(),
+            "PACNEW DRIFT"
+        );
+        assert_eq!(ui.get_tab0_target_height(), 716);
+
+        // Manual resize must NOT be clobbered on refresh with unchanged anomaly bounds
+        ui.window().set_size(slint::LogicalSize::new(940.0, 740.0));
+        apply_dashboard_view_model(&ui, &vm_anom);
+        assert_eq!(ui.window().size().to_logical(1.0).width, 940.0);
+
+        // Clearing anomalies (2 -> 0) transitions bounds and updates target height to 620
+        let snap_clean = syspilot_core::SystemSnapshot {
+            status: "ALL_CLEAR".into(),
+            cache_stale: false,
+            ..Default::default()
+        };
+        let vm_clean = DashboardViewModel::from_snapshot_inputs(
+            &snap_clean,
+            &syspilot_core::RebootSafetyStatus::default(),
+            &syspilot_core::SentinelStatus::default(),
+            &syspilot_core::GamingReadinessStatus::default(),
+            "NVIDIA GeForce GTX 970",
+            "2.1.6",
+        );
+        apply_dashboard_view_model(&ui, &vm_clean);
+        assert_eq!(ui.get_anomalies().row_count(), 0);
+        assert_eq!(ui.get_tab0_target_height(), 620);
+
+        // Refresh while active_tab != 0 must NOT resize the window to Tab 0 dimensions
+        ui.set_active_tab(1);
+        ui.window().set_size(slint::LogicalSize::new(920.0, 740.0));
+        apply_dashboard_view_model(&ui, &vm_anom);
+        assert_eq!(ui.window().size().to_logical(1.0).height, 740.0);
+        assert_eq!(ui.window().size().to_logical(1.0).width, 920.0);
+        ui.set_active_tab(0);
+
+        // Resize AppWindow down to min-width 920px and toggle is_lcars_skin (true and false)
+        ui.window().set_size(slint::LogicalSize::new(920.0, 520.0));
         ui.set_is_lcars_skin(true);
         assert!(ui.get_is_lcars_skin());
         ui.set_is_lcars_skin(false);
@@ -2972,5 +3328,317 @@ mod tests {
         assert!(!resolve_initial_skin(Some(SkinOverride::Classic), true));
         assert!(resolve_initial_skin(None, true));
         assert!(!resolve_initial_skin(None, false));
+    }
+
+    fn strip_slint_comments_and_strings(src: &str) -> String {
+        let bytes = src.as_bytes();
+        let mut out = String::with_capacity(src.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            } else if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    if bytes[i] == b'\n' {
+                        out.push('\n');
+                    }
+                    i += 1;
+                }
+                i = (i + 2).min(bytes.len());
+            } else if bytes[i] == b'"' {
+                out.push('"');
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i] == b'"' {
+                        out.push('"');
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+            } else {
+                let ch = src[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+        out
+    }
+
+    fn extract_slint_text_blocks(cleaned: &str) -> Vec<(usize, String)> {
+        let mut blocks = Vec::new();
+        let bytes = cleaned.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if cleaned[i..].starts_with("Text") {
+                let prev_ok =
+                    i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
+                let mut j = i + 4;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if prev_ok && j < bytes.len() && bytes[j] == b'{' {
+                    let line = cleaned[..i].bytes().filter(|&b| b == b'\n').count() + 1;
+                    let start = j + 1;
+                    let mut depth = 1usize;
+                    let mut k = start;
+                    while k < bytes.len() && depth > 0 {
+                        if bytes[k] == b'{' {
+                            depth += 1;
+                        } else if bytes[k] == b'}' {
+                            depth -= 1;
+                        }
+                        k += 1;
+                    }
+                    assert_eq!(depth, 0, "unterminated Text block at line {line}");
+                    blocks.push((line, cleaned[start..k - 1].to_string()));
+                    i = k;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        blocks
+    }
+
+    fn has_centered_vertical_alignment(body: &str) -> bool {
+        body.split(';').any(|stmt| {
+            let mut parts = stmt.splitn(2, ':');
+            let key = parts.next().unwrap_or("").trim();
+            let val = parts.next().unwrap_or("").trim();
+            key == "vertical-alignment" && val == "center"
+        })
+    }
+
+    fn extract_height_prop(body: &str) -> Option<String> {
+        let mut depth = 0usize;
+        let mut start = 0usize;
+        let bytes = body.as_bytes();
+        for (idx, &b) in bytes.iter().enumerate() {
+            if b == b'{' {
+                depth += 1;
+            } else if b == b'}' {
+                depth = depth.saturating_sub(1);
+            } else if b == b';' && depth == 0 {
+                let stmt = body[start..idx].trim();
+                if let Some((k, v)) = stmt.split_once(':')
+                    && k.trim() == "height"
+                {
+                    return Some(v.trim().to_string());
+                }
+                start = idx + 1;
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn test_slint_centered_single_line_text_has_even_height() {
+        let ui_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui");
+        let mut files = vec![ui_dir.join("appwindow.slint")];
+        for sub in ["components", "patterns"] {
+            let dir = ui_dir.join(sub);
+            let mut entries: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()))
+                .filter_map(|res| res.ok().map(|e| e.path()))
+                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("slint"))
+                .collect();
+            entries.sort();
+            files.extend(entries);
+        }
+
+        let mut checked_centered = 0usize;
+        for path in &files {
+            let raw = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+            let cleaned = strip_slint_comments_and_strings(&raw);
+            for (line, body) in extract_slint_text_blocks(&cleaned) {
+                if !has_centered_vertical_alignment(&body) {
+                    continue;
+                }
+                checked_centered += 1;
+                let h = extract_height_prop(&body).unwrap_or_else(|| {
+                    panic!(
+                        "{}:{line}: Text with `vertical-alignment: center` must declare explicit even height or `height: 100%` (FemtoVG 0.5px GL_NEAREST guard)",
+                        path.display()
+                    )
+                });
+                if h == "100%" {
+                    continue;
+                }
+                let px = h
+                    .strip_suffix("px")
+                    .and_then(|n| n.trim().parse::<u32>().ok())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{}:{line}: centered Text height `{h}` must be `100%` or an even integer `px` literal",
+                            path.display()
+                        )
+                    });
+                assert!(
+                    px > 0 && px.is_multiple_of(2),
+                    "{}:{line}: centered Text height `{h}` must be an even integer > 0",
+                    path.display()
+                );
+            }
+        }
+        assert!(
+            checked_centered >= 20,
+            "expected at least 20 centered Text elements across UI, saw {checked_centered}"
+        );
+
+        let pod_hdr = std::fs::read_to_string(ui_dir.join("components/lcars_pod_header.slint"))
+            .expect("read lcars_pod_header.slint");
+        assert!(
+            pod_hdr.contains("height: 22px;"),
+            "LcarsPodHeader Text must pin height: 22px"
+        );
+        let row_src = std::fs::read_to_string(ui_dir.join("components/lcars_telemetry_row.slint"))
+            .expect("read lcars_telemetry_row.slint");
+        let row_blocks = extract_slint_text_blocks(&strip_slint_comments_and_strings(&row_src));
+        assert_eq!(row_blocks.len(), 3);
+        for (line, body) in row_blocks {
+            assert_eq!(
+                extract_height_prop(&body).as_deref(),
+                Some("100%"),
+                "lcars_telemetry_row.slint:{line}: expected height: 100%"
+            );
+        }
+    }
+
+    fn collect_glyph_column_tops(
+        buf: &slint::SharedPixelBuffer<slint::Rgb8Pixel>,
+        x_range: std::ops::Range<usize>,
+        y_range: std::ops::Range<usize>,
+    ) -> Vec<usize> {
+        let width = buf.width() as usize;
+        let pixels = buf.as_slice();
+        let mut tops = Vec::new();
+        let mut cur_top: Option<usize> = None;
+        let mut cur_bottom = 0usize;
+        let mut cur_cols = 0usize;
+        let mut blank_gap = 0usize;
+
+        for x in x_range {
+            let mut col_top: Option<usize> = None;
+            let mut col_bottom = 0usize;
+            for y in y_range.clone() {
+                let p = pixels[y * width + x];
+                if p.r > 24 || p.g > 24 || p.b > 24 {
+                    col_top = Some(col_top.map_or(y, |t| t.min(y)));
+                    col_bottom = col_bottom.max(y);
+                }
+            }
+            match col_top {
+                Some(t) => {
+                    blank_gap = 0;
+                    cur_cols += 1;
+                    cur_top = Some(cur_top.map_or(t, |prev| prev.min(t)));
+                    cur_bottom = cur_bottom.max(col_bottom);
+                }
+                None => {
+                    if let Some(t) = cur_top {
+                        let h = cur_bottom.saturating_sub(t) + 1;
+                        if h >= 7 && cur_cols >= 2 {
+                            tops.push(t);
+                        }
+                        cur_top = None;
+                        cur_bottom = 0;
+                        cur_cols = 0;
+                    }
+                    blank_gap += 1;
+                    if blank_gap >= 6 && !tops.is_empty() {
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(t) = cur_top {
+            let h = cur_bottom.saturating_sub(t) + 1;
+            if h >= 7 && cur_cols >= 2 {
+                tops.push(t);
+            }
+        }
+        tops
+    }
+
+    #[test]
+    fn test_headless_lcars_text_baseline_uniformity() {
+        init_headless_platform();
+        let ui = AppWindow::new().unwrap();
+        let headless_window = HEADLESS_WINDOW
+            .with(|cell| cell.borrow().clone())
+            .expect("headless window initialized");
+
+        let snap = syspilot_core::SystemSnapshot {
+            os: "EndeavourOS".to_string(),
+            kernel: "6.12.8-arch1-1".to_string(),
+            status: "ALL_CLEAR".to_string(),
+            firewall_active: true,
+            cache_stale: false,
+            updates_check_state: syspilot_core::UpdateCheckState::Ok,
+            ..Default::default()
+        };
+        update_ui_from_snapshot(&ui, &snap);
+        ui.set_anomalies(slint::ModelRc::new(slint::VecModel::from(vec![
+            AnomalyRow {
+                label: "TEST KERNEL".into(),
+                value: "ALL SYSTEMS NOMINAL".into(),
+                status: "PASS".into(),
+                accent_color: slint::Color::from_rgb_u8(255, 170, 102),
+                status_color: slint::Color::from_rgb_u8(34, 197, 94),
+            },
+        ])));
+        headless_window.set_size(slint::PhysicalSize::new(920, 620));
+        ui.set_is_lcars_skin(true);
+        ui.set_active_tab(0);
+        ui.show().unwrap();
+
+        let mut buf = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(920, 620);
+        headless_window.request_redraw();
+        let drawn = headless_window.draw_if_needed(|renderer| {
+            let stride = buf.width() as usize;
+            renderer.render(buf.make_mut_slice(), stride);
+        });
+        assert!(drawn);
+
+        let header_tops = collect_glyph_column_tops(&buf, 198..440, 66..88);
+        assert!(
+            header_tops.len() >= 12,
+            "expected >= 12 glyph clusters in POD 00 header, got {}: {:?}",
+            header_tops.len(),
+            header_tops
+        );
+        let hdr_min = *header_tops.iter().min().unwrap();
+        let hdr_max = *header_tops.iter().max().unwrap();
+        assert!(
+            hdr_max - hdr_min <= 1,
+            "POD 00 header cap-top spread too large ({hdr_min}..={hdr_max}): {header_tops:?}"
+        );
+        assert!(
+            (68..=77).contains(&hdr_min) && (68..=77).contains(&hdr_max),
+            "POD 00 header cap-top ({hdr_min}..={hdr_max}) not centered inside 16x16 cap (70..86)"
+        );
+
+        let row_tops = collect_glyph_column_tops(&buf, 390..620, 96..120);
+        assert!(
+            row_tops.len() >= 10,
+            "expected >= 10 glyph clusters in LcarsTelemetryRow value, got {}: {:?}",
+            row_tops.len(),
+            row_tops
+        );
+        let row_min = *row_tops.iter().min().unwrap();
+        let row_max = *row_tops.iter().max().unwrap();
+        assert!(
+            row_max - row_min <= 1,
+            "LcarsTelemetryRow cap-top spread too large ({row_min}..={row_max}): {row_tops:?}"
+        );
     }
 }

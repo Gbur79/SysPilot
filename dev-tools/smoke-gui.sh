@@ -64,18 +64,33 @@ cat > "$tmp_dir/state/system-health/summary.json" <<EOF
 }
 EOF
 
+has_dri_render_node() {
+    local dev
+    for dev in /dev/dri/renderD*; do
+        if [[ -r "$dev" && -w "$dev" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 run_skin_smoke() {
     local skin="$1"
+    local backend="$2"
+    local gl_env=()
+    if [[ "$backend" == "winit-software" ]]; then
+        gl_env=(LIBGL_ALWAYS_SOFTWARE=1)
+    fi
     if [[ -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ]]; then
-        HOME="$tmp_dir/home" XDG_STATE_HOME="$tmp_dir/state" XDG_CONFIG_HOME="$tmp_dir/config" \
-            SLINT_BACKEND=winit-software LIBGL_ALWAYS_SOFTWARE=1 \
+        env HOME="$tmp_dir/home" XDG_STATE_HOME="$tmp_dir/state" XDG_CONFIG_HOME="$tmp_dir/config" \
+            SLINT_BACKEND="$backend" "${gl_env[@]}" \
             timeout 10s "$gui_bin" --smoke --skin "$skin"
-    elif command -v cage >/dev/null 2>&1; then
-        HOME="$tmp_dir/home" XDG_STATE_HOME="$tmp_dir/state" XDG_CONFIG_HOME="$tmp_dir/config" \
+    elif [[ "$backend" == "winit-software" ]] && command -v cage >/dev/null 2>&1; then
+        env HOME="$tmp_dir/home" XDG_STATE_HOME="$tmp_dir/state" XDG_CONFIG_HOME="$tmp_dir/config" \
             WLR_BACKENDS=headless LIBGL_ALWAYS_SOFTWARE=1 SLINT_BACKEND=winit-software \
             timeout 10s cage -s -- "$gui_bin" --smoke --skin "$skin"
-    elif command -v xvfb-run >/dev/null 2>&1; then
-        HOME="$tmp_dir/home" XDG_STATE_HOME="$tmp_dir/state" XDG_CONFIG_HOME="$tmp_dir/config" \
+    elif [[ "$backend" == "winit-software" ]] && command -v xvfb-run >/dev/null 2>&1; then
+        env HOME="$tmp_dir/home" XDG_STATE_HOME="$tmp_dir/state" XDG_CONFIG_HOME="$tmp_dir/config" \
             SLINT_BACKEND=winit-software LIBGL_ALWAYS_SOFTWARE=1 \
             timeout 10s xvfb-run -a "$gui_bin" --smoke --skin "$skin"
     else
@@ -83,26 +98,34 @@ run_skin_smoke() {
     fi
 }
 
-for skin in lcars classic; do
-    smoke_log="$tmp_dir/smoke-${skin}.log"
-    rc=0
-    run_skin_smoke "$skin" >"$smoke_log" 2>&1 || rc=$?
-    if (( rc == 42 )); then
-        if (( quiet )); then
-            echo "GUI_SMOKE: SKIP | no display server (WAYLAND_DISPLAY/DISPLAY), cage, or xvfb-run"
-        else
-            echo "GUI_SMOKE: SKIP (no display server, cage, or xvfb-run available)"
+backends=("winit-software")
+if [[ -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ]] && has_dri_render_node; then
+    backends+=("winit-femtovg")
+fi
+
+for backend in "${backends[@]}"; do
+    for skin in lcars classic; do
+        smoke_log="$tmp_dir/smoke-${backend}-${skin}.log"
+        rc=0
+        run_skin_smoke "$skin" "$backend" >"$smoke_log" 2>&1 || rc=$?
+        if (( rc == 42 )); then
+            if (( quiet )); then
+                echo "GUI_SMOKE: SKIP | no display server (WAYLAND_DISPLAY/DISPLAY), cage, or xvfb-run"
+            else
+                echo "GUI_SMOKE: SKIP (no display server, cage, or xvfb-run available)"
+            fi
+            exit 0
+        elif (( rc != 0 )); then
+            first_err=$(head -n 1 "$smoke_log" | tr '|' '_' || true)
+            fail_smoke "render-${backend}-${skin}" "syspilot-gui --smoke --skin ${skin} (${backend}) failed (rc=${rc}: ${first_err:-non-zero exit})"
         fi
-        exit 0
-    elif (( rc != 0 )); then
-        first_err=$(head -n 1 "$smoke_log" | tr '|' '_' || true)
-        fail_smoke "render-${skin}" "syspilot-gui --smoke --skin ${skin} failed (rc=${rc}: ${first_err:-non-zero exit})"
-    fi
+    done
 done
 
+backends_csv=$(IFS=,; echo "${backends[*]}")
 if (( quiet )); then
-    echo "GUI_SMOKE: PASS | SKINS: lcars,classic | BACKEND: winit-software | TARGET: syspilot-gui"
+    echo "GUI_SMOKE: PASS | SKINS: lcars,classic | BACKENDS: ${backends_csv} | TARGET: syspilot-gui"
 else
-    echo "✔ Dual-Skin Runtime Smoke Test passed (skins: lcars, classic; backend: winit-software)."
+    echo "✔ Dual-Skin Runtime Smoke Test passed (skins: lcars, classic; backends: ${backends_csv})."
 fi
 exit 0

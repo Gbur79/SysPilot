@@ -29,6 +29,7 @@ export component LcarsTabButton inherits Rectangle {
         padding-right: 10px;
         alignment: space-between;
         Text {
+            height: 100%;
             text: root.text;
             color: root.active ? #000000 : (touch.has-hover ? #f8fafc : #e2e8f0);
             font-size: 13px;
@@ -37,6 +38,7 @@ export component LcarsTabButton inherits Rectangle {
             vertical-alignment: center;
         }
         if root.active: Text {
+            height: 100%;
             text: "▶";
             color: #000000;
             font-size: 12px;

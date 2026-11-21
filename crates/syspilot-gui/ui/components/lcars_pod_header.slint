@@ -23,15 +23,22 @@ export component LcarsPodHeader inherits HorizontalLayout {
         }
     }
 
-    Text {
-        text: root.title;
-        color: root.accent-color;
-        font-size: 13px;
-        font-family: "Antonio";
-        font-weight: 800;
-        letter-spacing: 0.5px;
-        vertical-alignment: center;
+    VerticalLayout {
+        alignment: center;
         horizontal-stretch: 0;
+        padding-bottom: 2px;
+
+        Text {
+            height: 22px;
+            text: root.title;
+            color: root.accent-color;
+            font-size: 13px;
+            font-family: "Antonio";
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            vertical-alignment: center;
+            horizontal-stretch: 0;
+        }
     }
 
     VerticalLayout {

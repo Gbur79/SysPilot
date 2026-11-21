@@ -8,15 +8,15 @@ export component StatusBadge inherits Rectangle {
     border-color: badge-color.transparentize(60%);
     border-width: 1px;
     border-radius: Theme.radius-sm;
+    height: 22px;
     horizontal-stretch: 0;
 
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;
-        padding-top: 3px;
-        padding-bottom: 3px;
 
         Text {
+            height: 100%;
             text: root.text;
             color: root.badge-color;
             font-size: 11px;

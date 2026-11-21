@@ -15,12 +15,20 @@ import { StatusBadge } from "components/status_badge.slint";
 import { TabButton } from "components/tab_button.slint";
 import { ScrollView } from "std-widgets.slint";
 
+export struct AnomalyRow {
+    label: string,
+    value: string,
+    status: string,
+    accent-color: color,
+    status-color: color,
+}
+
 export component AppWindow inherits Window {
     title: "SysPilot — System Health & AI Copilot";
-    min-width: 960px;
+    min-width: 920px;
     min-height: 520px;
-    preferred-width: 1040px;
-    preferred-height: (root.active-tab == 1) ? (182px + root.maintenance_item_count * 56px) : (root.active-tab == 2 ? 780px : 590px);
+    preferred-width: (root.active-tab == 2) ? 980px : ((root.active-tab == 1) ? 920px : clamp(root.tab0_target_width * 1px, 920px, 1040px));
+    preferred-height: (root.active-tab == 1) ? (182px + root.maintenance_item_count * 56px) : (root.active-tab == 2 ? 780px : clamp(root.tab0_target_height * 1px, 620px, 900px));
     background: root.is_lcars_skin ? #000000 : Theme.background;
     default-font-family: root.is_lcars_skin ? "Antonio" : "DejaVu Sans, Noto Sans, Liberation Sans, sans-serif";
 
@@ -58,6 +66,10 @@ export component AppWindow inherits Window {
     in-out property <string> refresh_label: "04  REFRESH DATA";
     in-out property <bool> is_lcars_skin: true;
     in property <int> maintenance_item_count: 9;
+    in property <int> tab0_target_width: 920;
+    in property <int> tab0_target_height: 620;
+    in property <[AnomalyRow]> anomalies: [];
+    in property <color> pod00_accent_color: Theme.okuda-amber;
 
     // Header & Attention Properties
     in property <bool> has_error: false;
@@ -196,13 +208,16 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             x: 232px;
             y: 12px;
-            width: 348px;
+            width: 344px;
             height: 44px;
-            spacing: 16px;
+            padding-left: 16px;
+            padding-right: 16px;
+            spacing: 12px;
             alignment: center;
             opacity: root.lcars-pulse;
 
             Text {
+                height: 100%;
                 text: "SYS PILOT";
                 color: root.frame-color;
                 font-size: 26px;
@@ -212,20 +227,22 @@ export component AppWindow inherits Window {
             }
 
             Text {
+                height: 100%;
                 text: root.hardware_info;
                 color: root.frame-color;
                 font-size: 16px;
                 font-family: "Antonio";
                 font-weight: 700;
                 vertical-alignment: center;
+                overflow: elide;
             }
         }
 
         // Trailing Top Rail (Horizon Dissolve into Deep Space)
         Rectangle {
-            x: 580px;
+            x: 576px;
             y: 12px;
-            width: root.width - 592px;
+            width: root.width - 588px;
             height: 44px;
             background: @linear-gradient(90deg, root.frame-color 0%, root.frame-color 65%, root.frame-color.transparentize(30%) 85%, root.frame-color.transparentize(75%) 100%);
             border-top-right-radius: 22px;
@@ -235,17 +252,21 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 padding-left: 18px;
                 padding-right: 14px;
+                spacing: 10px;
                 alignment: space-between;
 
                 VerticalLayout {
                     alignment: center;
                     Text {
+                        height: 44px;
                         text: root.stardate_label;
                         color: #000000;
-                        font-size: 14px;
+                        font-size: 15px;
                         font-family: "Antonio";
-                        font-weight: 700;
+                        font-weight: 800;
+                        letter-spacing: 0.8px;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
 
@@ -269,6 +290,7 @@ export component AppWindow inherits Window {
                             alignment: center;
 
                             Text {
+                                height: 100%;
                                 text: root.overall_status_label;
                                 color: #000000;
                                 font-size: 12px;
@@ -331,6 +353,7 @@ export component AppWindow inherits Window {
                     padding-left: 8px;
                     alignment: start;
                     Text {
+                        height: 100%;
                         text: "441-9886";
                         color: #aaaaaa;
                         font-size: 10px;
@@ -350,6 +373,7 @@ export component AppWindow inherits Window {
                     padding-left: 8px;
                     alignment: start;
                     Text {
+                        height: 100%;
                         text: "02-65459";
                         color: #aaaaaa;
                         font-size: 10px;
@@ -382,6 +406,7 @@ export component AppWindow inherits Window {
                     alignment: space-between;
 
                     Text {
+                        height: 100%;
                         text: "HOLODECK";
                         color: #000000;
                         font-size: 12px;
@@ -392,6 +417,7 @@ export component AppWindow inherits Window {
                     }
 
                     Text {
+                        height: 100%;
                         text: "⇄";
                         color: #000000;
                         font-size: 13px;
@@ -498,24 +524,29 @@ export component AppWindow inherits Window {
                 HorizontalLayout {
                     padding-left: 16px;
                     padding-right: 20px;
+                    spacing: 8px;
                     alignment: space-between;
 
                     Text {
+                        height: 100%;
                         text: root.active-tab == 0 ? "SYS-01 // TELEMETRY" : (root.active-tab == 1 ? "SYS-02 // MAINTENANCE" : "SYS-03 // TACTICAL PLAYBOOKS");
                         color: #000000;
                         font-size: 13px;
                         font-family: "Antonio";
                         font-weight: 700;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
 
                     Text {
+                        height: 100%;
                         text: root.copilot_badge_label;
                         color: #000000;
                         font-size: 13px;
                         font-family: "Antonio";
                         font-weight: 700;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
             }
@@ -546,6 +577,7 @@ export component AppWindow inherits Window {
                         padding-left: 10px;
                         padding-right: 10px;
                         Text {
+                            height: 100%;
                             text: root.error_message;
                             color: Theme.status-red;
                             font-size: 12px;
@@ -562,6 +594,23 @@ export component AppWindow inherits Window {
                     VerticalLayout {
                         spacing: 12px;
                         alignment: start;
+
+                        // POD 00: EXCEPTION TELEMETRY (0px footprint when nominal)
+                        if (root.anomalies.length > 0) : VerticalLayout {
+                            vertical-stretch: 0;
+                            spacing: 6px;
+                            LcarsPodHeader {
+                                title: "POD 00 // EXCEPTION TELEMETRY";
+                                accent-color: root.pod00_accent_color;
+                            }
+                            for item in root.anomalies : LcarsTelemetryRow {
+                                label: item.label;
+                                value: item.value;
+                                status: item.status;
+                                accent-color: item.accent-color;
+                                status-color: item.status-color;
+                            }
+                        }
 
                         // POD 01: SYSTEM HEALTH & HYGIENE
                         VerticalLayout {
@@ -813,10 +862,12 @@ export component AppWindow inherits Window {
                                 alignment: center;
                                 horizontal-stretch: 1;
                                 Text {
+                                    height: 32px;
                                     text: root.copilot_status_text;
                                     color: Theme.status-green;
                                     font-size: 12px;
                                     font-weight: 700;
+                                    vertical-alignment: center;
                                     overflow: elide;
                                 }
                             }
@@ -953,6 +1004,7 @@ export component AppWindow inherits Window {
                             spacing: 10px;
 
                             Text {
+                                height: 24px;
                                 text: "SYS PILOT";
                                 color: Theme.text-primary;
                                 font-size: 16px;
@@ -980,6 +1032,7 @@ export component AppWindow inherits Window {
                                     alignment: center;
 
                                     Text {
+                                        height: 100%;
                                         text: root.app_update_badge;
                                         color: Theme.status-purple;
                                         font-size: 11px;
@@ -1014,6 +1067,7 @@ export component AppWindow inherits Window {
                                 alignment: center;
 
                                 Text {
+                                    height: 100%;
                                     text: root.copilot_badge_label;
                                     color: Theme.status-cyan;
                                     font-size: 11px;
@@ -1072,7 +1126,7 @@ export component AppWindow inherits Window {
                 border-color: Theme.status-red;
                 border-width: 1px;
                 border-radius: Theme.radius-sm;
-                min-height: 32px;
+                height: 32px;
 
                 HorizontalLayout {
                     padding-left: 12px;
@@ -1081,6 +1135,7 @@ export component AppWindow inherits Window {
                     spacing: 8px;
 
                     Text {
+                        height: 100%;
                         text: "DATA UNAVAILABLE: " + root.error_message;
                         color: Theme.status-red;
                         font-size: 11px;
@@ -1098,7 +1153,7 @@ export component AppWindow inherits Window {
                 border-color: Theme.status-amber;
                 border-width: 1px;
                 border-radius: Theme.radius-sm;
-                min-height: 32px;
+                height: 32px;
 
                 HorizontalLayout {
                     padding-left: 12px;
@@ -1107,6 +1162,7 @@ export component AppWindow inherits Window {
                     spacing: 8px;
 
                     Text {
+                        height: 100%;
                         text: root.attention_badge + ": " + root.attention_message;
                         color: Theme.status-amber;
                         font-size: 11px;
@@ -1126,6 +1182,19 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                     VerticalLayout {
                         spacing: 10px;
+
+                        if (root.anomalies.length > 0) : Card {
+                            title: "⚠ Exception Telemetry";
+                            badge-text: root.anomalies.length + " ACTIVE";
+                            badge-color: root.pod00_accent_color;
+
+                            for item in root.anomalies : GridRow {
+                                name: item.label;
+                                status-text: item.status;
+                                status-color: item.status-color;
+                                details: item.value;
+                            }
+                        }
 
                         Card {
                             title: "🛡 System Health & Hygiene";
@@ -1392,10 +1461,12 @@ export component AppWindow inherits Window {
                             alignment: center;
                             horizontal-stretch: 1;
                             Text {
+                                height: 32px;
                                 text: root.copilot_status_text;
                                 color: Theme.status-green;
                                 font-size: 12px;
                                 font-weight: 700;
+                                vertical-alignment: center;
                                 overflow: elide;
                             }
                         }
@@ -1497,6 +1568,7 @@ export component AppWindow inherits Window {
         width: 100%;
         height: 100%;
         background: #000000cc;
+        backdrop-blur: 8px;
 
         TouchArea {}
 
@@ -1609,6 +1681,7 @@ export component AppWindow inherits Window {
         width: 100%;
         height: 100%;
         background: #000000cc;
+        backdrop-blur: 8px;
 
         TouchArea {}
 

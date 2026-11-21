@@ -15,8 +15,10 @@ export component Card inherits Rectangle {
         spacing: 10px;
 
         if title != "" : HorizontalLayout {
+            height: 20px;
             alignment: space-between;
             Text {
+                height: 100%;
                 text: root.title;
                 color: Theme.text-primary;
                 font-size: 13px;
@@ -25,6 +27,7 @@ export component Card inherits Rectangle {
             }
 
             if badge-text != "" : Rectangle {
+                height: 20px;
                 background: root.badge-color.transparentize(85%);
                 border-radius: Theme.radius-sm;
                 border-color: root.badge-color.transparentize(60%);
@@ -33,14 +36,14 @@ export component Card inherits Rectangle {
                 HorizontalLayout {
                     padding-left: 6px;
                     padding-right: 6px;
-                    padding-top: 2px;
-                    padding-bottom: 2px;
 
                     Text {
+                        height: 100%;
                         text: root.badge-text;
                         color: root.badge-color;
                         font-size: 10px;
                         font-weight: 700;
+                        vertical-alignment: center;
                     }
                 }
             }

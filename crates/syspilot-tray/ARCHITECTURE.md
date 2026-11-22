@@ -1,6 +1,6 @@
 # SysPilot Rust Tray (`syspilot-tray`) — Dokumentacja Architektury i Stanu Obecnego
 
-**Wersja:** 2.1.7 (Rust Edition 2024, workspace `syspilot-tray`)  
+**Wersja:** 2.1.8 (Rust Edition 2024, workspace `syspilot-tray`)  
 **Środowisko:** Arch Linux / EndeavourOS / KDE Plasma Wayland & X11  
 **Cel komponentu:** Ultralekki daemon rezydentny (StatusNotifierItem) monitorujący zdrowie stacji roboczej 24/7 z minimalnym narzutem CPU i pamięci RAM, z bezblokującym startem SNI oraz natywnym D-Bus.
 

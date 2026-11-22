@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.8] - 2026-11-22
+
+### Added & Hardened / Zero-Fork Native Rust Fast-Path, Cross-Boot Integrity & Dependency Modernization (`PATCH-046`, `PATCH-047a`, `PATCH-047b`, `PATCH-047c`, `PATCH-048`)
+- **Native Rust CLI Fast-Path (`crates/syspilot-cli`, `PATCH-047c`):** Ported hot CLI flags (`-s`/`--status`, `-j`/`--json`, `--tray`/no-args, `--gui`, `-v`/`--version`, `-h`/`--help`) to a lightweight native Rust binary `syspilot` sharing `syspilot-core::models::parse_canonical_summary` and `is_pre_boot_modified`, eliminating `bash`/`jq`/`awk`/`stat` subprocess forks. Enforced TOCTOU-free `O_NOFOLLOW | O_NONBLOCK` + `fstat` bounded reads for `summary.json` and `config.env`, `process_group(0)` SIGHUP-isolated GUI spawning, and `SYSPILOT_SHELL_FALLBACK=1` delegation to `bin/syspilot` (installed under `lib/syspilot/bin/syspilot`) for heavy/interactive operations while preserving both Slint renderers (`renderer-femtovg` + `renderer-software`).
+- **Native D-Bus `systemd1`, ALPM Orphan Parser & Standalone Cache Probe (`PATCH-047a`, `PATCH-047b`):**
+  - `crates/syspilot-core/src/services.rs`: replaced `systemctl` subprocesses with native async `zbus` queries (`org.freedesktop.systemd1.Manager::ListUnitsFiltered(&["failed"])`, `GetUnit`, `Transient`, `Slice`, `CacheProperties::No`) and isolated two-bus `dbus-run-session` integration testing (`spawn_count() == 0`).
+  - `crates/syspilot-core/src/orphans.rs`: replaced `pacman` orphan classification subprocesses with a direct read-only ALPM local DB parser (`/var/lib/pacman/local/*/desc`) via `sys_root::sub_path`.
+  - `crates/syspilot-core/src/updater.rs`: replaced `sys-health --software --json` subprocess in `check_standalone_updates_detailed` with hermetic cache inspection gated by `btime` pre-boot staleness and `STANDALONE_CACHE_TTL_SECS`.
+- **Cross-Boot Telemetry Freshness & Previous-Boot Verification (`PATCH-046`):** Added `previous_boot.rs` (`journalctl --list-boots` cached per `/proc/sys/kernel/random/boot_id`) and `/proc/stat` `btime` pre-boot gating across `load_sys_health_at`, `syspilot-tray`, `syspilot-gui`, and `syspilot -s` (`(PRE-BOOT)` notice).
+- **Tray `notify` 9.0 Upgrade (`PATCH-048`):** Upgraded `crates/syspilot-tray` from `notify 8.2` to `9.0.0` configured with `EventKindMask::CORE` to eliminate `IN_OPEN`/`IN_CLOSE_WRITE` watch wakeups while keeping `zbus = "5.19"` aligned with `ksni 0.3.7` and `slint 1.19`.
+
 ## [2.1.7] - 2026-11-21
 
 ### Added & Fixed / Dashboard Anomaly Surfacing, Slint 1.19 Upgrade & FemtoVG Pixel-Aligned Rendering

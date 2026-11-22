@@ -13,6 +13,7 @@ LCARS UI
 
 <img width="1009" height="714" alt="image" src="https://github.com/user-attachments/assets/af8af5a1-9540-47aa-8aca-a586793d9e1c" />
 
+<img width="931" height="649" alt="image" src="https://github.com/user-attachments/assets/1c92e4ef-6710-46b9-9fbf-c36b842fadd4" />
 
 ## 🌟 Overview
 

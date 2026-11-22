@@ -10,7 +10,7 @@ mod tray;
 mod updater;
 
 use ksni::{Handle, TrayMethods};
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Event, EventKind, EventKindMask, RecommendedWatcher, RecursiveMode, Watcher};
 use state::{SystemSnapshot, get_status_path, read_system_snapshot};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -309,7 +309,7 @@ pub(crate) fn dispatch_notify_result(
 fn build_watcher(target: PathBuf, fs_tx: mpsc::Sender<FsSignal>) -> Option<RecommendedWatcher> {
     RecommendedWatcher::new(
         move |result| dispatch_notify_result(result, &target, &fs_tx),
-        notify::Config::default(),
+        notify::Config::default().with_event_kinds(EventKindMask::CORE),
     )
     .map_err(|error| eprintln!("SysPilot: watcher unavailable; polling fallback active: {error}"))
     .ok()

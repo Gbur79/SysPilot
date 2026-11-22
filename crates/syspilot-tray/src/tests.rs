@@ -1551,10 +1551,38 @@ fn test_status_watcher_late_dir_inotify_and_fault_recovery() {
             .expect("fs channel closed");
         assert!(matches!(sig, crate::FsSignal::Dirty));
 
+        // Drain paired IN_CREATE + IN_MODIFY from initial fs::write before negative assertion
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        while rx.try_recv().is_ok() {}
+
+        // Read access must not trigger Dirty under EventKindMask::CORE
+        let _ = fs::read_to_string(&target).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(rx.try_recv().is_err());
+
+        // Atomic rename replacement must trigger Dirty (IN_MOVED_TO)
+        let tmp_target = late_dir.join("status.json.tmp");
+        fs::write(&tmp_target, "{\"v\":2}").unwrap();
+        fs::rename(&tmp_target, &target).unwrap();
+        let rename_sig = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("inotify rename signal timeout")
+            .expect("fs channel closed");
+        assert!(matches!(rename_sig, crate::FsSignal::Dirty));
+        while rx.try_recv().is_ok() {}
+
         sw.handle_fault("simulated error");
         assert!(!sw.is_watching());
         assert!(sw.ensure_watching());
         assert!(sw.is_watching());
+        while rx.try_recv().is_ok() {}
+
+        fs::write(&target, "{\"v\":3}").unwrap();
+        let recovered_sig = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("inotify post-fault recovery timeout")
+            .expect("fs channel closed");
+        assert!(matches!(recovered_sig, crate::FsSignal::Dirty));
         drop(sw);
     });
 }

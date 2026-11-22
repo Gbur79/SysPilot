@@ -2,22 +2,28 @@ use crate::models::OrphanStatus;
 use crate::sys_root::sub_path;
 #[cfg(test)]
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-#[cfg(test)]
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::time::timeout;
 
 #[cfg(test)]
 thread_local! {
-    static TEST_PACMAN_BIN: RefCell<Option<Option<PathBuf>>> = const { RefCell::new(None) };
+    static TEST_ORPHANS_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
 #[cfg(test)]
-pub fn set_test_pacman_bin(bin: Option<Option<PathBuf>>) {
-    TEST_PACMAN_BIN.with(|b| *b.borrow_mut() = bin);
+pub fn set_test_orphans_root(root: Option<PathBuf>) {
+    TEST_ORPHANS_ROOT.with(|r| *r.borrow_mut() = root);
+}
+
+fn active_orphans_root() -> PathBuf {
+    #[cfg(test)]
+    if let Some(root) = TEST_ORPHANS_ROOT.with(|r| r.borrow().clone()) {
+        return root;
+    }
+    PathBuf::from("/")
 }
 
 pub const ORPHAN_SENSITIVE_PATTERNS: &[(&str, &[&str])] = &[
@@ -392,46 +398,190 @@ pub fn classify_orphans(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AlpmPackageDesc {
+    pub name: String,
+    pub version: String,
+    pub reason: u8,
+    pub depends: Vec<String>,
+    pub optdepends: Vec<String>,
+    pub provides: Vec<String>,
+}
+
+pub fn extract_alpm_dep_name(raw: &str) -> String {
+    raw.split(['>', '<', '=', ':'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+pub fn parse_alpm_desc_str(content: &str) -> Result<AlpmPackageDesc, String> {
+    let mut section = "";
+    let mut name: Option<String> = None;
+    let mut version: Option<String> = None;
+    let mut reason: u8 = 0;
+    let mut depends = Vec::new();
+    let mut optdepends = Vec::new();
+    let mut provides = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with('%') && trimmed.ends_with('%') {
+            section = trimmed;
+            continue;
+        }
+        match section {
+            "%NAME%" => name = Some(trimmed.to_string()),
+            "%VERSION%" => version = Some(trimmed.to_string()),
+            "%REASON%" => {
+                reason = match trimmed {
+                    "0" => 0,
+                    "1" => 1,
+                    other => return Err(format!("invalid ALPM %REASON%: {other}")),
+                };
+            }
+            "%DEPENDS%" => {
+                let dep = extract_alpm_dep_name(trimmed);
+                if !dep.is_empty() {
+                    depends.push(dep);
+                }
+            }
+            "%OPTDEPENDS%" => {
+                let dep = extract_alpm_dep_name(trimmed);
+                if !dep.is_empty() {
+                    optdepends.push(dep);
+                }
+            }
+            "%PROVIDES%" => {
+                let prov = extract_alpm_dep_name(trimmed);
+                if !prov.is_empty() {
+                    provides.push(prov);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(name) = name.filter(|s| !s.is_empty()) else {
+        return Err("ALPM desc missing %NAME%".to_string());
+    };
+    let Some(version) = version.filter(|s| !s.is_empty()) else {
+        return Err("ALPM desc missing %VERSION%".to_string());
+    };
+
+    Ok(AlpmPackageDesc {
+        name,
+        version,
+        reason,
+        depends,
+        optdepends,
+        provides,
+    })
+}
+
+pub fn read_alpm_local_db_at(root: &Path) -> Result<Vec<AlpmPackageDesc>, String> {
+    let db_dir = sub_path(root, "/var/lib/pacman/local");
+    let entries = std::fs::read_dir(&db_dir)
+        .map_err(|e| format!("failed to read ALPM local db {}: {e}", db_dir.display()))?;
+    let mut pkgs = Vec::new();
+    for entry_res in entries {
+        let entry = entry_res.map_err(|e| format!("failed to read ALPM db entry: {e}"))?;
+        let ft = entry
+            .file_type()
+            .map_err(|e| format!("failed to stat ALPM db entry: {e}"))?;
+        if !ft.is_dir() {
+            continue;
+        }
+        let desc_path = entry.path().join("desc");
+        let content = std::fs::read_to_string(&desc_path)
+            .map_err(|e| format!("failed to read {}: {e}", desc_path.display()))?;
+        pkgs.push(parse_alpm_desc_str(&content)?);
+    }
+    pkgs.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(pkgs)
+}
+
+fn record_alpm_req<'a>(map: &mut HashMap<&'a str, Option<usize>>, dep: &'a str, owner_idx: usize) {
+    map.entry(dep)
+        .and_modify(|existing| {
+            if *existing != Some(owner_idx) {
+                *existing = None;
+            }
+        })
+        .or_insert(Some(owner_idx));
+}
+
+fn is_required_by_other(map: &HashMap<&str, Option<usize>>, key: &str, self_idx: usize) -> bool {
+    map.get(key).is_some_and(|owner| *owner != Some(self_idx))
+}
+
+pub fn compute_alpm_orphans(pkgs: &[AlpmPackageDesc]) -> (Vec<String>, Vec<String>) {
+    let mut hard_reqs: HashMap<&str, Option<usize>> = HashMap::new();
+    let mut opt_reqs: HashMap<&str, Option<usize>> = HashMap::new();
+
+    for (idx, pkg) in pkgs.iter().enumerate() {
+        for dep in &pkg.depends {
+            record_alpm_req(&mut hard_reqs, dep.as_str(), idx);
+        }
+        for opt in &pkg.optdepends {
+            record_alpm_req(&mut opt_reqs, opt.as_str(), idx);
+        }
+    }
+
+    let mut strict = Vec::new();
+    let mut extended = Vec::new();
+    for (idx, pkg) in pkgs.iter().enumerate() {
+        if pkg.reason != 1 {
+            continue;
+        }
+        let has_hard = is_required_by_other(&hard_reqs, &pkg.name, idx)
+            || pkg
+                .provides
+                .iter()
+                .any(|p| is_required_by_other(&hard_reqs, p, idx));
+        if !has_hard {
+            extended.push(pkg.name.clone());
+            let has_opt = is_required_by_other(&opt_reqs, &pkg.name, idx)
+                || pkg
+                    .provides
+                    .iter()
+                    .any(|p| is_required_by_other(&opt_reqs, p, idx));
+            if !has_opt {
+                strict.push(pkg.name.clone());
+            }
+        }
+    }
+    strict.sort();
+    extended.sort();
+    (strict, extended)
+}
+
+pub fn check_orphan_packages_at(root: &Path) -> OrphanStatus {
+    match read_alpm_local_db_at(root) {
+        Ok(pkgs) => {
+            let (strict, extended) = compute_alpm_orphans(&pkgs);
+            classify_orphans(Ok(strict), Ok(extended))
+        }
+        Err(err) => {
+            eprintln!("[syspilot-core::orphans] ALPM local DB read failed: {err}");
+            classify_orphans(Err(err), Ok(Vec::new()))
+        }
+    }
+}
+
 pub async fn check_orphan_packages() -> OrphanStatus {
-    let pacman_opt = {
-        #[cfg(test)]
-        {
-            TEST_PACMAN_BIN
-                .with(|b| b.borrow().clone())
-                .unwrap_or_else(|| crate::updater::find_executable("pacman"))
-        }
-        #[cfg(not(test))]
-        {
-            crate::updater::find_executable("pacman")
-        }
-    };
-
-    let Some(pacman_path) = pacman_opt else {
-        return OrphanStatus {
-            checked: false,
-            query_status: "ERROR".into(),
-            severity: "WARN".into(),
-            affects_flight_status: true,
-            tiering_complete: false,
-            count: 0,
-            packages: Vec::new(),
-            optional_count: 0,
-            optional_packages: Vec::new(),
-            candidate_count: 0,
-            tier1_count: 0,
-            tier1_packages: Vec::new(),
-            tier2_count: 0,
-            tier2_packages: Vec::new(),
-            tier3_count: 0,
-            tier3_packages: Vec::new(),
-            tier3_tags: BTreeMap::new(),
-            unclassified_packages: Vec::new(),
-            message: "Orphan query unavailable: pacman executable not found".into(),
-        };
-    };
-
-    let strict = query_pacman_package_names(&pacman_path, "-Qdtq", 3).await;
-    let extended = query_pacman_package_names(&pacman_path, "-Qdttq", 3).await;
-
-    classify_orphans(strict, extended)
+    let root = active_orphans_root();
+    tokio::task::spawn_blocking(move || check_orphan_packages_at(&root))
+        .await
+        .unwrap_or_else(|err| {
+            eprintln!("[syspilot-core::orphans] ALPM scan worker failed: {err}");
+            classify_orphans(
+                Err(format!("orphan worker task failed: {err}")),
+                Ok(Vec::new()),
+            )
+        })
 }

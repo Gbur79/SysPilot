@@ -1,7 +1,7 @@
 use crate::firewall::check_host_firewall;
 use crate::firmware::check_firmware_updates;
 use crate::models::*;
-use crate::orphans::check_orphan_packages;
+use crate::orphans::{check_orphan_packages_at, classify_orphans};
 use crate::security::check_security_vulnerabilities;
 use crate::services::check_failed_services;
 use crate::updater::check_aur_updates;
@@ -768,13 +768,25 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let failed_services = check_failed_services().await;
     let disk = check_disk_status();
     let pacnew_list = check_pacnew_files().await;
-    let orphans = check_orphan_packages().await;
+    let orphans_root = active_triage_root();
+    let orphans = tokio::task::spawn_blocking(move || check_orphan_packages_at(&orphans_root))
+        .await
+        .unwrap_or_else(|err| {
+            eprintln!("[syspilot-core::triage] orphan ALPM scan worker failed: {err}");
+            classify_orphans(
+                Err(format!("orphan worker task failed: {err}")),
+                Ok(Vec::new()),
+            )
+        });
     let reboot_pending = crate::sentinels::check_reboot_pending();
 
     let updates = if effective_check_pkgs {
         let official_res = crate::updater::check_official_updates_detailed().await;
         let aur = check_aur_updates().await;
-        let standalone_report = crate::updater::check_standalone_updates_detailed().await;
+        let standalone_report = crate::updater::check_standalone_updates_detailed_at(
+            &active_triage_root(),
+            &active_triage_state(),
+        );
         let mut resolved = resolve_updates_with_hysteresis(cached.as_ref(), official_res, aur);
         resolved.standalone_count = standalone_report.count;
         resolved.standalone_tools = standalone_report.pending_tools;

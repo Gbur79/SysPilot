@@ -475,16 +475,40 @@ pub fn parse_aur_updates_str(stdout: &str) -> Result<AurUpdatesReport, String> {
     Ok(AurUpdatesReport { count, packages })
 }
 
+pub const STANDALONE_CACHE_TTL_SECS: u64 = 86_400;
+
 #[cfg(test)]
 thread_local! {
     static TEST_AUR_HELPER_BIN: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-    static TEST_SYS_HEALTH_BIN: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    static TEST_STANDALONE_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    static TEST_STANDALONE_STATE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
-pub fn set_test_updater_bins(helper: Option<PathBuf>, sys_health: Option<PathBuf>) {
+pub fn set_test_updater_bins(helper: Option<PathBuf>) {
     TEST_AUR_HELPER_BIN.with(|b| *b.borrow_mut() = helper);
-    TEST_SYS_HEALTH_BIN.with(|b| *b.borrow_mut() = sys_health);
+}
+
+#[cfg(test)]
+pub fn set_test_standalone_overrides(root: Option<PathBuf>, state: Option<PathBuf>) {
+    TEST_STANDALONE_ROOT.with(|r| *r.borrow_mut() = root);
+    TEST_STANDALONE_STATE.with(|s| *s.borrow_mut() = state);
+}
+
+pub(crate) fn active_standalone_root() -> PathBuf {
+    #[cfg(test)]
+    if let Some(root) = TEST_STANDALONE_ROOT.with(|r| r.borrow().clone()) {
+        return root;
+    }
+    PathBuf::from("/")
+}
+
+fn active_standalone_state() -> PathBuf {
+    #[cfg(test)]
+    if let Some(state) = TEST_STANDALONE_STATE.with(|s| s.borrow().clone()) {
+        return state;
+    }
+    crate::models::state_base()
 }
 
 pub async fn check_aur_updates() -> u32 {
@@ -544,6 +568,8 @@ struct SoftwareJson {
     uv: Option<SoftwareTool>,
     #[serde(default)]
     flatpak: Option<SoftwareTool>,
+    #[serde(default)]
+    rustup: Option<SoftwareTool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -573,26 +599,70 @@ pub fn parse_standalone_updates_str(stdout: &str) -> Result<StandaloneUpdatesRep
     let parsed: SoftwareJson =
         serde_json::from_str(stdout).map_err(|e| format!("invalid standalone JSON: {e}"))?;
 
-    let mut count = 0;
     let mut pending_tools = Vec::new();
-    if let Some(tool) = &parsed.goose {
-        if tool.update_available {
-            count += 1;
-            pending_tools.push("goose".to_string());
+    for (name, tool_opt) in [
+        ("goose", &parsed.goose),
+        ("uv", &parsed.uv),
+        ("flatpak", &parsed.flatpak),
+        ("rustup", &parsed.rustup),
+    ] {
+        if tool_opt.as_ref().is_some_and(|t| t.update_available) {
+            pending_tools.push(name.to_string());
         }
     }
-    if let Some(tool) = &parsed.uv {
-        if tool.update_available {
-            count += 1;
-            pending_tools.push("uv".to_string());
+
+    Ok(StandaloneUpdatesReport {
+        count: pending_tools.len() as u32,
+        pending_tools,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct SummaryStandaloneWrapper {
+    #[serde(default)]
+    checks: Option<SummaryStandaloneChecks>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SummaryStandaloneChecks {
+    #[serde(default)]
+    standalone_software: Option<SummaryStandaloneSoftware>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SummaryStandaloneSoftware {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    pending_count: u32,
+    #[serde(default)]
+    pending_tools: Vec<String>,
+}
+
+pub fn parse_standalone_summary_str(json_str: &str) -> Result<StandaloneUpdatesReport, String> {
+    if json_str.trim().is_empty() {
+        return Err("empty summary JSON".to_string());
+    }
+
+    let parsed: SummaryStandaloneWrapper =
+        serde_json::from_str(json_str).map_err(|e| format!("invalid summary JSON: {e}"))?;
+    let Some(sa) = parsed.checks.and_then(|c| c.standalone_software) else {
+        return Err("summary JSON missing checks.standalone_software".to_string());
+    };
+
+    let status_lower = sa.status.trim().to_ascii_lowercase();
+    if status_lower == "unknown" || status_lower == "skipped" {
+        return Err(format!("standalone_software status is {status_lower}"));
+    }
+
+    let mut pending_tools = Vec::new();
+    for tool in sa.pending_tools {
+        let trimmed = tool.trim();
+        if !trimmed.is_empty() && !pending_tools.iter().any(|t| t == trimmed) {
+            pending_tools.push(trimmed.to_string());
         }
     }
-    if let Some(tool) = &parsed.flatpak {
-        if tool.update_available {
-            count += 1;
-            pending_tools.push("flatpak".to_string());
-        }
-    }
+    let count = sa.pending_count.max(pending_tools.len() as u32);
 
     Ok(StandaloneUpdatesReport {
         count,
@@ -600,41 +670,87 @@ pub fn parse_standalone_updates_str(stdout: &str) -> Result<StandaloneUpdatesRep
     })
 }
 
+fn is_standalone_cache_fresh_at(root: &Path, path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    if let Some(btime) = crate::triage::read_boot_epoch_secs_at(root) {
+        if modified < std::time::UNIX_EPOCH + Duration::from_secs(btime) {
+            return false;
+        }
+    }
+    match std::time::SystemTime::now().duration_since(modified) {
+        Ok(age) => age.as_secs() <= STANDALONE_CACHE_TTL_SECS,
+        Err(err) => err.duration().as_secs() <= crate::models::CLOCK_SKEW_TOLERANCE_SECS,
+    }
+}
+
+fn try_read_standalone_cache(
+    root: &Path,
+    path: &Path,
+    parser: fn(&str) -> Result<StandaloneUpdatesReport, String>,
+) -> Option<StandaloneUpdatesReport> {
+    if !is_standalone_cache_fresh_at(root, path) {
+        return None;
+    }
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(err) => {
+            eprintln!(
+                "[syspilot-core::updater] ignoring unreadable standalone cache {}: {err}",
+                path.display()
+            );
+            return None;
+        }
+    };
+    match parser(&content) {
+        Ok(report) => Some(report),
+        Err(err) => {
+            eprintln!(
+                "[syspilot-core::updater] ignoring invalid standalone cache {}: {err}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+type StandaloneCacheParser = fn(&str) -> Result<StandaloneUpdatesReport, String>;
+
+pub fn check_standalone_updates_detailed_at(
+    root: &Path,
+    state_dir: &Path,
+) -> StandaloneUpdatesReport {
+    let candidates: [(PathBuf, StandaloneCacheParser); 3] = [
+        (
+            state_dir.join("system-health/standalone_software.json"),
+            parse_standalone_updates_str,
+        ),
+        (
+            state_dir.join("system-health/summary.json"),
+            parse_standalone_summary_str,
+        ),
+        (
+            crate::sys_root::sub_path(root, "/var/cache/syspilot/standalone_software.json"),
+            parse_standalone_updates_str,
+        ),
+    ];
+
+    for (path, parser) in &candidates {
+        if let Some(report) = try_read_standalone_cache(root, path, *parser) {
+            return report;
+        }
+    }
+    StandaloneUpdatesReport::default()
+}
+
 pub async fn check_standalone_updates_detailed() -> StandaloneUpdatesReport {
-    let sys_health_opt = {
-        #[cfg(test)]
-        {
-            TEST_SYS_HEALTH_BIN
-                .with(|b| b.borrow().clone())
-                .or_else(|| find_executable("sys-health"))
-        }
-        #[cfg(not(test))]
-        {
-            find_executable("sys-health")
-        }
-    };
-    let Some(sys_health) = sys_health_opt else {
-        return StandaloneUpdatesReport::default();
-    };
-
-    let mut cmd = crate::exec::new_tokio_command(sys_health);
-    cmd.args(["--software", "--json"]);
-    let output = match run_command_with_timeout(cmd, default_standalone_timeout()).await {
-        Ok(out) => out,
-        Err(_) => return StandaloneUpdatesReport::default(),
-    };
-
-    if !output.status.success() {
-        return StandaloneUpdatesReport::default();
-    }
-
-    match parse_standalone_updates_str(&String::from_utf8_lossy(&output.stdout)) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("[syspilot-core::updater] parse_standalone_updates_str failed: {e}");
-            StandaloneUpdatesReport::default()
-        }
-    }
+    let root = active_standalone_root();
+    let state_dir = active_standalone_state();
+    check_standalone_updates_detailed_at(&root, &state_dir)
 }
 
 pub async fn check_standalone_updates() -> u32 {

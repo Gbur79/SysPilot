@@ -896,10 +896,14 @@ fn test_updater_offline_mode_resilience() {
         .unwrap();
 
     rt.block_on(async {
+        let temp = tempfile::tempdir().unwrap();
         let mut env = EnvGuard::new();
         env.set("SYSPILOT_BIN_CHECKUPDATES", "/nonexistent/checkupdates/bin");
         env.set("SYSPILOT_BIN_YAY", "/nonexistent/yay/bin");
-        env.set("SYSPILOT_BIN_SYS_HEALTH", "/nonexistent/sys-health/bin");
+        crate::updater::set_test_standalone_overrides(
+            Some(temp.path().to_path_buf()),
+            Some(temp.path().join("state")),
+        );
 
         let (core, regular, pkgs) = check_official_updates().await;
         assert_eq!(core, 0);
@@ -909,8 +913,12 @@ fn test_updater_offline_mode_resilience() {
         let aur = check_aur_updates().await;
         assert_eq!(aur, 0);
 
+        crate::exec::reset_spawn_count();
         let standalone = check_standalone_updates().await;
         assert_eq!(standalone, 0);
+        assert_eq!(crate::exec::spawn_count(), 0);
+
+        crate::updater::set_test_standalone_overrides(None, None);
     });
 }
 
@@ -2133,7 +2141,7 @@ async fn test_stage2_orphans_hermetic_and_mutants() {
     use crate::mock_rig::MockRig;
     use crate::orphans::{
         check_orphan_packages, classify_orphans, glob_match, list_local_pacman_db_entries_at,
-        query_pacman_package_names, set_test_pacman_bin,
+        query_pacman_package_names, set_test_orphans_root,
     };
 
     assert!(!glob_match("linux*", "mesa"));
@@ -2188,14 +2196,42 @@ async fn test_stage2_orphans_hermetic_and_mutants() {
         "Orphan query unavailable: pacman query error"
     );
 
-    // Runner & query_pacman_package_names tests
-    set_test_pacman_bin(Some(None));
-    let no_bin = check_orphan_packages().await;
-    assert!(!no_bin.checked);
+    // Runner (zero-fork ALPM DB) & query_pacman_package_names tests
+    crate::exec::reset_spawn_count();
+    set_test_orphans_root(Some(rig.root().to_path_buf()));
+    let missing_desc = check_orphan_packages().await;
+    assert!(!missing_desc.checked);
+    assert_eq!(crate::exec::spawn_count(), 0);
     assert_eq!(
-        no_bin.message,
-        "Orphan query unavailable: pacman executable not found"
+        missing_desc.message,
+        "Orphan query unavailable: pacman query error"
     );
+
+    let alpm_rig = MockRig::empty();
+    alpm_rig.write(
+        "/var/lib/pacman/local/app-1.0-1/desc",
+        "%NAME%\napp\n\n%VERSION%\n1.0-1\n\n%OPTDEPENDS%\nopt-c: helper\n",
+    );
+    alpm_rig.write(
+        "/var/lib/pacman/local/leaf-a-1.0-1/desc",
+        "%NAME%\nleaf-a\n\n%VERSION%\n1.0-1\n\n%REASON%\n1\n",
+    );
+    alpm_rig.write(
+        "/var/lib/pacman/local/leaf-b-1.0-1/desc",
+        "%NAME%\nleaf-b\n\n%VERSION%\n1.0-1\n\n%REASON%\n1\n",
+    );
+    alpm_rig.write(
+        "/var/lib/pacman/local/opt-c-1.0-1/desc",
+        "%NAME%\nopt-c\n\n%VERSION%\n1.0-1\n\n%REASON%\n1\n",
+    );
+    set_test_orphans_root(Some(alpm_rig.root().to_path_buf()));
+    crate::exec::reset_spawn_count();
+    let status = check_orphan_packages().await;
+    assert!(status.checked);
+    assert_eq!(status.count, 2);
+    assert_eq!(status.optional_count, 1);
+    assert_eq!(crate::exec::spawn_count(), 0);
+    set_test_orphans_root(None);
 
     let tmp_dir = tempfile::TempDir::new().unwrap();
     let mode_file = tmp_dir.path().join("mode");
@@ -2204,13 +2240,6 @@ async fn test_stage2_orphans_hermetic_and_mutants() {
         mode_file.display()
     );
     let bin_path = write_mock_executable(tmp_dir.path(), "pacman", &script);
-    set_test_pacman_bin(Some(Some(bin_path.clone())));
-
-    std::fs::write(&mode_file, "ok").unwrap();
-    let status = check_orphan_packages().await;
-    assert!(status.checked);
-    assert_eq!(status.count, 2);
-    assert_eq!(status.optional_count, 1);
 
     std::fs::write(&mode_file, "none").unwrap();
     assert_eq!(
@@ -2242,8 +2271,6 @@ async fn test_stage2_orphans_hermetic_and_mutants() {
             .unwrap_err()
             .contains("no diagnostic text")
     );
-
-    set_test_pacman_bin(None);
 }
 
 struct TestDbusAddressesGuard;
@@ -3514,21 +3541,31 @@ async fn test_updater_mock_executables() {
         "mock-yay",
         "#!/bin/sh\necho 'mock-pkg 1.0 -> 2.0'\n",
     );
-    let sys_health_script = write_mock_executable(
-        temp_dir.path(),
-        "mock-sys-health",
-        "#!/bin/sh\necho '{\"goose\": {\"update_available\": true}}'\n",
-    );
+    let state_dir = temp_dir.path().join("state");
+    let health_dir = state_dir.join("system-health");
+    std::fs::create_dir_all(&health_dir).unwrap();
+    std::fs::write(
+        health_dir.join("standalone_software.json"),
+        "{\"goose\": {\"update_available\": true}}",
+    )
+    .unwrap();
 
-    crate::updater::set_test_updater_bins(Some(yay_script), Some(sys_health_script));
+    crate::updater::set_test_updater_bins(Some(yay_script));
+    crate::updater::set_test_standalone_overrides(
+        Some(temp_dir.path().to_path_buf()),
+        Some(state_dir),
+    );
 
     let aur = crate::updater::check_aur_updates().await;
     assert_eq!(aur, 1);
 
+    crate::exec::reset_spawn_count();
     let standalone = crate::updater::check_standalone_updates().await;
     assert_eq!(standalone, 1);
+    assert_eq!(crate::exec::spawn_count(), 0);
 
-    crate::updater::set_test_updater_bins(None, None);
+    crate::updater::set_test_updater_bins(None);
+    crate::updater::set_test_standalone_overrides(None, None);
 }
 
 #[test]
@@ -4761,65 +4798,333 @@ fn test_update_summary_package_total_vs_total() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_check_standalone_updates_detailed_matrix() {
-    let temp = tempfile::tempdir().unwrap();
+    use crate::exec::{reset_spawn_count, spawn_count};
+    use crate::mock_rig::MockRig;
+    use crate::updater::{
+        STANDALONE_CACHE_TTL_SECS, active_standalone_root, check_standalone_updates_detailed,
+        check_standalone_updates_detailed_at, parse_standalone_summary_str,
+        parse_standalone_updates_str, set_test_standalone_overrides,
+    };
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    // 0 updates
-    let script_0 = temp.path().join("sys_health_0.sh");
-    std::fs::write(
-        &script_0,
-        "#!/bin/sh\necho '{\"goose\":{\"update_available\":false}}'\n",
+    // Pure parser matrix (0, 1, N, error)
+    assert!(parse_standalone_summary_str("").is_err());
+    assert!(parse_standalone_summary_str("{bad").is_err());
+    assert!(parse_standalone_summary_str(r#"{"checks":{}}"#).is_err());
+    assert!(
+        parse_standalone_summary_str(
+            r#"{"checks":{"standalone_software":{"status":"unknown","pending_count":2,"pending_tools":["uv"]}}}"#
+        )
+        .is_err()
+    );
+    assert!(
+        parse_standalone_summary_str(
+            r#"{"checks":{"standalone_software":{"status":"SKIPPED","pending_count":1,"pending_tools":["uv"]}}}"#
+        )
+        .is_err()
+    );
+    let sum_dedup = parse_standalone_summary_str(
+        r#"{"checks":{"standalone_software":{"status":"info","pending_count":1,"pending_tools":[" goose ","","uv","goose"]}}}"#,
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&script_0, std::fs::Permissions::from_mode(0o755)).unwrap();
-    crate::updater::set_test_updater_bins(None, Some(script_0));
-    let rep0 = crate::updater::check_standalone_updates_detailed().await;
+    assert_eq!(sum_dedup.count, 2);
+    assert_eq!(sum_dedup.pending_tools, vec!["goose", "uv"]);
+
+    let sum_count_floor = parse_standalone_summary_str(
+        r#"{"checks":{"standalone_software":{"status":"info","pending_count":3,"pending_tools":["uv"]}}}"#,
+    )
+    .unwrap();
+    assert_eq!(sum_count_floor.count, 3);
+    assert_eq!(sum_count_floor.pending_tools, vec!["uv"]);
+
+    let all_four = parse_standalone_updates_str(
+        r#"{"goose":{"update_available":true},"uv":{"update_available":true},"flatpak":{"update_available":true},"rustup":{"update_available":true}}"#,
+    )
+    .unwrap();
+    assert_eq!(all_four.count, 4);
+    assert_eq!(
+        all_four.pending_tools,
+        vec!["goose", "uv", "flatpak", "rustup"]
+    );
+
+    let rig = MockRig::empty();
+    let state_dir = rig.root().join("state");
+    let health_dir = state_dir.join("system-health");
+    std::fs::create_dir_all(&health_dir).unwrap();
+    let standalone_cache = health_dir.join("standalone_software.json");
+    let summary_cache = health_dir.join("summary.json");
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    rig.write("/proc/stat", format!("btime {}\n", now_secs - 3600));
+
+    // Missing caches -> 0 updates, 0 spawns
+    reset_spawn_count();
+    let rep_missing = check_standalone_updates_detailed_at(rig.root(), &state_dir);
+    assert_eq!(rep_missing.count, 0);
+    assert!(rep_missing.pending_tools.is_empty());
+    assert_eq!(spawn_count(), 0);
+
+    // 1 update via summary.json, 0 spawns
+    std::fs::write(
+        &summary_cache,
+        r#"{"checks":{"standalone_software":{"status":"info","pending_count":1,"pending_tools":["goose"]}}}"#,
+    )
+    .unwrap();
+    let rep1 = check_standalone_updates_detailed_at(rig.root(), &state_dir);
+    assert_eq!(rep1.count, 1);
+    assert_eq!(rep1.pending_tools, vec!["goose".to_string()]);
+    assert_eq!(spawn_count(), 0);
+
+    // Clean-zero standalone_software.json short-circuits summary.json (even when summary has pending)
+    std::fs::write(
+        &summary_cache,
+        r#"{"checks":{"standalone_software":{"status":"info","pending_count":2,"pending_tools":["goose","uv"]}}}"#,
+    )
+    .unwrap();
+    std::fs::write(&standalone_cache, r#"{"goose":{"update_available":false}}"#).unwrap();
+    let rep0 = check_standalone_updates_detailed_at(rig.root(), &state_dir);
     assert_eq!(rep0.count, 0);
     assert!(rep0.pending_tools.is_empty());
 
-    // 1 update
-    let script_1 = temp.path().join("sys_health_1.sh");
-    std::fs::write(
-        &script_1,
-        "#!/bin/sh\necho '{\"goose\":{\"update_available\":true}}'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&script_1, std::fs::Permissions::from_mode(0o755)).unwrap();
-    crate::updater::set_test_updater_bins(None, Some(script_1));
-    let rep1 = crate::updater::check_standalone_updates_detailed().await;
-    assert_eq!(rep1.count, 1);
-    assert_eq!(rep1.pending_tools, vec!["goose".to_string()]);
-
-    // N updates
-    let script_n = temp.path().join("sys_health_n.sh");
-    std::fs::write(
-        &script_n,
-        "#!/bin/sh\necho '{\"goose\":{\"update_available\":true},\"uv\":{\"update_available\":true},\"flatpak\":{\"update_available\":true}}'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&script_n, std::fs::Permissions::from_mode(0o755)).unwrap();
-    crate::updater::set_test_updater_bins(None, Some(script_n));
-    let rep_n = crate::updater::check_standalone_updates_detailed().await;
-    assert_eq!(rep_n.count, 3);
+    // Corrupt standalone_software.json falls through to fresh summary.json
+    std::fs::write(&standalone_cache, "{corrupt json").unwrap();
+    let rep_fallback_sum = check_standalone_updates_detailed_at(rig.root(), &state_dir);
+    assert_eq!(rep_fallback_sum.count, 2);
     assert_eq!(
-        rep_n.pending_tools,
-        vec!["goose".to_string(), "uv".to_string(), "flatpak".to_string()]
+        rep_fallback_sum.pending_tools,
+        vec!["goose".to_string(), "uv".to_string()]
     );
 
-    // Error exit
-    let script_err = temp.path().join("sys_health_err.sh");
+    // N updates via standalone_software.json + async override wrapper
     std::fs::write(
-        &script_err,
-        "#!/bin/sh\necho 'fatal internal error' >&2\nexit 1\n",
+        &standalone_cache,
+        r#"{"goose":{"update_available":true},"uv":{"update_available":true},"flatpak":{"update_available":true},"rustup":{"update_available":true}}"#,
     )
     .unwrap();
-    std::fs::set_permissions(&script_err, std::fs::Permissions::from_mode(0o755)).unwrap();
-    crate::updater::set_test_updater_bins(None, Some(script_err));
-    let rep_err = crate::updater::check_standalone_updates_detailed().await;
-    assert_eq!(rep_err.count, 0);
-    assert!(rep_err.pending_tools.is_empty());
+    assert_eq!(active_standalone_root(), std::path::PathBuf::from("/"));
+    set_test_standalone_overrides(Some(rig.root().to_path_buf()), Some(state_dir.clone()));
+    reset_spawn_count();
+    let rep_n = check_standalone_updates_detailed().await;
+    assert_eq!(rep_n.count, 4);
+    assert_eq!(
+        rep_n.pending_tools,
+        vec![
+            "goose".to_string(),
+            "uv".to_string(),
+            "flatpak".to_string(),
+            "rustup".to_string()
+        ]
+    );
+    assert_eq!(spawn_count(), 0);
+    set_test_standalone_overrides(None, None);
 
-    crate::updater::set_test_updater_bins(None, None);
+    // Stale pre-boot standalone + summary falls through to /var/cache/syspilot/standalone_software.json via sub_path
+    let set_mtime = |p: &std::path::Path, secs_from_epoch: u64| {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(secs_from_epoch))
+            .unwrap();
+    };
+    set_mtime(&standalone_cache, now_secs - 7200);
+    set_mtime(&summary_cache, now_secs - 7200);
+    rig.write(
+        "/var/cache/syspilot/standalone_software.json",
+        r#"{"uv":{"update_available":true}}"#,
+    );
+    let rep_sys_cache = check_standalone_updates_detailed_at(rig.root(), &state_dir);
+    assert_eq!(rep_sys_cache.count, 1);
+    assert_eq!(rep_sys_cache.pending_tools, vec!["uv".to_string()]);
+
+    // Exact btime boundary (mtime == btime is fresh; mtime == btime - 1 is stale) & TTL/clock-skew boundaries
+    std::fs::remove_file(&standalone_cache).unwrap();
+    std::fs::remove_file(&summary_cache).unwrap();
+    let sys_cache = rig.sub("/var/cache/syspilot/standalone_software.json");
+    let btime_eq = now_secs - 60;
+    rig.write("/proc/stat", format!("btime {btime_eq}\n"));
+    set_mtime(&sys_cache, btime_eq);
+    assert_eq!(
+        check_standalone_updates_detailed_at(rig.root(), &state_dir).count,
+        1
+    );
+    set_mtime(&sys_cache, btime_eq - 1);
+    assert_eq!(
+        check_standalone_updates_detailed_at(rig.root(), &state_dir).count,
+        0
+    );
+    rig.write("/proc/stat", "btime 1\n");
+    set_mtime(&sys_cache, now_secs - (STANDALONE_CACHE_TTL_SECS - 30));
+    assert_eq!(
+        check_standalone_updates_detailed_at(rig.root(), &state_dir).count,
+        1
+    );
+    set_mtime(&sys_cache, now_secs - (STANDALONE_CACHE_TTL_SECS + 120));
+    assert_eq!(
+        check_standalone_updates_detailed_at(rig.root(), &state_dir).count,
+        0
+    );
+    set_mtime(&sys_cache, now_secs + 10);
+    assert_eq!(
+        check_standalone_updates_detailed_at(rig.root(), &state_dir).count,
+        1
+    );
+    set_mtime(
+        &sys_cache,
+        now_secs + crate::models::CLOCK_SKEW_TOLERANCE_SECS + 30,
+    );
+    assert_eq!(
+        check_standalone_updates_detailed_at(rig.root(), &state_dir).count,
+        0
+    );
+    assert_eq!(spawn_count(), 0);
+}
+
+#[test]
+fn test_alpm_desc_orphan_graph_and_zero_spawns() {
+    use crate::exec::{reset_spawn_count, spawn_count};
+    use crate::mock_rig::MockRig;
+    use crate::orphans::{
+        AlpmPackageDesc, check_orphan_packages_at, compute_alpm_orphans, extract_alpm_dep_name,
+        parse_alpm_desc_str, read_alpm_local_db_at,
+    };
+
+    // 1. Dependency specifier normalization
+    assert_eq!(
+        extract_alpm_dep_name("libpipewire=1:1.6.11-2"),
+        "libpipewire"
+    );
+    assert_eq!(extract_alpm_dep_name("glibc>=2.38"), "glibc");
+    assert_eq!(
+        extract_alpm_dep_name("bash-completion: tab"),
+        "bash-completion"
+    );
+    assert_eq!(extract_alpm_dep_name("pkg>=1:2.0: desc"), "pkg");
+
+    // 2. parse_alpm_desc_str matrix (missing fields, invalid reason, default reason=0, full)
+    assert!(parse_alpm_desc_str("").is_err());
+    assert!(parse_alpm_desc_str("%NAME%\n\n%VERSION%\n1.0\n").is_err());
+    assert!(parse_alpm_desc_str("%NAME%\npkg\n").is_err());
+    assert!(parse_alpm_desc_str("%NAME%\npkg\n%VERSION%\n1.0\n%REASON%\n2\n").is_err());
+
+    let explicit_default =
+        parse_alpm_desc_str("%NAME%\nbash\n\n%DESC%\n%prefix-only\nsuffix-only%\n\n%VERSION%\n5.3-1\n\n%LICENSE%\nGPL\n\n%DEPENDS%\nreadline>=8\n\n%PROVIDES%\nsh=5\n")
+            .unwrap();
+    assert_eq!(explicit_default.reason, 0);
+    assert_eq!(explicit_default.depends, vec!["readline"]);
+    assert_eq!(explicit_default.provides, vec!["sh"]);
+
+    let explicit_zero = parse_alpm_desc_str("%NAME%\np0\n%VERSION%\n1.0\n%REASON%\n0\n").unwrap();
+    assert_eq!(explicit_zero.reason, 0);
+
+    let pct_val = parse_alpm_desc_str("%NAME%\n%leading\n%VERSION%\n100%\n").unwrap();
+    assert_eq!(pct_val.name, "%leading");
+    assert_eq!(pct_val.version, "100%");
+
+    // 3. compute_alpm_orphans graph (unsorted input, versioned provides, multi-requirer, self-dep, optdepend, tier3)
+    let pkgs = vec![
+        AlpmPackageDesc {
+            name: "z-leaf".into(),
+            version: "1.0".into(),
+            reason: 1,
+            ..Default::default()
+        },
+        AlpmPackageDesc {
+            name: "self-orphan".into(),
+            version: "1.0".into(),
+            reason: 1,
+            depends: vec!["selfdep".into(), "selfdep".into()],
+            provides: vec!["selfdep".into()],
+            ..Default::default()
+        },
+        AlpmPackageDesc {
+            name: "opt-only".into(),
+            version: "1.0".into(),
+            reason: 1,
+            ..Default::default()
+        },
+        AlpmPackageDesc {
+            name: "virt-lib".into(),
+            version: "1.0".into(),
+            reason: 1,
+            provides: vec!["libfoo.so".into()],
+            ..Default::default()
+        },
+        AlpmPackageDesc {
+            name: "shared-dep".into(),
+            version: "1.0".into(),
+            reason: 1,
+            ..Default::default()
+        },
+        AlpmPackageDesc {
+            name: "app-one".into(),
+            version: "1.0".into(),
+            reason: 0,
+            depends: vec!["libfoo.so".into(), "shared-dep".into()],
+            optdepends: vec!["opt-only".into()],
+            ..Default::default()
+        },
+        AlpmPackageDesc {
+            name: "app-two".into(),
+            version: "1.0".into(),
+            reason: 0,
+            depends: vec!["shared-dep".into()],
+            ..Default::default()
+        },
+    ];
+    let (strict, extended) = compute_alpm_orphans(&pkgs);
+    assert_eq!(strict, vec!["self-orphan", "z-leaf"]);
+    assert_eq!(extended, vec!["opt-only", "self-orphan", "z-leaf"]);
+
+    // 4. Hermetic local DB reader & check_orphan_packages_at (0, 1, N, error) + spawn_count == 0
+    let missing_root = tempfile::tempdir().unwrap();
+    reset_spawn_count();
+    assert!(read_alpm_local_db_at(missing_root.path()).is_err());
+    let err_status = check_orphan_packages_at(missing_root.path());
+    assert!(!err_status.checked);
+    assert_eq!(err_status.query_status, "ERROR");
+    assert_eq!(spawn_count(), 0);
+
+    let rig = MockRig::empty();
+    rig.write("/var/lib/pacman/local/ALPM_DB_VERSION", "9\n");
+    let empty_status = check_orphan_packages_at(rig.root());
+    assert!(empty_status.checked);
+    assert_eq!(empty_status.count, 0);
+    assert_eq!(empty_status.query_status, "CLEAN");
+
+    rig.write(
+        "/var/lib/pacman/local/app-1.0-1/desc",
+        "%NAME%\napp\n%VERSION%\n1.0-1\n%DEPENDS%\nlibfoo.so=1-64\n%OPTDEPENDS%\nluit: opt\n",
+    );
+    rig.write(
+        "/var/lib/pacman/local/virt-1.0-1/desc",
+        "%NAME%\nvirt\n%VERSION%\n1.0-1\n%REASON%\n1\n%PROVIDES%\nlibfoo.so=1-64\n",
+    );
+    rig.write(
+        "/var/lib/pacman/local/luit-1.0-1/desc",
+        "%NAME%\nluit\n%VERSION%\n1.0-1\n%REASON%\n1\n",
+    );
+    rig.write(
+        "/var/lib/pacman/local/linux-custom-1.0-1/desc",
+        "%NAME%\nlinux-custom\n%VERSION%\n1.0-1\n%REASON%\n1\n",
+    );
+    rig.write(
+        "/var/lib/pacman/local/leaf-x-1.0-1/desc",
+        "%NAME%\nleaf-x\n%VERSION%\n1.0-1\n%REASON%\n1\n",
+    );
+
+    reset_spawn_count();
+    let n_status = check_orphan_packages_at(rig.root());
+    assert!(n_status.checked);
+    assert_eq!(n_status.query_status, "CLEAN");
+    assert_eq!(n_status.packages, vec!["leaf-x", "linux-custom"]);
+    assert_eq!(n_status.optional_packages, vec!["luit"]);
+    assert_eq!(n_status.tier1_packages, vec!["leaf-x"]);
+    assert_eq!(n_status.tier2_packages, vec!["luit"]);
+    assert_eq!(n_status.tier3_packages, vec!["linux-custom"]);
+    assert_eq!(spawn_count(), 0);
 }
 
 #[test]
@@ -6572,13 +6877,13 @@ fn test_previous_boot_async_cache_timeout_and_resolve_matrix() {
             Some("unix:path=/nonexistent/sys.sock".into()),
             Some("unix:path=/nonexistent/usr.sock".into()),
         );
-        crate::orphans::set_test_pacman_bin(Some(Some(ok_bin)));
+        let _ = ok_bin;
+        std::fs::create_dir_all(root.join("var/lib/pacman/local")).unwrap();
         crate::release::set_test_release_overrides(Some(rel_cache), None);
 
         let triage_res = run_triage(false, true).await;
 
         crate::release::set_test_release_overrides(None, None);
-        crate::orphans::set_test_pacman_bin(None);
         drop(_triage_dbus_guard);
         crate::sentinels::set_test_sentinels_overrides(None, None);
         crate::triage::set_test_triage_overrides(None, None);

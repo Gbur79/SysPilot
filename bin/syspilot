@@ -437,12 +437,24 @@ self_update() {
         elif [[ -x "$PROJECT_ROOT/build-and-install.sh" ]]; then
             "$PROJECT_ROOT/build-and-install.sh"
         else
-            cargo build --release --locked -p syspilot-tray -p syspilot-gui
-            local dest_bin="${XDG_BIN_HOME:-$HOME/.local/bin}"
+            cargo build --release --locked -p syspilot-cli -p syspilot-tray -p syspilot-gui
+            local dest_bin="${XDG_BIN_HOME:-$USER_HOME/.local/bin}"
             install -d -m 0755 "$dest_bin"
-            install -m 0755 "$PROJECT_ROOT/target/release/syspilot-tray" "$dest_bin/syspilot-tray"
-            install -m 0755 "$PROJECT_ROOT/target/release/syspilot-gui" "$dest_bin/syspilot-gui"
-            install -m 0755 "$PROJECT_ROOT/bin/syspilot" "$dest_bin/syspilot"
+            local lib_bin_dir tmp_bin
+            lib_bin_dir="$(dirname -- "$(cd -- "$dest_bin" && pwd -P)")/lib/syspilot/bin"
+            install -d -m 0755 "$lib_bin_dir"
+            tmp_bin=$(mktemp --tmpdir="$dest_bin" .syspilot-tray.XXXXXX)
+            install -m 0755 -- "$PROJECT_ROOT/target/release/syspilot-tray" "$tmp_bin"
+            mv -fT -- "$tmp_bin" "$dest_bin/syspilot-tray"
+            tmp_bin=$(mktemp --tmpdir="$dest_bin" .syspilot-gui.XXXXXX)
+            install -m 0755 -- "$PROJECT_ROOT/target/release/syspilot-gui" "$tmp_bin"
+            mv -fT -- "$tmp_bin" "$dest_bin/syspilot-gui"
+            tmp_bin=$(mktemp --tmpdir="$dest_bin" .syspilot.XXXXXX)
+            install -m 0755 -- "$PROJECT_ROOT/target/release/syspilot" "$tmp_bin"
+            mv -fT -- "$tmp_bin" "$dest_bin/syspilot"
+            tmp_bin=$(mktemp --tmpdir="$lib_bin_dir" .syspilot-fallback.XXXXXX)
+            install -m 0755 -- "$PROJECT_ROOT/bin/syspilot" "$tmp_bin"
+            mv -fT -- "$tmp_bin" "$lib_bin_dir/syspilot"
         fi
 
         printf '\n✔ SysPilot suite successfully updated to latest version!\n'
@@ -453,6 +465,27 @@ self_update() {
     printf 'SysPilot standalone binary detected (no git repository found).\n'
     printf 'Visit https://github.com/Gbur79/SysPilot/releases to download the latest release.\n'
 }
+
+delegate_rust_fastpath() {
+    [[ -z ${SYSPILOT_SHELL_FALLBACK:-} ]] || return 0
+    case ${1:-} in
+        -s|--status|-j|--json|--tray|--gui|-v|--version|-h|--help|"") ;;
+        *) return 0 ;;
+    esac
+    local candidate resolved
+    for candidate in \
+        "$PROJECT_ROOT/target/release/syspilot" \
+        "$PROJECT_ROOT/target/debug/syspilot"; do
+        if [[ -x $candidate ]]; then
+            resolved=$(readlink -f -- "$candidate" 2>/dev/null || true)
+            if [[ -n $resolved && $resolved != "$SCRIPT_SOURCE" ]]; then
+                exec "$resolved" "$@"
+            fi
+        fi
+    done
+}
+
+delegate_rust_fastpath "$@"
 
 case ${1:-} in
     -h|--help)          usage ;;

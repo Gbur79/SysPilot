@@ -179,6 +179,15 @@ if check_roots_guards:
                     pm = re.search(r'^pkgver=(\S+)', fh.read(), re.M)
                 if not pm or pm.group(1) != cargo_ver:
                     violations.append(f"packaging/PKGBUILD: pkgver '{pm.group(1) if pm else 'NONE'}' does not match Cargo.toml version '{cargo_ver}'")
+            for crate_dir in sorted(os.listdir(crates_dir)):
+                crate_toml = os.path.join(crates_dir, crate_dir, "Cargo.toml")
+                if os.path.exists(crate_toml):
+                    with open(crate_toml, "r", encoding="utf-8") as fh:
+                        ct_text = fh.read()
+                    has_ws_ver = bool(re.search(r'^version\.workspace\s*=\s*true\b', ct_text, re.M))
+                    cm_ver = re.search(r'^version\s*=\s*"([^"]+)"', ct_text, re.M)
+                    if not has_ws_ver and (not cm_ver or cm_ver.group(1) != cargo_ver):
+                        violations.append(f"crates/{crate_dir}/Cargo.toml: version '{cm_ver.group(1) if cm_ver else 'NONE'}' does not match Cargo.toml version '{cargo_ver}'")
 
     # Repository Hygiene Gate (Forbidden internal agent governance files in git index)
     try:

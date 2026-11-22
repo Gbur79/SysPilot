@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/syspilot-core",
+    "crates/syspilot-cli",
     "crates/syspilot-tray",
     "crates/syspilot-gui",
 ]

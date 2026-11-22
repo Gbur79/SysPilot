@@ -327,13 +327,7 @@ pub fn write_status_json_atomic(dest_path: &Path, payload: &StatusJson) -> std::
     Ok(())
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct SummaryCounts {
-    #[serde(default)]
-    errors: u32,
-    #[serde(default)]
-    warnings: u32,
-}
+use crate::models::CanonicalSummaryCounts as SummaryCounts;
 
 #[derive(Debug, serde::Deserialize)]
 struct SummaryChecksMirrors {
@@ -407,12 +401,8 @@ pub fn load_sys_health_at(state_dir: &Path, root: &Path) -> SysHealth {
         match std::fs::File::open(&summary_path) {
             Ok(file) => {
                 let modified = file.metadata().ok().and_then(|m| m.modified().ok());
-                let pre_boot_stale = match (modified, read_boot_epoch_secs_at(root)) {
-                    (Some(mtime), Some(btime)) => {
-                        mtime < UNIX_EPOCH + std::time::Duration::from_secs(btime)
-                    }
-                    _ => false,
-                };
+                let pre_boot_stale =
+                    crate::models::is_pre_boot_modified(modified, read_boot_epoch_secs_at(root));
                 let reader = std::io::BufReader::new(file);
                 match serde_json::from_reader::<_, SummaryJson>(reader) {
                     Ok(summary) => {

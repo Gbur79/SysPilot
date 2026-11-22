@@ -4397,6 +4397,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "syspilot-cli"
+version = "2.1.7"
+dependencies = [
+ "libc",
+ "serde_json",
+ "syspilot-core",
+ "tempfile",
+]
+
+[[package]]
 name = "syspilot-core"
 version = "2.1.7"
 dependencies = [

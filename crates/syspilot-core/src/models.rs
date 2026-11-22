@@ -6,8 +6,92 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MAX_STATUS_BYTES: u64 = 1_048_576;
 pub const SUPPORTED_SCHEMA_MAJOR: &str = "1";
+pub const CANONICAL_SUMMARY_SCHEMA_PREFIX: &str = "2.";
 pub const STALE_AFTER_SECS: u64 = 21_600;
 pub const CLOCK_SKEW_TOLERANCE_SECS: u64 = 60;
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CanonicalSummaryCounts {
+    #[serde(default)]
+    pub errors: u32,
+    #[serde(default)]
+    pub warnings: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalSummary {
+    pub schema_version: String,
+    pub status: String,
+    pub timestamp: String,
+    pub errors: u32,
+    pub warnings: u32,
+    pub kernel: String,
+    pub gaming_detected: bool,
+}
+
+#[inline]
+pub fn is_pre_boot_modified(modified: Option<SystemTime>, btime_secs: Option<u64>) -> bool {
+    match (modified, btime_secs) {
+        (Some(mtime), Some(btime)) => mtime < UNIX_EPOCH + std::time::Duration::from_secs(btime),
+        _ => false,
+    }
+}
+
+#[allow(clippy::result_unit_err)]
+pub fn parse_canonical_summary(bytes: &[u8]) -> Result<CanonicalSummary, ()> {
+    let val: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| ())?;
+    let schema_version = match val.get("schema_version") {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        _ => return Err(()),
+    };
+    if !schema_version.starts_with(CANONICAL_SUMMARY_SCHEMA_PREFIX) {
+        return Err(());
+    }
+    let status = val
+        .get("status")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or(())?
+        .to_string();
+    let timestamp = val
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or(())?
+        .to_string();
+    let counts = val.get("counts");
+    let errors = counts
+        .and_then(|c| c.get("errors"))
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(0);
+    let warnings = counts
+        .and_then(|c| c.get("warnings"))
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(0);
+    let kernel = val
+        .get("environment")
+        .and_then(|e| e.get("kernel"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let gaming_detected = val
+        .get("gaming")
+        .and_then(|g| g.get("detected"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    Ok(CanonicalSummary {
+        schema_version,
+        status,
+        timestamp,
+        errors,
+        warnings,
+        kernel,
+        gaming_detected,
+    })
+}
 
 use std::collections::BTreeMap;
 

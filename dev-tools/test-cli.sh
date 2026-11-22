@@ -7,7 +7,14 @@ IFS=$'\n\t'
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 project_root=$(cd -- "$script_dir/.." && pwd -P)
-CLI="$project_root/bin/syspilot"
+CLI="${SYSPILOT_CLI_BIN:-}"
+if [[ -z "$CLI" ]]; then
+    (cd -- "$project_root" && cargo build --locked -p syspilot-cli >/tmp/syspilot-cli-test-build.log 2>&1) || {
+        echo "Error: cargo build --locked -p syspilot-cli failed (see /tmp/syspilot-cli-test-build.log)" >&2
+        exit 1
+    }
+    CLI="$project_root/target/debug/syspilot"
+fi
 
 quiet=0
 if [[ "${1:-}" == "-q" || "${1:-}" == "--quiet" ]]; then
@@ -27,7 +34,7 @@ mkdir -p "$HOME" "$XDG_STATE_HOME/system-health" "$XDG_CONFIG_HOME/syspilot" "$X
 unset SYSPILOT_SYS_HEALTH SYSPILOT_MAX_STATUS_AGE SYSPILOT_TERMINAL SYSPILOT_COPILOT_CMD SYSPILOT_GOOSE_RECIPE
 
 tests_passed=0
-total_tests=17
+total_tests=18
 current_test=""
 
 fail() {
@@ -271,7 +278,7 @@ grep -q "pkgver=$expected_ver" "$pkgbuild" || fail "PKGBUILD pkgver mismatch (ex
 # 11e. Shellcheck validation if available
 shellcheck_status="CLEAN"
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck -s bash "$CLI" >/dev/null 2>&1 || fail "shellcheck failed on bin/syspilot"
+    shellcheck -s bash "$project_root/bin/syspilot" >/dev/null 2>&1 || fail "shellcheck failed on bin/syspilot"
     shellcheck -s bash "$project_root/dev-tools/build-and-install.sh" >/dev/null 2>&1 || fail "shellcheck failed on build-and-install.sh"
     shellcheck -s bash "$project_root/dev-tools/verify-rust.sh" >/dev/null 2>&1 || fail "shellcheck failed on verify-rust.sh"
     shellcheck -s bash "$project_root/dev-tools/smoke-gui.sh" >/dev/null 2>&1 || fail "shellcheck failed on smoke-gui.sh"
@@ -523,6 +530,44 @@ printf 'btime %s\n' "$((mtime_epoch + 600))" > "$sandbox/proc_stat_pre"
 out_pre=$(env SYSPILOT_PROC_STAT="$sandbox/proc_stat_pre" "$CLI" -s) || fail "-s failed on pre-boot summary"
 [[ "$out_pre" == *"(PRE-BOOT)"* ]] || fail "-s missing (PRE-BOOT) marker when mtime < btime: $out_pre"
 [[ "$out_pre" == *"cached summary predates current boot"* ]] || fail "-s missing pre-boot info notice: $out_pre"
+pass_step
+
+# -----------------------------------------------------------------------------
+# Test 18: Native Rust fast-path (empty PATH zero-fork) & fallback/packaging checks
+# -----------------------------------------------------------------------------
+current_test="native_rust_fastpath_and_shell_fallback"
+touch "$summary_file"
+out_empty_v=$(env PATH="" "$CLI" -v) || fail "empty PATH -v failed"
+[[ "$out_empty_v" == "syspilot $expected_ver" ]] || fail "empty PATH -v mismatch: $out_empty_v"
+out_empty_h=$(env PATH="" "$CLI" -h) || fail "empty PATH -h failed"
+[[ "$out_empty_h" == *"Usage: syspilot [OPTION]"* ]] || fail "empty PATH -h missing usage"
+out_empty_j=$(env PATH="" "$CLI" -j) || fail "empty PATH -j failed"
+[[ "$out_empty_j" == *"FLIGHT_READY"* ]] || fail "empty PATH -j missing status"
+out_empty_s=$(env PATH="" "$CLI" -s) || fail "empty PATH -s failed"
+[[ "$out_empty_s" == *"Status:       FLIGHT_READY"* ]] || fail "empty PATH -s missing status"
+
+out_fb_v=$(env SYSPILOT_SHELL_FALLBACK=1 "$project_root/bin/syspilot" -v) || fail "shell fallback -v failed"
+[[ "$out_fb_v" == "syspilot $expected_ver" ]] || fail "shell fallback -v mismatch: $out_fb_v"
+out_fb_audit=$(env SYSPILOT_SHELL_FALLBACK=1 SYSPILOT_SYS_HEALTH="$mock_engine" "$project_root/bin/syspilot" --audit) || fail "shell fallback --audit failed"
+[[ "$out_fb_audit" == *"MOCK_ENGINE_CALLED:--audit"* ]] || fail "shell fallback --audit failed to forward"
+
+iso_root="$sandbox/iso"
+mkdir -p "$iso_root/bin"
+cp "$CLI" "$iso_root/bin/syspilot"
+set +e
+out_no_gui=$(env PATH="" HOME="$iso_root/home" "$iso_root/bin/syspilot" --gui 2>&1)
+rc_no_gui=$?
+out_no_tray=$(env PATH="" HOME="$iso_root/home" "$iso_root/bin/syspilot" --tray 2>&1)
+rc_no_tray=$?
+set -e
+(( rc_no_gui == 1 )) || fail "missing --gui returned rc=$rc_no_gui, expected 1"
+[[ "$out_no_gui" == *"syspilot-gui is not installed or built"* ]] || fail "unexpected missing --gui message: $out_no_gui"
+(( rc_no_tray == 1 )) || fail "missing --tray returned rc=$rc_no_tray, expected 1"
+[[ "$out_no_tray" == *"syspilot-tray is not installed or built"* ]] || fail "unexpected missing --tray message: $out_no_tray"
+
+grep -q -- "-p syspilot-cli" "$project_root/dev-tools/build-and-install.sh" || fail "build-and-install.sh missing -p syspilot-cli"
+grep -q -- "-p syspilot-cli" "$pkgbuild" || fail "PKGBUILD missing -p syspilot-cli"
+grep -q -- "/usr/lib/syspilot/bin/syspilot" "$pkgbuild" || fail "PKGBUILD missing /usr/lib/syspilot/bin/syspilot"
 pass_step
 
 # -----------------------------------------------------------------------------

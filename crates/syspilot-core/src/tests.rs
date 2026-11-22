@@ -7345,3 +7345,93 @@ fn test_services_dbus_isolated_system_and_user() {
         }
     }
 }
+
+#[test]
+fn test_canonical_summary_parser_and_pre_boot_helper() {
+    use crate::models::{is_pre_boot_modified, parse_canonical_summary};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let btime = 1_700_000_000u64;
+    assert!(!is_pre_boot_modified(None, Some(btime)));
+    assert!(!is_pre_boot_modified(Some(UNIX_EPOCH), None));
+    assert!(is_pre_boot_modified(
+        Some(UNIX_EPOCH + Duration::from_secs(btime - 1)),
+        Some(btime)
+    ));
+    assert!(!is_pre_boot_modified(
+        Some(UNIX_EPOCH + Duration::from_secs(btime)),
+        Some(btime)
+    ));
+    assert!(!is_pre_boot_modified(
+        Some(UNIX_EPOCH + Duration::from_secs(btime + 1)),
+        Some(btime)
+    ));
+
+    let full = br#"{
+        "schema_version": "2.0.0",
+        "status": "ACTION_REQUIRED",
+        "timestamp": "2026-11-22T12:00:00Z",
+        "counts": { "errors": 2, "warnings": 5 },
+        "environment": { "kernel": "6.12.1-arch1-1" },
+        "gaming": { "detected": true }
+    }"#;
+    let parsed = parse_canonical_summary(full).expect("valid v2 summary");
+    assert_eq!(parsed.schema_version, "2.0.0");
+    assert_eq!(parsed.status, "ACTION_REQUIRED");
+    assert_eq!(parsed.timestamp, "2026-11-22T12:00:00Z");
+    assert_eq!(parsed.errors, 2);
+    assert_eq!(parsed.warnings, 5);
+    assert_eq!(parsed.kernel, "6.12.1-arch1-1");
+    assert!(parsed.gaming_detected);
+
+    let numeric_min = br#"{
+        "schema_version": 2.1,
+        "status": "FLIGHT_READY",
+        "timestamp": "2026-11-22T12:00:00Z",
+        "counts": { "errors": 99999999999, "warnings": 0 }
+    }"#;
+    let parsed_num = parse_canonical_summary(numeric_min).expect("numeric v2.1 summary");
+    assert_eq!(parsed_num.schema_version, "2.1");
+    assert_eq!(parsed_num.errors, 0);
+    assert_eq!(parsed_num.warnings, 0);
+    assert_eq!(parsed_num.kernel, "unknown");
+    assert!(!parsed_num.gaming_detected);
+
+    assert!(parse_canonical_summary(br#"{"schema_version":"2.0.0""#).is_err());
+    assert!(
+        parse_canonical_summary(
+            br#"{"schema_version":"1.0.0","status":"FLIGHT_READY","timestamp":"t"}"#
+        )
+        .is_err()
+    );
+    assert!(
+        parse_canonical_summary(br#"{"schema_version":2,"status":"FLIGHT_READY","timestamp":"t"}"#)
+            .is_err()
+    );
+    assert!(
+        parse_canonical_summary(
+            br#"{"schema_version":true,"status":"FLIGHT_READY","timestamp":"t"}"#
+        )
+        .is_err()
+    );
+    assert!(
+        parse_canonical_summary(br#"{"schema_version":"2.0.0","status":"","timestamp":"t"}"#)
+            .is_err()
+    );
+    assert!(
+        parse_canonical_summary(
+            br#"{"schema_version":"2.0.0","status":"FLIGHT_READY","timestamp":""}"#
+        )
+        .is_err()
+    );
+    assert!(
+        parse_canonical_summary(br#"{"schema_version":"2.0.0","status":1,"timestamp":"t"}"#)
+            .is_err()
+    );
+    assert!(
+        parse_canonical_summary(
+            br#"{"schema_version":"2.0.0","status":"FLIGHT_READY","timestamp":null}"#
+        )
+        .is_err()
+    );
+}

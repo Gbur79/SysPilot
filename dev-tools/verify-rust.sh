@@ -139,12 +139,14 @@ if ! test_out=$(cargo test --locked 2>&1); then
 fi
 
 core_count=0
+cli_count=0
 tray_count=0
 gui_count=0
 eval "$(echo "$test_out" | awk '
 /Running/ {
     cur=""
     if ($0 ~ /syspilot_core/) cur="core"
+    else if ($0 ~ /\/syspilot-[0-9a-f]+/) cur="cli"
     else if ($0 ~ /syspilot_tray/) cur="tray"
     else if ($0 ~ /(syspilot_gui|watcher_smoke)/) cur="gui"
 }
@@ -152,15 +154,16 @@ eval "$(echo "$test_out" | awk '
     match($0, /([0-9]+) passed/, m)
     cnt = m[1] + 0
     if (cur == "core") core += cnt
+    else if (cur == "cli") cli += cnt
     else if (cur == "tray") tray += cnt
     else if (cur == "gui") gui += cnt
     cur=""
 }
 END {
-    print "core_count=" core+0 "; tray_count=" tray+0 "; gui_count=" gui+0
+    print "core_count=" core+0 "; cli_count=" cli+0 "; tray_count=" tray+0 "; gui_count=" gui+0
 }')"
 
-total_tests=$((core_count + tray_count + gui_count))
+total_tests=$((core_count + cli_count + tray_count + gui_count))
 
 if (( gui_count == 0 )); then
     if (( quiet )); then
@@ -385,6 +388,10 @@ if [[ -n "$mutants_target" ]] || (( mutants_diff )); then
                 mut_pkg="syspilot-core"
                 mut_test_args=(--lib)
                 ;;
+            crates/syspilot-cli/*|*syspilot-cli*)
+                mut_pkg="syspilot-cli"
+                mut_test_args=(--bin syspilot)
+                ;;
             crates/syspilot-tray/*|*syspilot-tray*)
                 mut_pkg="syspilot-tray"
                 mut_test_args=(--bin syspilot-tray)
@@ -474,8 +481,8 @@ if [[ -n "$mutants_target" ]] || (( mutants_diff )); then
 fi
 
 if (( quiet )); then
-    echo "RUST_VERIFY: PASS | TESTS: core: ${core_count} | tray: ${tray_count} | gui: ${gui_count} | Total: ${total_tests}/${total_tests} | CLIPPY: CLEAN | FMT: CLEAN | LINT: CLEAN${gui_smoke_tag}${cov_tag}${mutants_tag} | TARGET: syspilot-workspace"
+    echo "RUST_VERIFY: PASS | TESTS: core: ${core_count} | cli: ${cli_count} | tray: ${tray_count} | gui: ${gui_count} | Total: ${total_tests}/${total_tests} | CLIPPY: CLEAN | FMT: CLEAN | LINT: CLEAN${gui_smoke_tag}${cov_tag}${mutants_tag} | TARGET: syspilot-workspace"
 else
-    echo "✔ All Rust checks passed: fmt, clippy, universalism lint, ${total_tests} tests (core: ${core_count}, tray: ${tray_count}, gui: ${gui_count}), and footprint benchmark${gui_smoke_tag}${cov_tag}${mutants_tag}."
+    echo "✔ All Rust checks passed: fmt, clippy, universalism lint, ${total_tests} tests (core: ${core_count}, cli: ${cli_count}, tray: ${tray_count}, gui: ${gui_count}), and footprint benchmark${gui_smoke_tag}${cov_tag}${mutants_tag}."
 fi
 exit 0

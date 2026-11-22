@@ -1,0 +1,18 @@
+[package]
+name = "syspilot-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "syspilot"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+serde_json = "1.0.154"
+syspilot-core = { path = "../syspilot-core" }
+
+[dev-dependencies]
+tempfile = "3.27"

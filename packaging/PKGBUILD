@@ -34,7 +34,7 @@ sha256sums=('SKIP')
 
 build() {
     cd "$srcdir/$pkgname-$pkgver"
-    cargo build --release --locked -p syspilot-tray -p syspilot-gui
+    cargo build --release --locked -p syspilot-cli -p syspilot-tray -p syspilot-gui
 }
 
 package() {
@@ -43,7 +43,8 @@ package() {
     # Install main executables
     install -Dm755 target/release/syspilot-tray "$pkgdir/usr/bin/syspilot-tray"
     install -Dm755 target/release/syspilot-gui "$pkgdir/usr/bin/syspilot-gui"
-    install -Dm755 bin/syspilot "$pkgdir/usr/bin/syspilot"
+    install -Dm755 target/release/syspilot "$pkgdir/usr/bin/syspilot"
+    install -Dm755 bin/syspilot "$pkgdir/usr/lib/syspilot/bin/syspilot"
     install -Dm755 bin/syspilot-faf-repair "$pkgdir/usr/bin/syspilot-faf-repair"
     install -Dm755 bin/syspilot-faf-repair "$pkgdir/usr/lib/$pkgname/bin/syspilot-faf-repair"
 

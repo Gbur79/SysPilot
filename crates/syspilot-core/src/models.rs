@@ -298,6 +298,8 @@ pub struct SysHealth {
     #[serde(default)]
     pub available: bool,
     #[serde(default)]
+    pub pre_boot_stale: bool,
+    #[serde(default)]
     pub errors: u32,
     #[serde(default)]
     pub warnings: u32,

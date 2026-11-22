@@ -382,6 +382,21 @@ pub fn parse_remediations(raw: Option<Vec<serde_json::Value>>) -> Vec<Actionable
         .collect()
 }
 
+pub fn parse_proc_stat_btime(content: &str) -> Option<u64> {
+    content.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        (parts.next() == Some("btime"))
+            .then(|| parts.next()?.parse::<u64>().ok())
+            .flatten()
+    })
+}
+
+pub fn read_boot_epoch_secs_at(root: &Path) -> Option<u64> {
+    let stat_path = crate::sys_root::sub_path(root, "/proc/stat");
+    let content = std::fs::read_to_string(stat_path).ok()?;
+    parse_proc_stat_btime(&content)
+}
+
 pub fn load_sys_health() -> SysHealth {
     load_sys_health_at(&active_triage_state(), &active_triage_root())
 }
@@ -391,10 +406,17 @@ pub fn load_sys_health_at(state_dir: &Path, root: &Path) -> SysHealth {
     let mut health = if summary_path.is_file() {
         match std::fs::File::open(&summary_path) {
             Ok(file) => {
+                let modified = file.metadata().ok().and_then(|m| m.modified().ok());
+                let pre_boot_stale = match (modified, read_boot_epoch_secs_at(root)) {
+                    (Some(mtime), Some(btime)) => {
+                        mtime < UNIX_EPOCH + std::time::Duration::from_secs(btime)
+                    }
+                    _ => false,
+                };
                 let reader = std::io::BufReader::new(file);
                 match serde_json::from_reader::<_, SummaryJson>(reader) {
                     Ok(summary) => {
-                        let (errors, warnings) = summary
+                        let (mut errors, mut warnings) = summary
                             .counts
                             .map(|c| (c.errors, c.warnings))
                             .unwrap_or((0, 0));
@@ -411,14 +433,23 @@ pub fn load_sys_health_at(state_dir: &Path, root: &Path) -> SysHealth {
                                     distro_age_days: m.distro_age_days,
                                     distro_servers: m.distro_servers,
                                 });
-                        let actionable_remediations =
+                        let mut actionable_remediations =
                             parse_remediations(summary.actionable_remediations);
+                        let (environment, gaming) = if pre_boot_stale {
+                            errors = 0;
+                            warnings = 0;
+                            actionable_remediations.clear();
+                            (None, None)
+                        } else {
+                            (summary.environment, summary.gaming)
+                        };
                         SysHealth {
                             available: true,
+                            pre_boot_stale,
                             errors,
                             warnings,
-                            environment: summary.environment,
-                            gaming: summary.gaming,
+                            environment,
+                            gaming,
                             mirrors,
                             actionable_remediations,
                             parse_error: None,
@@ -428,6 +459,7 @@ pub fn load_sys_health_at(state_dir: &Path, root: &Path) -> SysHealth {
                         eprintln!("[syspilot-core::triage] parse summary.json failed: {err}");
                         SysHealth {
                             available: false,
+                            pre_boot_stale: false,
                             errors: 0,
                             warnings: 0,
                             environment: None,
@@ -443,6 +475,7 @@ pub fn load_sys_health_at(state_dir: &Path, root: &Path) -> SysHealth {
                 eprintln!("[syspilot-core::triage] open summary.json failed: {err}");
                 SysHealth {
                     available: false,
+                    pre_boot_stale: false,
                     errors: 0,
                     warnings: 0,
                     environment: None,
@@ -456,6 +489,7 @@ pub fn load_sys_health_at(state_dir: &Path, root: &Path) -> SysHealth {
     } else {
         SysHealth {
             available: false,
+            pre_boot_stale: false,
             errors: 0,
             warnings: 0,
             environment: None,
@@ -680,6 +714,47 @@ pub fn apply_sys_health_gates(
     }
 }
 
+pub fn apply_previous_boot_verdict(
+    sys_health: &mut SysHealth,
+    verdict: &crate::previous_boot::PreviousBootVerdict,
+) {
+    if let crate::previous_boot::PreviousBootVerdict::Unclean(reason) = verdict {
+        let already_present = sys_health.actionable_remediations.iter().any(|r| {
+            r.code
+                .as_deref()
+                .is_some_and(|c| c.trim().eq_ignore_ascii_case("SYS_UNCLEAN_SHUTDOWN"))
+        });
+        sys_health.available = true;
+        if !already_present {
+            sys_health.warnings = sys_health.warnings.saturating_add(1);
+            sys_health
+                .actionable_remediations
+                .push(ActionableRemediation {
+                    check: Some("previous_boot".to_string()),
+                    severity: Some("WARN".to_string()),
+                    code: Some("SYS_UNCLEAN_SHUTDOWN".to_string()),
+                    summary: Some(reason.clone()),
+                    suggested_fix: Some(
+                        "Run sys-health --audit and inspect journalctl -b -1".to_string(),
+                    ),
+                    risk: Some("low".to_string()),
+                });
+        }
+    }
+}
+
+pub async fn resolve_sys_health_with_previous_boot_at(state_dir: &Path, root: &Path) -> SysHealth {
+    let mut sys_health = load_sys_health_at(state_dir, root);
+    if !sys_health.available || sys_health.pre_boot_stale {
+        let verdict = crate::previous_boot::check_previous_boot_cached_at(root).await;
+        if let crate::previous_boot::PreviousBootVerdict::Inconclusive(ref reason) = verdict {
+            eprintln!("[syspilot-core] previous_boot probe inconclusive: {reason}");
+        }
+        apply_previous_boot_verdict(&mut sys_health, &verdict);
+    }
+    sys_health
+}
+
 pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let status_path = get_status_path();
     let cached = if status_path.is_file() {
@@ -734,7 +809,9 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let reboot_safety = crate::reboot_safety::check_reboot_safety();
     let gaming_readiness = crate::gaming::check_gaming_readiness();
     let mirrors = crate::mirrors::check_mirrors(skip_slow_probes).await;
-    let sys_health = load_sys_health();
+    let sys_health =
+        resolve_sys_health_with_previous_boot_at(&active_triage_state(), &active_triage_root())
+            .await;
 
     let (mut status, mut status_reasons, mut informational_reasons) =
         compute_flight_status(FlightStatusInputs {

@@ -3641,4 +3641,101 @@ mod tests {
             "LcarsTelemetryRow cap-top spread too large ({row_min}..={row_max}): {row_tops:?}"
         );
     }
+
+    #[test]
+    fn test_pre_boot_stale_summary_cleared_in_gui_pod00() {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        init_headless_platform();
+        let ui = AppWindow::new().unwrap();
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("syspilot-gui-preboot-{nanos}"));
+        let state_dir = root.join("state");
+        let health_dir = state_dir.join("system-health");
+        std::fs::create_dir_all(&health_dir).unwrap();
+        std::fs::create_dir_all(root.join("proc/sys/kernel")).unwrap();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+
+        let btime_secs: u64 = 1_700_000_000;
+        std::fs::write(root.join("proc/stat"), format!("btime {btime_secs}\n")).unwrap();
+        std::fs::write(root.join("proc/sys/kernel/osrelease"), "7.3.5-zen1-1-zen\n").unwrap();
+        std::fs::write(root.join("etc/os-release"), "PRETTY_NAME=\"EndeavourOS\"\n").unwrap();
+
+        let summary_path = health_dir.join("summary.json");
+        std::fs::write(
+            &summary_path,
+            r#"{
+                "counts": { "errors": 0, "warnings": 1 },
+                "environment": { "os": "OldOS", "kernel": "6.1.0-old" },
+                "actionable_remediations": [
+                    { "check": "previous_boot", "severity": "WARN", "code": "SYS_UNCLEAN_SHUTDOWN", "summary": "Previous session crashed" }
+                ]
+            }"#,
+        )
+        .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&summary_path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(btime_secs - 30))
+            .unwrap();
+
+        let health = syspilot_core::load_sys_health_at(&state_dir, &root);
+        let mut status = "FLIGHT_READY".to_string();
+        let mut reasons = Vec::new();
+        syspilot_core::apply_sys_health_gates(&mut status, &mut reasons, &health);
+
+        let status_path = root.join("status.json");
+        let payload = syspilot_core::StatusJson {
+            schema_version: "1.0".into(),
+            status,
+            status_reasons: reasons,
+            informational_reasons: Vec::new(),
+            timestamp: Some("1700000010".into()),
+            gaming_mode: false,
+            reboot_pending: false,
+            updates: syspilot_core::StatusUpdates {
+                check_state: syspilot_core::UpdateCheckState::Ok,
+                ..Default::default()
+            },
+            failed_services: None,
+            disk: None,
+            pacnew: None,
+            orphans: None,
+            sys_health: Some(health),
+            security: None,
+            firmware: None,
+            firewall: None,
+            app_update: None,
+            reboot_safety: None,
+            gaming_readiness: None,
+            mirrors: None,
+        };
+        syspilot_core::write_status_json_atomic(&status_path, &payload).unwrap();
+        let snap = syspilot_core::read_system_snapshot(&status_path).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        let vm = DashboardViewModel::from_snapshot_inputs(
+            &snap,
+            &syspilot_core::RebootSafetyStatus::default(),
+            &syspilot_core::SentinelStatus::default(),
+            &syspilot_core::GamingReadinessStatus::default(),
+            "NVIDIA GeForce GTX 970",
+            env!("CARGO_PKG_VERSION"),
+        );
+        assert_eq!(vm.overall_status, "ALL_CLEAR");
+        assert!(!vm.has_attention);
+        assert!(vm.anomalies.is_empty());
+
+        for is_lcars in [true, false] {
+            ui.set_is_lcars_skin(is_lcars);
+            apply_dashboard_view_model(&ui, &vm);
+            assert!(!ui.get_has_attention());
+            assert_eq!(ui.get_anomalies().row_count(), 0);
+        }
+    }
 }

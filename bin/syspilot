@@ -118,6 +118,21 @@ status_age() {
     printf '%s\n' "$((now - mtime))"
 }
 
+boot_epoch_secs() {
+    local proc_stat="${SYSPILOT_PROC_STAT:-/proc/stat}"
+    [[ -r "$proc_stat" ]] || return 1
+    LC_ALL=C awk '$1 == "btime" && $2 ~ /^[0-9]+$/ { print $2; exit }' "$proc_stat" 2>/dev/null
+}
+
+summary_is_pre_boot() {
+    local btime mtime
+    btime=$(boot_epoch_secs) || return 1
+    [[ "$btime" =~ ^[0-9]+$ ]] || return 1
+    mtime=$(stat -c %Y -- "$STATUS_FILE" 2>/dev/null) || return 1
+    [[ "$mtime" =~ ^[0-9]+$ ]] || return 1
+    (( mtime < btime ))
+}
+
 compact_health_context() {
     local now mtime age
     [[ -f $STATUS_FILE && ! -L $STATUS_FILE && -r $STATUS_FILE ]] || return 1
@@ -145,20 +160,26 @@ print_json() {
 }
 
 print_status() {
-    local age rc=0
+    local age pre_boot="false" rc=0
     validate_status
     age=$(status_age)
     (( age <= MAX_STATUS_AGE )) || rc=3
-    jq -r --argjson age "$age" --argjson limit "$MAX_STATUS_AGE" '
+    if summary_is_pre_boot; then
+        pre_boot="true"
+    fi
+    jq -r --argjson age "$age" --argjson limit "$MAX_STATUS_AGE" --argjson pre_boot "$pre_boot" '
       "SysPilot — cached canonical health summary",
       "Status:       \(.status)",
       "Observed:     \(.timestamp)",
-      "Cache age:    \($age)s" + (if $age > $limit then " (STALE)" else "" end),
+      "Cache age:    \($age)s"
+        + (if $age > $limit then " (STALE)" else "" end)
+        + (if $pre_boot then " (PRE-BOOT)" else "" end),
       "Errors:       \(.counts.errors // 0)",
       "Warnings:     \(.counts.warnings // 0)",
       "Kernel:       \(.environment.kernel // "unknown")",
       "Game profile: " +
-        (if .gaming.detected == true then "detected" else "not reported" end)
+        (if .gaming.detected == true then "detected" else "not reported" end),
+      (if $pre_boot then "Info:         cached summary predates current boot (run: syspilot --audit)" else empty end)
     ' "$STATUS_FILE"
     if (( rc == 3 )); then
         err "cached data is stale; an audit will run only when explicitly requested"

@@ -38,6 +38,7 @@ pub const ALLOWED_READONLY_BINS: &[&str] = &[
     "arch-audit",
     "fwupdmgr",
     "curl",
+    "journalctl",
     "sys-health.sh",
     "bash",
 ];

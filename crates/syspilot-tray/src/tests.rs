@@ -1795,3 +1795,93 @@ fn test_tray_anomalies_tooltip_and_menu_matrix() {
         panic!("Expected StandardItem header");
     }
 }
+
+#[test]
+fn test_pre_boot_stale_summary_cleared_in_tray_after_clean_reboot() {
+    use crate::tray::SysPilotTray;
+    use ksni::Tray;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("syspilot-tray-preboot-{nanos}"));
+    let state_dir = root.join("state");
+    let health_dir = state_dir.join("system-health");
+    std::fs::create_dir_all(&health_dir).unwrap();
+    std::fs::create_dir_all(root.join("proc/sys/kernel")).unwrap();
+    std::fs::create_dir_all(root.join("etc")).unwrap();
+
+    let btime_secs: u64 = 1_700_000_000;
+    std::fs::write(root.join("proc/stat"), format!("btime {btime_secs}\n")).unwrap();
+    std::fs::write(root.join("proc/sys/kernel/osrelease"), "7.3.5-zen1-1-zen\n").unwrap();
+    std::fs::write(root.join("etc/os-release"), "PRETTY_NAME=\"EndeavourOS\"\n").unwrap();
+
+    let summary_path = health_dir.join("summary.json");
+    std::fs::write(
+        &summary_path,
+        r#"{
+            "counts": { "errors": 1, "warnings": 1 },
+            "environment": { "os": "OldOS", "kernel": "6.1.0-old" },
+            "actionable_remediations": [
+                { "check": "previous_boot", "severity": "WARN", "code": "SYS_UNCLEAN_SHUTDOWN", "summary": "Previous session crashed" }
+            ]
+        }"#,
+    )
+    .unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&summary_path)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + Duration::from_secs(btime_secs - 30))
+        .unwrap();
+
+    let health = syspilot_core::load_sys_health_at(&state_dir, &root);
+    let mut status = "FLIGHT_READY".to_string();
+    let mut reasons = Vec::new();
+    syspilot_core::apply_sys_health_gates(&mut status, &mut reasons, &health);
+    assert_eq!(status, "FLIGHT_READY");
+
+    let status_path = root.join("status.json");
+    let payload = syspilot_core::StatusJson {
+        schema_version: "1.0".into(),
+        status,
+        status_reasons: reasons,
+        informational_reasons: Vec::new(),
+        timestamp: Some("1700000010".into()),
+        gaming_mode: false,
+        reboot_pending: false,
+        updates: syspilot_core::StatusUpdates {
+            check_state: syspilot_core::UpdateCheckState::Ok,
+            ..Default::default()
+        },
+        failed_services: None,
+        disk: None,
+        pacnew: None,
+        orphans: None,
+        sys_health: Some(health),
+        security: None,
+        firmware: None,
+        firewall: None,
+        app_update: None,
+        reboot_safety: None,
+        gaming_readiness: None,
+        mirrors: None,
+    };
+    syspilot_core::write_status_json_atomic(&status_path, &payload).unwrap();
+    let snap = read_system_snapshot(&status_path).unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let tray = SysPilotTray::new(snap, SentinelStatus::default(), None, false, None, tx);
+    assert_eq!(tray.status(), ksni::Status::Active);
+    let tt = tray.tool_tip();
+    assert_eq!(tt.title, "SysPilot — Status: FLIGHT_READY");
+    assert!(!tt.description.contains("PREVIOUS BOOT"));
+    if let ksni::MenuItem::Standard(header) = &tray.menu()[0] {
+        assert!(header.label.contains("System primed and healthy"));
+    } else {
+        panic!("Expected StandardItem header");
+    }
+}

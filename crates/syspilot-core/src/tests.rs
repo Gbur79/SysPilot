@@ -6182,3 +6182,464 @@ fn test_build_dashboard_anomalies_and_snapshot_roundtrip() {
     let snap_unavail = read_system_snapshot(&status_file).unwrap();
     assert!(snap_unavail.actionable_remediations.is_empty());
 }
+
+#[test]
+fn test_parse_proc_stat_btime_and_boot_id() {
+    use crate::previous_boot::read_boot_id_at;
+    use crate::triage::{parse_proc_stat_btime, read_boot_epoch_secs_at};
+
+    assert_eq!(
+        parse_proc_stat_btime("cpu 1 2 3\nbtime_foo 999\nbtime 1795332680\nprocesses 42\n"),
+        Some(1_795_332_680)
+    );
+    assert_eq!(parse_proc_stat_btime("cpu 1 2 3\nprocesses 42\n"), None);
+    assert_eq!(parse_proc_stat_btime("btime not_a_num\n"), None);
+    assert_eq!(parse_proc_stat_btime(""), None);
+
+    let tmp = tempfile::tempdir().unwrap();
+    assert_eq!(read_boot_epoch_secs_at(tmp.path()), None);
+    assert_eq!(read_boot_id_at(tmp.path()), None);
+
+    std::fs::create_dir_all(tmp.path().join("proc/sys/kernel/random")).unwrap();
+    std::fs::write(tmp.path().join("proc/stat"), "btime 1700000100\n").unwrap();
+    std::fs::write(tmp.path().join("proc/sys/kernel/random/boot_id"), "   \n").unwrap();
+    assert_eq!(read_boot_epoch_secs_at(tmp.path()), Some(1_700_000_100));
+    assert_eq!(read_boot_id_at(tmp.path()), None);
+
+    std::fs::write(
+        tmp.path().join("proc/sys/kernel/random/boot_id"),
+        "77c142d4-02fd-49d9-8a72-c04c3bb4da37\n",
+    )
+    .unwrap();
+    assert_eq!(
+        read_boot_id_at(tmp.path()).as_deref(),
+        Some("77c142d4-02fd-49d9-8a72-c04c3bb4da37")
+    );
+}
+
+#[test]
+fn test_load_sys_health_at_cross_boot_freshness_gate() {
+    use crate::triage::{apply_sys_health_gates, load_sys_health_at};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let state_dir = root.join("state");
+    let health_dir = state_dir.join("system-health");
+    std::fs::create_dir_all(&health_dir).unwrap();
+    std::fs::create_dir_all(root.join("proc/sys/kernel")).unwrap();
+    std::fs::create_dir_all(root.join("etc")).unwrap();
+
+    let btime_secs: u64 = 1_700_000_000;
+    std::fs::write(root.join("proc/stat"), format!("btime {btime_secs}\n")).unwrap();
+    std::fs::write(root.join("proc/sys/kernel/osrelease"), "7.3.5-zen1-1-zen\n").unwrap();
+    std::fs::write(root.join("etc/os-release"), "PRETTY_NAME=\"EndeavourOS\"\n").unwrap();
+
+    let summary_path = health_dir.join("summary.json");
+    let raw = r#"{
+        "counts": { "errors": 2, "warnings": 3 },
+        "environment": { "os": "OldOS", "kernel": "6.1.0-old" },
+        "gaming": { "detected": true },
+        "actionable_remediations": [
+            { "check": "previous_boot", "severity": "WARN", "code": "SYS_UNCLEAN_SHUTDOWN", "summary": "Yesterday crash" },
+            { "check": "previous_boot", "severity": "WARN", "code": "SYS_SPURIOUS_WAKEUP", "summary": "Yesterday wakeup" },
+            { "check": "mirrors", "severity": "WARN", "code": "MIRROR_STALE", "summary": "Old mirror note" }
+        ]
+    }"#;
+    std::fs::write(&summary_path, raw).unwrap();
+
+    let pre_boot_time = UNIX_EPOCH + Duration::from_secs(btime_secs - 10);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&summary_path)
+        .unwrap()
+        .set_modified(pre_boot_time)
+        .unwrap();
+
+    let pre = load_sys_health_at(&state_dir, root);
+    assert!(pre.available);
+    assert!(pre.pre_boot_stale);
+    assert_eq!(pre.errors, 0);
+    assert_eq!(pre.warnings, 0);
+    assert!(pre.actionable_remediations.is_empty());
+    assert!(pre.gaming.is_none());
+    assert_eq!(
+        pre.environment.as_ref().and_then(|e| e.kernel.as_deref()),
+        Some("7.3.5-zen1-1-zen")
+    );
+    assert_eq!(
+        pre.environment.as_ref().and_then(|e| e.os.as_deref()),
+        Some("EndeavourOS")
+    );
+
+    let mut status = "FLIGHT_READY".to_string();
+    let mut reasons = Vec::new();
+    apply_sys_health_gates(&mut status, &mut reasons, &pre);
+    assert_eq!(status, "FLIGHT_READY");
+    assert!(reasons.is_empty());
+
+    let eq_boot_time = UNIX_EPOCH + Duration::from_secs(btime_secs);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&summary_path)
+        .unwrap()
+        .set_modified(eq_boot_time)
+        .unwrap();
+
+    let eq = load_sys_health_at(&state_dir, root);
+    assert!(eq.available);
+    assert!(!eq.pre_boot_stale);
+    assert_eq!(eq.errors, 2);
+    assert_eq!(eq.warnings, 3);
+    assert_eq!(eq.actionable_remediations.len(), 3);
+    assert_eq!(eq.gaming.as_ref().and_then(|g| g.detected), Some(true));
+    assert_eq!(
+        eq.environment.as_ref().and_then(|e| e.kernel.as_deref()),
+        Some("6.1.0-old")
+    );
+
+    let post_boot_time = UNIX_EPOCH + Duration::from_secs(btime_secs + 10);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&summary_path)
+        .unwrap()
+        .set_modified(post_boot_time)
+        .unwrap();
+    let post = load_sys_health_at(&state_dir, root);
+    assert!(!post.pre_boot_stale);
+    assert_eq!(post.warnings, 3);
+}
+
+#[test]
+fn test_previous_boot_pure_parsers_and_verdict_matrix() {
+    use crate::previous_boot::{
+        JournalProbeOutput, PreviousBootVerdict, evaluate_previous_boot_probes,
+        parse_boot_journal_fsck_output, parse_prev_kernel_panic_output,
+    };
+
+    assert_eq!(parse_boot_journal_fsck_output(""), None);
+    assert_eq!(
+        parse_boot_journal_fsck_output("endeavouros: clean, 100/200 files\nJournal started\n"),
+        None
+    );
+    assert_eq!(parse_prev_kernel_panic_output(""), None);
+    assert_eq!(parse_prev_kernel_panic_output("-- No entries --\n"), None);
+
+    for marker_line in [
+        "Journal file /var/log/journal/x/system.journal was CORRUPTED or uncleanly shut down",
+        "Journal file /run/log/journal/x/system.journal was not closed cleanly",
+        "EXT4-fs (nvme0n1p2): recovering journal",
+        "0x41: Dirty bit is set. Fs was not properly unmounted",
+        "/dev/nvme0n1p2 contains a file system with errors, check forced",
+    ] {
+        assert_eq!(
+            parse_boot_journal_fsck_output(marker_line).as_deref(),
+            Some(marker_line),
+            "expected hit for: {marker_line}"
+        );
+    }
+
+    for panic_line in [
+        "Kernel panic - not syncing: Attempted to kill init!",
+        "BUG: unable to handle page fault for address: ffff",
+        "Oops: general protection fault, probably for non-canonical address",
+        "watchdog: BUG: soft lockup - CPU#2 stuck for 23s!",
+    ] {
+        assert_eq!(
+            parse_prev_kernel_panic_output(panic_line).as_deref(),
+            Some(panic_line),
+            "expected panic hit for: {panic_line}"
+        );
+    }
+
+    let ok_clean = JournalProbeOutput {
+        success: true,
+        stdout: "Journal started\n-- No entries --\n".into(),
+        stderr: String::new(),
+    };
+    assert_eq!(
+        evaluate_previous_boot_probes(Ok(&ok_clean), Ok(&ok_clean)),
+        PreviousBootVerdict::Clean
+    );
+
+    let missing_255 = JournalProbeOutput {
+        success: false,
+        stdout: String::new(),
+        stderr: "Data from the specified boot (-1) is not available: No such boot ID in journal"
+            .into(),
+    };
+    assert_eq!(
+        evaluate_previous_boot_probes(Ok(&ok_clean), Ok(&missing_255)),
+        PreviousBootVerdict::Clean
+    );
+
+    let perm_hint = JournalProbeOutput {
+        success: true,
+        stdout: "-- No entries --\n".into(),
+        stderr: "Hint: You are currently not seeing messages from other users and the system.\n"
+            .into(),
+    };
+    assert!(matches!(
+        evaluate_previous_boot_probes(Ok(&perm_hint), Ok(&ok_clean)),
+        PreviousBootVerdict::Inconclusive(_)
+    ));
+    let perm_err = JournalProbeOutput {
+        success: false,
+        stdout: String::new(),
+        stderr: "Insufficient permissions to read journal".into(),
+    };
+    assert!(matches!(
+        evaluate_previous_boot_probes(Ok(&ok_clean), Ok(&perm_err)),
+        PreviousBootVerdict::Inconclusive(_)
+    ));
+
+    let unclean_b0 = JournalProbeOutput {
+        success: true,
+        stdout: "Dirty bit is set\n".into(),
+        stderr: String::new(),
+    };
+    assert!(matches!(
+        evaluate_previous_boot_probes(Ok(&unclean_b0), Err("timeout")),
+        PreviousBootVerdict::Unclean(_)
+    ));
+
+    let panic_pk = JournalProbeOutput {
+        success: true,
+        stdout: "Kernel panic - not syncing\n".into(),
+        stderr: String::new(),
+    };
+    assert!(matches!(
+        evaluate_previous_boot_probes(Err("timeout"), Ok(&panic_pk)),
+        PreviousBootVerdict::Unclean(_)
+    ));
+
+    let fail_other = JournalProbeOutput {
+        success: false,
+        stdout: String::new(),
+        stderr: "journal file unreadable".into(),
+    };
+    assert_eq!(
+        evaluate_previous_boot_probes(Ok(&fail_other), Ok(&ok_clean)),
+        PreviousBootVerdict::Inconclusive(
+            "journalctl boot-0 probe failed: journal file unreadable".into()
+        )
+    );
+    assert_eq!(
+        evaluate_previous_boot_probes(Ok(&ok_clean), Ok(&fail_other)),
+        PreviousBootVerdict::Inconclusive(
+            "journalctl prev-boot kernel probe failed: journal file unreadable".into()
+        )
+    );
+    assert_eq!(
+        evaluate_previous_boot_probes(Err("spawn err"), Ok(&ok_clean)),
+        PreviousBootVerdict::Inconclusive("spawn err".into())
+    );
+}
+
+#[test]
+fn test_previous_boot_async_cache_timeout_and_resolve_matrix() {
+    use crate::exec::{reset_spawn_count, spawn_count};
+    use crate::previous_boot::{
+        PreviousBootVerdict, check_previous_boot_cached_at, clear_test_previous_boot_cache,
+        set_test_journalctl_bin,
+    };
+    use crate::triage::{
+        apply_previous_boot_verdict, resolve_sys_health_with_previous_boot_at, run_triage,
+    };
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut env = EnvGuard::new();
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let state_dir = root.join("state");
+        let health_dir = state_dir.join("system-health");
+        let bin_dir = root.join("bin");
+        std::fs::create_dir_all(&health_dir).unwrap();
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::create_dir_all(root.join("proc/sys/kernel/random")).unwrap();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+
+        let btime_secs: u64 = 1_700_000_000;
+        std::fs::write(root.join("proc/stat"), format!("btime {btime_secs}\n")).unwrap();
+        std::fs::write(root.join("proc/sys/kernel/osrelease"), "7.3.5-zen1-1-zen\n").unwrap();
+        std::fs::write(root.join("etc/os-release"), "PRETTY_NAME=\"EndeavourOS\"\n").unwrap();
+        std::fs::write(root.join("proc/sys/kernel/random/boot_id"), "boot-uuid-1\n").unwrap();
+
+        let jctl_path = bin_dir.join("journalctl");
+        let write_jctl = |script: &str| {
+            std::fs::write(&jctl_path, script).unwrap();
+            let mut perms = std::fs::metadata(&jctl_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&jctl_path, perms).unwrap();
+        };
+
+        clear_test_previous_boot_cache();
+
+        set_test_journalctl_bin(Some(None));
+        assert!(matches!(
+            check_previous_boot_cached_at(root).await,
+            PreviousBootVerdict::Inconclusive(_)
+        ));
+
+        write_jctl("#!/usr/bin/env bash\nsleep 1\n");
+        set_test_journalctl_bin(Some(Some(jctl_path.clone())));
+        env.set("SYSPILOT_PREV_BOOT_TIMEOUT_MS", "50");
+        assert!(matches!(
+            check_previous_boot_cached_at(root).await,
+            PreviousBootVerdict::Inconclusive(_)
+        ));
+        env.set("SYSPILOT_PREV_BOOT_TIMEOUT_MS", "2000");
+
+        write_jctl("#!/usr/bin/env bash\necho '-- No entries --'\nexit 0\n");
+        reset_spawn_count();
+        assert_eq!(
+            check_previous_boot_cached_at(root).await,
+            PreviousBootVerdict::Clean
+        );
+        assert_eq!(spawn_count(), 2);
+        assert_eq!(
+            check_previous_boot_cached_at(root).await,
+            PreviousBootVerdict::Clean
+        );
+        assert_eq!(spawn_count(), 2);
+
+        std::fs::write(root.join("proc/sys/kernel/random/boot_id"), "boot-uuid-2\n").unwrap();
+        assert_eq!(
+            check_previous_boot_cached_at(root).await,
+            PreviousBootVerdict::Clean
+        );
+        assert_eq!(spawn_count(), 4);
+
+        std::fs::remove_file(root.join("proc/sys/kernel/random/boot_id")).unwrap();
+        assert_eq!(
+            check_previous_boot_cached_at(root).await,
+            PreviousBootVerdict::Clean
+        );
+        assert_eq!(spawn_count(), 6);
+        std::fs::write(root.join("proc/sys/kernel/random/boot_id"), "boot-uuid-3\n").unwrap();
+
+        let summary_path = health_dir.join("summary.json");
+        let raw_unclean_summary = r#"{
+            "counts": { "errors": 0, "warnings": 1 },
+            "environment": { "os": "OldOS", "kernel": "6.1.0-old" },
+            "actionable_remediations": [
+                { "check": "previous_boot", "severity": "WARN", "code": "SYS_UNCLEAN_SHUTDOWN", "summary": "Old crash" }
+            ]
+        }"#;
+        std::fs::write(&summary_path, raw_unclean_summary).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&summary_path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(btime_secs + 5))
+            .unwrap();
+
+        let before_fresh = spawn_count();
+        let fresh_sh = resolve_sys_health_with_previous_boot_at(&state_dir, root).await;
+        assert_eq!(spawn_count(), before_fresh);
+        assert!(!fresh_sh.pre_boot_stale);
+        assert_eq!(fresh_sh.warnings, 1);
+
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&summary_path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(btime_secs - 10))
+            .unwrap();
+        clear_test_previous_boot_cache();
+        let clean_pre = resolve_sys_health_with_previous_boot_at(&state_dir, root).await;
+        assert!(clean_pre.pre_boot_stale);
+        assert_eq!(clean_pre.warnings, 0);
+        assert!(clean_pre.actionable_remediations.is_empty());
+
+        std::fs::remove_file(&summary_path).unwrap();
+        write_jctl(
+            "#!/usr/bin/env bash\nif [[ \"$*\" == *\"-b -1\"* ]]; then echo 'Kernel panic - not syncing'; fi\nexit 0\n",
+        );
+        clear_test_previous_boot_cache();
+        let unclean_missing = resolve_sys_health_with_previous_boot_at(&state_dir, root).await;
+        assert!(unclean_missing.available);
+        assert_eq!(unclean_missing.warnings, 1);
+        assert_eq!(
+            unclean_missing.actionable_remediations[0].code.as_deref(),
+            Some("SYS_UNCLEAN_SHUTDOWN")
+        );
+
+        let mut dedup_sh = unclean_missing.clone();
+        apply_previous_boot_verdict(&mut dedup_sh, &PreviousBootVerdict::Unclean("dup".into()));
+        assert_eq!(dedup_sh.warnings, 1);
+        assert_eq!(dedup_sh.actionable_remediations.len(), 1);
+
+        std::fs::write(&summary_path, raw_unclean_summary).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&summary_path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(btime_secs - 10))
+            .unwrap();
+        write_jctl("#!/usr/bin/env bash\necho '-- No entries --'\nexit 0\n");
+        clear_test_previous_boot_cache();
+
+        let ok_bin = bin_dir.join("ok_tool");
+        std::fs::write(&ok_bin, "#!/usr/bin/env bash\nexit 0\n").unwrap();
+        let mut perms = std::fs::metadata(&ok_bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&ok_bin, perms).unwrap();
+
+        let status_out = root.join("status.json");
+        let rel_cache = root.join("github_release.json");
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        std::fs::write(
+            &rel_cache,
+            format!(
+                "{{\"timestamp\":{now_secs},\"release\":{{\"tag_name\":\"v{}\",\"html_url\":\"\",\"published_at\":\"\"}}}}",
+                env!("CARGO_PKG_VERSION")
+            ),
+        )
+        .unwrap();
+        env.set("SYSPILOT_STATUS_PATH", &status_out);
+        crate::triage::set_test_triage_overrides(
+            Some(root.to_path_buf()),
+            Some(state_dir.clone()),
+        );
+        crate::sentinels::set_test_sentinels_overrides(
+            Some(root.to_path_buf()),
+            Some(state_dir),
+        );
+        crate::services::set_test_systemctl_bin(Some(ok_bin.clone()));
+        crate::orphans::set_test_pacman_bin(Some(Some(ok_bin)));
+        crate::release::set_test_release_overrides(Some(rel_cache), None);
+
+        let triage_res = run_triage(false, true).await;
+
+        crate::release::set_test_release_overrides(None, None);
+        crate::orphans::set_test_pacman_bin(None);
+        crate::services::set_test_systemctl_bin(None);
+        crate::sentinels::set_test_sentinels_overrides(None, None);
+        crate::triage::set_test_triage_overrides(None, None);
+        set_test_journalctl_bin(None);
+        clear_test_previous_boot_cache();
+
+        let sh_out = triage_res.sys_health.as_ref().unwrap();
+        assert!(sh_out.pre_boot_stale);
+        assert_eq!(sh_out.warnings, 0);
+        assert!(sh_out.actionable_remediations.is_empty());
+        let snap = read_system_snapshot(&status_out).unwrap();
+        assert!(snap.actionable_remediations.is_empty());
+        assert_eq!(snap.warnings, 0);
+    });
+}

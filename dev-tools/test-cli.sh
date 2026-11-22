@@ -27,7 +27,7 @@ mkdir -p "$HOME" "$XDG_STATE_HOME/system-health" "$XDG_CONFIG_HOME/syspilot" "$X
 unset SYSPILOT_SYS_HEALTH SYSPILOT_MAX_STATUS_AGE SYSPILOT_TERMINAL SYSPILOT_COPILOT_CMD SYSPILOT_GOOSE_RECIPE
 
 tests_passed=0
-total_tests=16
+total_tests=17
 current_test=""
 
 fail() {
@@ -493,6 +493,36 @@ EOF
 "$project_root/dev-tools/lint-universalism.sh" --target-dir "$lint_td" -q >"$lint_td/pass.out" 2>&1 || { rm -rf "$lint_td"; fail "lint-universalism.sh should allow lines marked with syspilot-lint:allow"; }
 grep -q "LINT_UNIVERSALISM: PASS" "$lint_td/pass.out" || { rm -rf "$lint_td"; fail "expected LINT_UNIVERSALISM: PASS on allowed /usr/bin fixture"; }
 rm -rf "$lint_td"
+pass_step
+
+# -----------------------------------------------------------------------------
+# Test 17: Pre-boot stale summary notice in syspilot -s (PATCH-046)
+# -----------------------------------------------------------------------------
+current_test="pre_boot_stale_summary_notice"
+cat <<EOF > "$summary_file"
+{
+  "schema_version": "2.0.0",
+  "status": "FLIGHT_READY",
+  "timestamp": "$now_iso",
+  "counts": { "errors": 0, "warnings": 0 },
+  "environment": { "kernel": "7.3.5-zen1-1-zen" },
+  "gaming": { "detected": false }
+}
+EOF
+touch "$summary_file"
+mtime_epoch=$(stat -c %Y -- "$summary_file")
+printf 'btime %s\n' "$((mtime_epoch - 600))" > "$sandbox/proc_stat_post"
+out_post=$(env SYSPILOT_PROC_STAT="$sandbox/proc_stat_post" "$CLI" -s) || fail "-s failed on post-boot summary"
+[[ "$out_post" != *"(PRE-BOOT)"* ]] || fail "-s should not mark post-boot summary as (PRE-BOOT)"
+
+printf 'btime %s\n' "$mtime_epoch" > "$sandbox/proc_stat_eq"
+out_eq=$(env SYSPILOT_PROC_STAT="$sandbox/proc_stat_eq" "$CLI" -s) || fail "-s failed on boundary mtime==btime summary"
+[[ "$out_eq" != *"(PRE-BOOT)"* ]] || fail "-s should not mark mtime==btime summary as (PRE-BOOT)"
+
+printf 'btime %s\n' "$((mtime_epoch + 600))" > "$sandbox/proc_stat_pre"
+out_pre=$(env SYSPILOT_PROC_STAT="$sandbox/proc_stat_pre" "$CLI" -s) || fail "-s failed on pre-boot summary"
+[[ "$out_pre" == *"(PRE-BOOT)"* ]] || fail "-s missing (PRE-BOOT) marker when mtime < btime: $out_pre"
+[[ "$out_pre" == *"cached summary predates current boot"* ]] || fail "-s missing pre-boot info notice: $out_pre"
 pass_step
 
 # -----------------------------------------------------------------------------

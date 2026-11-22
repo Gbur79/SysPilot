@@ -63,11 +63,12 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
 ## 🛡️ Core Features
 
 - **Ultralight 24/7 Rust Sentinel (`syspilot-tray`):**
-  - Native StatusNotifierItem (SNI) implementation (`ksni 0.3`) for KDE Plasma Wayland and X11 desktops (~3.2 MB RSS).
+  - Native StatusNotifierItem (SNI) implementation (`ksni 0.3`) and kernel-filtered `inotify` watcher (`notify 9.0`, `EventKindMask::CORE`) for KDE Plasma Wayland and X11 desktops (~3.2 MB RSS).
   - Native D-Bus client (`zbus 5.19`) for zero-fork GameMode queries.
   - Immediate detection of un-rebooted kernel upgrades by monitoring `/usr/lib/modules/<version>`.
   - Non-blocking disk space queries using `libc::statvfs` directly without invoking external shell binaries.
   - Intelligent pacman lock monitor: distinguishes active package manager operations from orphaned `/var/lib/pacman/db.lck` files.
+- **Cross-Boot Telemetry Freshness & Previous-Boot Integrity (`previous_boot.rs`):** Gates cached pre-boot `summary.json` against `/proc/stat` `btime`, verifies previous boot shutdown status via unprivileged `journalctl --list-boots` (cached per `/proc/sys/kernel/random/boot_id`), and flags stale pre-boot caches in `syspilot -s` (`(PRE-BOOT)`) while keeping real unclean-shutdown alerts visible.
 - **Universal Post-Update Reboot & Kernel/DKMS Safety Guard (`reboot_safety.rs`):** Zero-subprocess inspection of `/usr/lib/modules/<version>` (`modules.dep`, `modules.builtin`, `.ko`/`.ko.zst` zstd header verification) for active PCI `0x03` GPU drivers (`nvidia`, `amdgpu`, `i915`, `xe`), escalating to `ACTION_REQUIRED` (`CRITICAL REBOOT RISK`) before a broken kernel/DKMS update causes a black screen on reboot.
 - **Zero-Subprocess Gaming & Vulkan Readiness Probe (`gaming.rs`):** Instant verification of driver-matched 64-bit and 32-bit Vulkan ICDs (`/usr/lib` and `/usr/lib32` for Steam/Proton), CPU `scaling_governor`, hybrid GPU `runtime_status`, and battery power state with zero external subprocesses.
 - **Arch Trust Triad (Zero-Root Invariant):** Hard `libc::getuid() == 0` refusal in both `syspilot-tray` and `syspilot-gui`; all mutating maintenance operations run transparently in the user's interactive terminal.
@@ -245,7 +246,7 @@ sysPilot/
 │   ├── syspilot                 # Unified master CLI & GUI runner
 │   └── syspilot-faf-repair      # Deterministic FAF runner & shortcut repair tool
 ├── crates/
-│   ├── syspilot-core/           # Headless triage engine, semantic view, mirrors, CVE, LVFS, firewall, terminal & playbooks
+│   ├── syspilot-core/           # Headless triage engine, btime/previous-boot gates, semantic view, mirrors, CVE, LVFS, firewall, terminal & playbooks
 │   ├── syspilot-tray/           # High-performance 24/7 Rust StatusNotifierItem Tray Sentinel (~3.2 MB RAM)
 │   └── syspilot-gui/            # Native Slint Desktop Cockpit (Dashboard, Maintenance Suite & SRE Playbooks)
 ├── copilot/
@@ -257,10 +258,12 @@ sysPilot/
 ├── dev-tools/
 │   ├── bench-footprint.sh       # SRE /proc/<pid>/smaps_rollup footprint & resource benchmark
 │   ├── build-and-install.sh     # One-step test, compile & install helper
+│   ├── check-deps.sh            # Non-mutating Cargo dependency dry-run & pinning auditor
 │   ├── dump-fixture.sh          # SRE host telemetry & mock rig fixture dumper
 │   ├── lint-universalism.sh     # Zero-subprocess & zero-root universalism linter
+│   ├── smoke-gui.sh             # Dual-Skin (LCARS & Classic) headless/FemtoVG GUI smoke harness
 │   ├── test-cli.sh              # SRE hermetic CLI & packaging test suite
-│   └── verify-rust.sh           # SRE hermetic verification script
+│   └── verify-rust.sh           # SRE hermetic verification script (fmt, clippy, tests, --cov, --mutants-diff)
 ├── autostart/
 │   └── syspilot.desktop         # XDG autostart entry for background tray sentinel
 ├── packaging/

@@ -5,9 +5,8 @@ use crate::firmware::parse_fwupd_devices;
 use crate::models::*;
 use crate::orphans::{classify_orphans, glob_match, orphan_sensitive_tag};
 use crate::security::{check_security_vulnerabilities, parse_arch_audit_json};
-use crate::services::{is_candidate_app_unit, parse_systemctl_show_transient};
+use crate::services::{is_candidate_app_unit, unit_slice_interface};
 use crate::triage::{FlightStatusInputs, compute_flight_status, write_status_json_atomic};
-use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -170,25 +169,21 @@ fn test_classify_orphans_tiers() {
 #[test]
 fn test_services_transient_filtering() {
     assert!(is_candidate_app_unit("app-java@12345.service"));
+    assert!(is_candidate_app_unit(" APP-Foo.SERVICE "));
     assert!(is_candidate_app_unit("app-org.kde.dolphin@run.scope"));
+    assert!(is_candidate_app_unit(" APP-Bar.SCOPE "));
+    assert!(!is_candidate_app_unit("app-slice.slice"));
     assert!(!is_candidate_app_unit("systemd-journald.service"));
 
-    let show_output = r#"
-Id=app-java@12345.service
-Transient=yes
-Slice=app.slice
-
-Id=app-backup.service
-Transient=no
-Slice=app.slice
-"#;
-    let mut candidates = HashSet::new();
-    candidates.insert("app-java@12345.service".into());
-    candidates.insert("app-backup.service".into());
-
-    let ignored = parse_systemctl_show_transient(show_output, &candidates);
-    assert!(ignored.contains("app-java@12345.service"));
-    assert!(!ignored.contains("app-backup.service")); // Persistent service kept!
+    assert_eq!(
+        unit_slice_interface(" APP-Foo.SERVICE "),
+        Some("org.freedesktop.systemd1.Service")
+    );
+    assert_eq!(
+        unit_slice_interface(" APP-Bar.SCOPE "),
+        Some("org.freedesktop.systemd1.Scope")
+    );
+    assert_eq!(unit_slice_interface("app-slice.slice"), None);
 }
 
 #[test]
@@ -2251,37 +2246,32 @@ async fn test_stage2_orphans_hermetic_and_mutants() {
     set_test_pacman_bin(None);
 }
 
+struct TestDbusAddressesGuard;
+
+impl Drop for TestDbusAddressesGuard {
+    fn drop(&mut self) {
+        crate::services::set_test_dbus_addresses(None, None);
+    }
+}
+
 #[tokio::test]
 async fn test_stage2_services_hermetic_and_mutants() {
+    use crate::exec::{reset_spawn_count, spawn_count};
     use crate::mock_rig::MockRig;
     use crate::services::{
         check_failed_services, get_transient_desktop_app_units, is_candidate_app_unit,
-        parse_systemctl_show_transient, query_failed_units, set_test_systemctl_bin,
+        query_failed_units, set_test_dbus_addresses, unit_slice_interface,
         user_systemd_available_at,
     };
-    use std::collections::HashSet;
+
+    let _dbus_guard = TestDbusAddressesGuard;
+    reset_spawn_count();
 
     assert!(!is_candidate_app_unit("app-slice.slice"));
-
-    let show_out = r#"
-Id=app-not-candidate@1.service
-Transient=yes
-Slice=app.slice
-
-Id=app-wrong-slice@2.service
-Transient=yes
-Slice=session.slice
-
-Id=app-valid@3.service
-Transient=yes
-Slice=app.slice
-"#;
-    let mut cands = HashSet::new();
-    cands.insert("app-wrong-slice@2.service".into());
-    cands.insert("app-valid@3.service".into());
-    let ignored = parse_systemctl_show_transient(show_out, &cands);
-    assert_eq!(ignored.len(), 1);
-    assert!(ignored.contains("app-valid@3.service"));
+    assert_eq!(
+        unit_slice_interface("app-foo.service"),
+        Some("org.freedesktop.systemd1.Service")
+    );
 
     // Headless / container & XDG_RUNTIME_DIR guard checks
     let rig = MockRig::headless_minimal_vm();
@@ -2299,41 +2289,49 @@ Slice=app.slice
     std::fs::create_dir_all(rig.sub("/run/user/1000/systemd/private")).unwrap();
     assert!(user_systemd_available_at(rig.root(), Some(&xdg_dir)));
 
-    // Empty candidate fast-return
-    assert!(get_transient_desktop_app_units(&[]).await.is_empty());
-
-    // Mock systemctl runner tests
-    let tmp_dir = tempfile::TempDir::new().unwrap();
-    let mode_file = tmp_dir.path().join("mode");
-    let script = format!(
-        "#!/bin/sh\nmode=$(cat \"{}\")\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"show\" ]; then\n  if [ \"$mode\" = \"show_fail\" ]; then printf 'Id=app-java@1.service\\nTransient=yes\\nSlice=app.slice\\n'; exit 1; fi\n  printf 'Id=app-java@1.service\\nTransient=yes\\nSlice=app.slice\\n'\n  exit 0\nfi\nif [ \"$1\" = \"--user\" ]; then\n  if [ \"$mode\" = \"user_err\" ]; then echo 'no user bus' >&2; exit 1; fi\n  printf 'app-java@1.service loaded failed failed Java\\nsyncthing.service loaded failed failed Sync\\n'\n  exit 0\nfi\nif [ \"$mode\" = \"sys_err_empty\" ]; then exit 2; fi\nprintf 'ntpd.service loaded failed failed NTP\\n'\nexit 0\n",
-        mode_file.display()
-    );
-    let bin_path = write_mock_executable(tmp_dir.path(), "systemctl", &script);
-    set_test_systemctl_bin(Some(bin_path));
-
-    std::fs::write(&mode_file, "ok").unwrap();
-    let status = check_failed_services().await;
-    assert!(status.user_manager_available);
-    assert_eq!(status.system, vec!["ntpd.service"]);
-    assert_eq!(status.user, vec!["syncthing.service"]);
-
-    std::fs::write(&mode_file, "show_fail").unwrap();
-    let tr_fail = get_transient_desktop_app_units(&["app-java@1.service".into()]).await;
-    assert!(tr_fail.is_empty());
-
-    std::fs::write(&mode_file, "user_err").unwrap();
-    assert_eq!(query_failed_units(true).await.unwrap_err(), "no user bus");
-
-    std::fs::write(&mode_file, "sys_err_empty").unwrap();
+    // Fail-closed default when TEST_DBUS_ADDRESSES is (None, None)
     assert!(
         query_failed_units(false)
             .await
             .unwrap_err()
-            .contains("systemctl failed with exit code")
+            .contains("test D-Bus address not configured")
+    );
+    assert!(
+        query_failed_units(true)
+            .await
+            .unwrap_err()
+            .contains("test D-Bus address not configured")
     );
 
-    set_test_systemctl_bin(None);
+    // Empty candidate fast-return
+    assert!(get_transient_desktop_app_units(&[]).await.is_empty());
+
+    // Invalid D-Bus addresses -> fail-closed user_manager_available == false
+    set_test_dbus_addresses(Some("bad-dbus-addr".into()), Some("bad-dbus-addr".into()));
+    assert!(query_failed_units(false).await.is_err());
+    assert!(query_failed_units(true).await.is_err());
+    let invalid_status = check_failed_services().await;
+    assert!(invalid_status.system.is_empty());
+    assert!(invalid_status.user.is_empty());
+    assert!(!invalid_status.user_manager_available);
+
+    // Unreachable D-Bus sockets -> fail-closed user_manager_available == false, 0 spawns
+    set_test_dbus_addresses(
+        Some("unix:path=/nonexistent/sys.sock".into()),
+        Some("unix:path=/nonexistent/usr.sock".into()),
+    );
+    assert!(query_failed_units(false).await.is_err());
+    assert!(query_failed_units(true).await.is_err());
+    assert!(
+        get_transient_desktop_app_units(&["app-java@1.service".into()])
+            .await
+            .is_empty()
+    );
+    let unreachable_status = check_failed_services().await;
+    assert!(unreachable_status.system.is_empty());
+    assert!(unreachable_status.user.is_empty());
+    assert!(!unreachable_status.user_manager_available);
+    assert_eq!(spawn_count(), 0);
 }
 
 #[test]
@@ -3369,8 +3367,6 @@ async fn test_exec_lc_all_c_isolation() {
 
 #[test]
 fn test_phase4_pure_parsers_insta_snapshots_and_adversarial() {
-    use std::collections::HashSet;
-
     // 1. checkupdates snapshot
     let checkup = crate::updater::parse_checkupdates_str(include_str!(
         "../fixtures/checkupdates_pending.txt"
@@ -3384,32 +3380,7 @@ fn test_phase4_pure_parsers_insta_snapshots_and_adversarial() {
             .unwrap();
     insta::assert_json_snapshot!("yay_qua_pending", aur);
 
-    // 3. systemctl show transient snapshot
-    let cands: HashSet<String> = [
-        "app-firefox@1000.service".to_string(),
-        "app-org.chromium.Chromium-1234.scope".to_string(),
-        "pipewire.service".to_string(),
-        "backup.service".to_string(),
-    ]
-    .into_iter()
-    .collect();
-    let mut transient_units: Vec<String> = crate::services::parse_systemctl_show_transient(
-        include_str!("../fixtures/systemctl_show_transient.txt"),
-        &cands,
-    )
-    .into_iter()
-    .collect();
-    transient_units.sort();
-    insta::assert_json_snapshot!("systemctl_show_transient", transient_units);
-
-    // 4. systemctl failed snapshot
-    let failed = crate::services::parse_systemctl_failed_units(include_str!(
-        "../fixtures/systemctl_failed.txt"
-    ))
-    .unwrap();
-    insta::assert_json_snapshot!("systemctl_failed", failed);
-
-    // 5. pacman -Qi snapshot
+    // 3. pacman -Qi snapshot
     let qi =
         crate::orphans::parse_pacman_qi_str(include_str!("../fixtures/pacman_qi.txt")).unwrap();
     insta::assert_json_snapshot!("pacman_qi", qi);
@@ -3437,14 +3408,6 @@ fn test_phase4_pure_parsers_insta_snapshots_and_adversarial() {
     assert_eq!(
         crate::updater::parse_aur_updates_str("   \n").unwrap(),
         crate::updater::AurUpdatesReport::default()
-    );
-    assert_eq!(
-        crate::services::parse_systemctl_failed_units("").unwrap(),
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        crate::services::parse_systemctl_failed_units("   \n").unwrap(),
-        Vec::<String>::new()
     );
     assert_eq!(
         crate::orphans::parse_pacman_package_list("").unwrap(),
@@ -3477,21 +3440,6 @@ fn test_phase4_pure_parsers_insta_snapshots_and_adversarial() {
         "AUR update emitted error on stdout: error: a b"
     );
     assert_eq!(
-        crate::services::parse_systemctl_failed_units("Failed to load.service dummy").unwrap_err(),
-        "systemctl error on stdout: Failed to load.service dummy"
-    );
-    assert_eq!(
-        crate::services::parse_systemctl_failed_units("error: foo.service dummy").unwrap_err(),
-        "systemctl error on stdout: error: foo.service dummy"
-    );
-    assert_eq!(
-        crate::services::parse_systemctl_failed_units(
-            "System has not been booted with systemd foo.service dummy"
-        )
-        .unwrap_err(),
-        "systemctl error on stdout: System has not been booted with systemd foo.service dummy"
-    );
-    assert_eq!(
         crate::orphans::parse_pacman_package_list("error:").unwrap_err(),
         "pacman diagnostic on stdout: error:"
     );
@@ -3507,7 +3455,6 @@ fn test_phase4_pure_parsers_insta_snapshots_and_adversarial() {
     let aur_two_tok = crate::updater::parse_aur_updates_str("pkg 1.0").unwrap();
     assert_eq!(aur_two_tok.count, 1);
     assert_eq!(aur_two_tok.packages, vec!["pkg 1.0"]);
-    assert!(crate::services::parse_systemctl_failed_units("badline").is_err());
     assert!(crate::orphans::parse_pacman_package_list("two words").is_err());
     assert!(crate::updater::parse_standalone_updates_str("{bad json").is_err());
     assert!(crate::orphans::parse_pacman_qi_str("Description : missing name").is_err());
@@ -6620,7 +6567,11 @@ fn test_previous_boot_async_cache_timeout_and_resolve_matrix() {
             Some(root.to_path_buf()),
             Some(state_dir),
         );
-        crate::services::set_test_systemctl_bin(Some(ok_bin.clone()));
+        let _triage_dbus_guard = TestDbusAddressesGuard;
+        crate::services::set_test_dbus_addresses(
+            Some("unix:path=/nonexistent/sys.sock".into()),
+            Some("unix:path=/nonexistent/usr.sock".into()),
+        );
         crate::orphans::set_test_pacman_bin(Some(Some(ok_bin)));
         crate::release::set_test_release_overrides(Some(rel_cache), None);
 
@@ -6628,7 +6579,7 @@ fn test_previous_boot_async_cache_timeout_and_resolve_matrix() {
 
         crate::release::set_test_release_overrides(None, None);
         crate::orphans::set_test_pacman_bin(None);
-        crate::services::set_test_systemctl_bin(None);
+        drop(_triage_dbus_guard);
         crate::sentinels::set_test_sentinels_overrides(None, None);
         crate::triage::set_test_triage_overrides(None, None);
         set_test_journalctl_bin(None);
@@ -6642,4 +6593,450 @@ fn test_previous_boot_async_cache_timeout_and_resolve_matrix() {
         assert!(snap.actionable_remediations.is_empty());
         assert_eq!(snap.warnings, 0);
     });
+}
+
+const ISOLATED_SYSTEMD_DBUS_CONFIG: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+"#;
+
+struct IsolatedChildGuard(Option<std::process::Child>);
+
+impl IsolatedChildGuard {
+    fn wait_with_output(mut self) -> std::io::Result<std::process::Output> {
+        let child = self.0.take().expect("child already awaited");
+        child.wait_with_output()
+    }
+}
+
+impl Drop for IsolatedChildGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+struct MockSystemdManager {
+    failed_units: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+}
+
+#[zbus::interface(name = "org.freedesktop.systemd1.Manager")]
+impl MockSystemdManager {
+    async fn list_units_filtered(
+        &self,
+        states: Vec<String>,
+    ) -> zbus::fdo::Result<Vec<crate::services::SystemdUnitRow>> {
+        if !states.iter().any(|s| s == "failed") {
+            return Ok(Vec::new());
+        }
+        let units = self.failed_units.lock().expect("mock failed units").clone();
+        let empty_path = zbus::zvariant::OwnedObjectPath::try_from("/").unwrap();
+        Ok(units
+            .into_iter()
+            .map(|(name, path)| {
+                (
+                    name,
+                    "mock failed unit".to_string(),
+                    "loaded".to_string(),
+                    "failed".to_string(),
+                    "failed".to_string(),
+                    String::new(),
+                    zbus::zvariant::OwnedObjectPath::try_from(path).unwrap(),
+                    0u32,
+                    String::new(),
+                    empty_path.clone(),
+                )
+            })
+            .collect())
+    }
+
+    async fn get_unit(&self, name: String) -> zbus::fdo::Result<zbus::zvariant::OwnedObjectPath> {
+        let units = self.failed_units.lock().expect("mock failed units");
+        if let Some((_, path)) = units.iter().find(|(n, _)| n == &name) {
+            Ok(zbus::zvariant::OwnedObjectPath::try_from(path.as_str()).unwrap())
+        } else {
+            Err(zbus::fdo::Error::Failed(format!("Unit {name} not loaded.")))
+        }
+    }
+}
+
+struct MockSystemdUnit {
+    transient: bool,
+}
+
+#[zbus::interface(name = "org.freedesktop.systemd1.Unit")]
+impl MockSystemdUnit {
+    #[zbus(property)]
+    async fn transient(&self) -> bool {
+        self.transient
+    }
+}
+
+struct MockSystemdService {
+    slice: String,
+}
+
+#[zbus::interface(name = "org.freedesktop.systemd1.Service")]
+impl MockSystemdService {
+    #[zbus(property)]
+    async fn slice(&self) -> String {
+        self.slice.clone()
+    }
+}
+
+struct MockSystemdScope {
+    slice: String,
+}
+
+#[zbus::interface(name = "org.freedesktop.systemd1.Scope")]
+impl MockSystemdScope {
+    #[zbus(property)]
+    async fn slice(&self) -> String {
+        self.slice.clone()
+    }
+}
+
+async fn wait_for_systemd_bus_disappearance(conn: &zbus::Connection) {
+    let dbus_proxy = zbus::fdo::DBusProxy::new(conn)
+        .await
+        .expect("DBusProxy init");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let has_owner = dbus_proxy
+            .name_has_owner("org.freedesktop.systemd1".try_into().expect("bus name"))
+            .await
+            .expect("name_has_owner");
+        if !has_owner {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for org.freedesktop.systemd1 disappearance"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+async fn run_isolated_services_dbus_suite() {
+    use crate::exec::{reset_spawn_count, spawn_count};
+    use crate::services::{
+        check_failed_services, get_transient_desktop_app_units, query_failed_units,
+        set_test_dbus_addresses,
+    };
+    use std::sync::{Arc, Mutex};
+
+    let sys_addr = std::env::var("DBUS_SYSTEM_BUS_ADDRESS").expect("DBUS_SYSTEM_BUS_ADDRESS");
+    let usr_addr = std::env::var("DBUS_SESSION_BUS_ADDRESS").expect("DBUS_SESSION_BUS_ADDRESS");
+    let _addr_guard = TestDbusAddressesGuard;
+    set_test_dbus_addresses(Some(sys_addr.clone()), Some(usr_addr.clone()));
+    reset_spawn_count();
+
+    let sys_obs = zbus::connection::Builder::address(sys_addr.as_str())
+        .expect("sys observer addr")
+        .build()
+        .await
+        .expect("sys observer connect");
+    let usr_obs = zbus::connection::Builder::address(usr_addr.as_str())
+        .expect("usr observer addr")
+        .build()
+        .await
+        .expect("usr observer connect");
+
+    // 1. Both buses have no org.freedesktop.systemd1 owner -> user_manager_available == false
+    let s1 = check_failed_services().await;
+    assert!(s1.system.is_empty());
+    assert!(s1.user.is_empty());
+    assert!(!s1.user_manager_available);
+    assert!(query_failed_units(false).await.is_err());
+    assert!(query_failed_units(true).await.is_err());
+    assert_eq!(spawn_count(), 0);
+
+    // 2. System bus has failed unit; user D-Bus manager absent -> user_manager_available == false
+    let sys_units = Arc::new(Mutex::new(vec![(
+        "ntpd.service".to_string(),
+        "/org/freedesktop/systemd1/unit/ntpd_2eservice".to_string(),
+    )]));
+    let sys_conn = zbus::connection::Builder::address(sys_addr.as_str())
+        .expect("sys mock addr")
+        .name("org.freedesktop.systemd1")
+        .expect("sys mock name")
+        .serve_at(
+            "/org/freedesktop/systemd1",
+            MockSystemdManager {
+                failed_units: Arc::clone(&sys_units),
+            },
+        )
+        .expect("serve sys manager")
+        .build()
+        .await
+        .expect("sys mock build");
+
+    let s2 = check_failed_services().await;
+    assert_eq!(s2.system, vec!["ntpd.service"]);
+    assert!(s2.user.is_empty());
+    assert!(!s2.user_manager_available);
+    assert_eq!(spawn_count(), 0);
+
+    // 3. Clean 0 failed on both buses -> user_manager_available == true (distinct from absent!)
+    sys_units.lock().expect("clear sys").clear();
+    let usr_units = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+    let usr_conn = zbus::connection::Builder::address(usr_addr.as_str())
+        .expect("usr mock addr")
+        .name("org.freedesktop.systemd1")
+        .expect("usr mock name")
+        .serve_at(
+            "/org/freedesktop/systemd1",
+            MockSystemdManager {
+                failed_units: Arc::clone(&usr_units),
+            },
+        )
+        .expect("serve usr manager")
+        .build()
+        .await
+        .expect("usr mock build");
+
+    let s3 = check_failed_services().await;
+    assert!(s3.system.is_empty());
+    assert!(s3.user.is_empty());
+    assert!(s3.user_manager_available);
+    assert_eq!(spawn_count(), 0);
+
+    // 4. Multi-item failures + transient .service/.scope filtering + fail-safe missing props
+    *sys_units.lock().expect("set sys failed") = vec![
+        (
+            "ntpd.service".to_string(),
+            "/org/freedesktop/systemd1/unit/ntpd_2eservice".to_string(),
+        ),
+        (
+            "sshd.service".to_string(),
+            "/org/freedesktop/systemd1/unit/sshd_2eservice".to_string(),
+        ),
+    ];
+
+    let unit_defs = [
+        (
+            "app-firefox@1000.service",
+            "/org/freedesktop/systemd1/unit/app_firefox_1000_service",
+            Some((true, "app.slice", true)),
+        ),
+        (
+            "app-dolphin@2000.scope",
+            "/org/freedesktop/systemd1/unit/app_dolphin_2000_scope",
+            Some((true, "app.slice", false)),
+        ),
+        (
+            "app-backup.service",
+            "/org/freedesktop/systemd1/unit/app_backup_service",
+            Some((false, "app.slice", true)),
+        ),
+        (
+            "app-wrong-slice@3000.scope",
+            "/org/freedesktop/systemd1/unit/app_wrong_slice_3000_scope",
+            Some((true, "session.slice", false)),
+        ),
+        (
+            "custom-transient.service",
+            "/org/freedesktop/systemd1/unit/custom_transient_service",
+            Some((true, "app.slice", true)),
+        ),
+        (
+            "app-missing-props@4000.service",
+            "/org/freedesktop/systemd1/unit/app_missing_props_4000_service",
+            None,
+        ),
+        (
+            "syncthing.service",
+            "/org/freedesktop/systemd1/unit/syncthing_service",
+            Some((false, "background.slice", true)),
+        ),
+    ];
+
+    {
+        {
+            let mut locked = usr_units.lock().expect("set usr failed");
+            for (name, path, _) in &unit_defs {
+                locked.push(((*name).to_string(), (*path).to_string()));
+            }
+        }
+        let srv = usr_conn.object_server();
+        for (_name, path, props) in &unit_defs {
+            if let Some((transient, slice, is_service)) = props {
+                srv.at(
+                    *path,
+                    MockSystemdUnit {
+                        transient: *transient,
+                    },
+                )
+                .await
+                .expect("register unit iface");
+                if *is_service {
+                    srv.at(
+                        *path,
+                        MockSystemdService {
+                            slice: (*slice).to_string(),
+                        },
+                    )
+                    .await
+                    .expect("register service iface");
+                } else {
+                    srv.at(
+                        *path,
+                        MockSystemdScope {
+                            slice: (*slice).to_string(),
+                        },
+                    )
+                    .await
+                    .expect("register scope iface");
+                }
+            }
+        }
+    }
+
+    let raw_user = query_failed_units(true)
+        .await
+        .expect("query_failed_units(true)");
+    assert_eq!(
+        raw_user,
+        vec![
+            "app-firefox@1000.service",
+            "app-dolphin@2000.scope",
+            "app-backup.service",
+            "app-wrong-slice@3000.scope",
+            "custom-transient.service",
+            "app-missing-props@4000.service",
+            "syncthing.service",
+        ]
+    );
+
+    let s4 = check_failed_services().await;
+    assert!(s4.user_manager_available);
+    assert_eq!(s4.system, vec!["ntpd.service", "sshd.service"]);
+    assert_eq!(
+        s4.user,
+        vec![
+            "app-backup.service",
+            "app-wrong-slice@3000.scope",
+            "custom-transient.service",
+            "app-missing-props@4000.service",
+            "syncthing.service",
+        ]
+    );
+
+    let tr_set = get_transient_desktop_app_units(&[
+        "app-firefox@1000.service".into(),
+        "app-dolphin@2000.scope".into(),
+        "app-backup.service".into(),
+        "app-wrong-slice@3000.scope".into(),
+        "app-missing-unit@999.service".into(),
+        "syncthing.service".into(),
+    ])
+    .await;
+    assert_eq!(tr_set.len(), 2);
+    assert!(tr_set.contains("app-firefox@1000.service"));
+    assert!(tr_set.contains("app-dolphin@2000.scope"));
+    assert_eq!(spawn_count(), 0);
+
+    // 5. System bus manager unavailable while user bus manager remains available
+    drop(sys_conn);
+    wait_for_systemd_bus_disappearance(&sys_obs).await;
+    *usr_units.lock().expect("set single user unit") = vec![(
+        "syncthing.service".to_string(),
+        "/org/freedesktop/systemd1/unit/syncthing_service".to_string(),
+    )];
+    let s5 = check_failed_services().await;
+    assert!(s5.system.is_empty());
+    assert_eq!(s5.user, vec!["syncthing.service"]);
+    assert!(s5.user_manager_available);
+    assert_eq!(spawn_count(), 0);
+
+    // 6. User bus manager vanishes -> user_manager_available == false
+    drop(usr_conn);
+    wait_for_systemd_bus_disappearance(&usr_obs).await;
+    let s6 = check_failed_services().await;
+    assert!(s6.system.is_empty());
+    assert!(s6.user.is_empty());
+    assert!(!s6.user_manager_available);
+    assert_eq!(spawn_count(), 0);
+}
+
+#[test]
+fn test_services_dbus_isolated_system_and_user() {
+    match std::env::var("SYSPILOT_DBUS_SERVICES_ISOLATED").as_deref() {
+        Ok("both") => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build current_thread runtime for isolated services D-Bus test");
+            rt.block_on(run_isolated_services_dbus_suite());
+        }
+        Ok("sys") => {
+            let sys_addr =
+                std::env::var("DBUS_SESSION_BUS_ADDRESS").expect("isolated sys bus address");
+            let usr_conf = std::env::var("SYSPILOT_DBUS_USR_CONF").expect("isolated usr conf path");
+            let exe = std::env::current_exe().expect("resolve current test executable");
+            let mut cmd = crate::exec::new_std_command("/usr/bin/dbus-run-session");
+            cmd.arg("--config-file")
+                .arg(&usr_conf)
+                .arg("--")
+                .arg(&exe)
+                .arg("--exact")
+                .arg("tests::test_services_dbus_isolated_system_and_user")
+                .arg("--nocapture")
+                .env("DBUS_SYSTEM_BUS_ADDRESS", sys_addr)
+                .env("SYSPILOT_DBUS_SERVICES_ISOLATED", "both")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            let guard = IsolatedChildGuard(Some(cmd.spawn().expect("spawn user dbus-run-session")));
+            let output = guard
+                .wait_with_output()
+                .expect("wait user dbus-run-session");
+            assert!(
+                output.status.success(),
+                "isolated user dbus-run-session failed ({:?}):\nstdout:\n{}\nstderr:\n{}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        _ => {
+            let tmp = tempfile::tempdir().expect("create temp dir for isolated D-Bus configs");
+            let sys_conf = tmp.path().join("sys.conf");
+            let usr_conf = tmp.path().join("usr.conf");
+            std::fs::write(&sys_conf, ISOLATED_SYSTEMD_DBUS_CONFIG).expect("write sys.conf");
+            std::fs::write(&usr_conf, ISOLATED_SYSTEMD_DBUS_CONFIG).expect("write usr.conf");
+            let exe = std::env::current_exe().expect("resolve current test executable");
+            let mut cmd = crate::exec::new_std_command("/usr/bin/dbus-run-session");
+            cmd.arg("--config-file")
+                .arg(&sys_conf)
+                .arg("--")
+                .arg(&exe)
+                .arg("--exact")
+                .arg("tests::test_services_dbus_isolated_system_and_user")
+                .arg("--nocapture")
+                .env("SYSPILOT_DBUS_SERVICES_ISOLATED", "sys")
+                .env("SYSPILOT_DBUS_USR_CONF", &usr_conf)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            let guard = IsolatedChildGuard(Some(cmd.spawn().expect("spawn sys dbus-run-session")));
+            let output = guard.wait_with_output().expect("wait sys dbus-run-session");
+            assert!(
+                output.status.success(),
+                "isolated sys dbus-run-session failed ({:?}):\nstdout:\n{}\nstderr:\n{}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 }

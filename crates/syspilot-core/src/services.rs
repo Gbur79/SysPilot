@@ -2,22 +2,43 @@ use crate::models::FailedServicesStatus;
 use crate::sys_root::sub_path;
 #[cfg(test)]
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
-#[cfg(test)]
-use std::path::PathBuf;
-use std::process::Stdio;
 use std::time::Duration;
 use tokio::time::timeout;
+use zbus::zvariant::OwnedObjectPath;
+
+const SYSTEMD_DEST: &str = "org.freedesktop.systemd1";
+const SYSTEMD_MANAGER_PATH: &str = "/org/freedesktop/systemd1";
+const SYSTEMD_MANAGER_IFACE: &str = "org.freedesktop.systemd1.Manager";
+const SYSTEMD_UNIT_IFACE: &str = "org.freedesktop.systemd1.Unit";
+const SYSTEMD_SERVICE_IFACE: &str = "org.freedesktop.systemd1.Service";
+const SYSTEMD_SCOPE_IFACE: &str = "org.freedesktop.systemd1.Scope";
+const DBUS_QUERY_TIMEOUT: Duration = Duration::from_millis(1500);
+const TRANSIENT_QUERY_TIMEOUT: Duration = Duration::from_millis(1000);
+
+pub type SystemdUnitRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    OwnedObjectPath,
+    u32,
+    String,
+    OwnedObjectPath,
+);
 
 #[cfg(test)]
 thread_local! {
-    static TEST_SYSTEMCTL_BIN: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static TEST_DBUS_ADDRESSES: RefCell<(Option<String>, Option<String>)> =
+        const { RefCell::new((None, None)) };
 }
 
 #[cfg(test)]
-pub fn set_test_systemctl_bin(bin: Option<PathBuf>) {
-    TEST_SYSTEMCTL_BIN.with(|b| *b.borrow_mut() = bin);
+pub fn set_test_dbus_addresses(system: Option<String>, user: Option<String>) {
+    TEST_DBUS_ADDRESSES.with(|addrs| *addrs.borrow_mut() = (system, user));
 }
 
 pub fn user_systemd_available_at(root: &Path, xdg_runtime_dir: Option<&Path>) -> bool {
@@ -35,183 +56,197 @@ pub fn is_candidate_app_unit(unit: &str) -> bool {
     lower.starts_with("app-") && (lower.ends_with(".service") || lower.ends_with(".scope"))
 }
 
-pub fn parse_systemctl_show_transient(
-    stdout: &str,
-    candidates: &HashSet<String>,
-) -> HashSet<String> {
-    let mut ignored = HashSet::new();
-    let mut properties: HashMap<String, String> = HashMap::new();
-
-    for line in stdout.lines().chain(std::iter::once("")) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            if let Some(unit_id) = properties.get("Id") {
-                if candidates.contains(unit_id)
-                    && properties.get("Transient").map(|s| s.as_str()) == Some("yes")
-                    && properties.get("Slice").map(|s| s.as_str()) == Some("app.slice")
-                {
-                    ignored.insert(unit_id.clone());
-                }
-            }
-            properties.clear();
-            continue;
-        }
-
-        if let Some((k, v)) = trimmed.split_once('=') {
-            properties.insert(k.trim().to_string(), v.trim().to_string());
-        }
+pub fn unit_slice_interface(unit: &str) -> Option<&'static str> {
+    let lower = unit.trim().to_ascii_lowercase();
+    if lower.ends_with(".service") {
+        Some(SYSTEMD_SERVICE_IFACE)
+    } else if lower.ends_with(".scope") {
+        Some(SYSTEMD_SCOPE_IFACE)
+    } else {
+        None
     }
+}
 
-    ignored
+async fn build_systemd_proxy(
+    conn: &zbus::Connection,
+    path: zbus::zvariant::ObjectPath<'_>,
+    iface: &'static str,
+) -> Result<zbus::Proxy<'static>, String> {
+    zbus::proxy::Builder::<zbus::Proxy<'static>>::new(conn)
+        .destination(SYSTEMD_DEST)
+        .map_err(|e| format!("invalid systemd D-Bus destination: {e}"))?
+        .path(path.into_owned())
+        .map_err(|e| format!("invalid systemd D-Bus path: {e}"))?
+        .interface(iface)
+        .map_err(|e| format!("invalid systemd D-Bus interface: {e}"))?
+        .cache_properties(zbus::proxy::CacheProperties::No)
+        .build()
+        .await
+        .map_err(|e| format!("D-Bus proxy build failed: {e}"))
+}
+
+async fn connect_builder(
+    builder: zbus::Result<zbus::connection::Builder<'_>>,
+) -> Result<zbus::Connection, String> {
+    let builder = builder.map_err(|e| format!("D-Bus address resolution failed: {e}"))?;
+    timeout(DBUS_QUERY_TIMEOUT, builder.build())
+        .await
+        .map_err(|_| "D-Bus connect timed out".to_string())?
+        .map_err(|e| format!("D-Bus connect failed: {e}"))
+}
+
+#[cfg(test)]
+async fn connect_bus(user_mode: bool) -> Result<zbus::Connection, String> {
+    let Some(addr) = TEST_DBUS_ADDRESSES.with(|addrs| {
+        let pair = addrs.borrow();
+        if user_mode {
+            pair.1.clone()
+        } else {
+            pair.0.clone()
+        }
+    }) else {
+        return Err("test D-Bus address not configured".to_string());
+    };
+    connect_builder(zbus::connection::Builder::address(addr.as_str())).await
+}
+
+#[cfg(not(test))]
+async fn connect_bus(user_mode: bool) -> Result<zbus::Connection, String> {
+    let builder = if user_mode {
+        zbus::connection::Builder::session()
+    } else {
+        zbus::connection::Builder::system()
+    };
+    connect_builder(builder).await
+}
+
+async fn is_transient_desktop_app_unit_on(
+    conn: &zbus::Connection,
+    unit_name: &str,
+    unit_path: &OwnedObjectPath,
+) -> bool {
+    let Some(slice_iface) = unit_slice_interface(unit_name) else {
+        return false;
+    };
+    let Ok(unit_proxy) = build_systemd_proxy(conn, unit_path.as_ref(), SYSTEMD_UNIT_IFACE).await
+    else {
+        return false;
+    };
+    let Ok(true) = timeout(
+        TRANSIENT_QUERY_TIMEOUT,
+        unit_proxy.get_property::<bool>("Transient"),
+    )
+    .await
+    .unwrap_or(Ok(false)) else {
+        return false;
+    };
+    let Ok(slice_proxy) = build_systemd_proxy(conn, unit_path.as_ref(), slice_iface).await else {
+        return false;
+    };
+    matches!(
+        timeout(
+            TRANSIENT_QUERY_TIMEOUT,
+            slice_proxy.get_property::<String>("Slice"),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .as_deref(),
+        Some("app.slice")
+    )
 }
 
 pub async fn get_transient_desktop_app_units(unit_names: &[String]) -> HashSet<String> {
-    let candidates: HashSet<String> = unit_names
+    let candidates: Vec<&str> = unit_names
         .iter()
+        .map(String::as_str)
         .filter(|u| is_candidate_app_unit(u))
-        .cloned()
         .collect();
 
     if candidates.is_empty() {
         return HashSet::new();
     }
 
-    let mut args = vec![
-        "--user".to_string(),
-        "show".to_string(),
-        "--no-pager".to_string(),
-        "--property=Id".to_string(),
-        "--property=Transient".to_string(),
-        "--property=Slice".to_string(),
-    ];
-    args.extend(candidates.iter().cloned());
-
-    let bin = {
-        #[cfg(test)]
-        {
-            TEST_SYSTEMCTL_BIN
-                .with(|b| b.borrow().clone())
-                .map(|p| p.into_os_string())
-                .unwrap_or_else(|| std::ffi::OsString::from("systemctl"))
-        }
-        #[cfg(not(test))]
-        {
-            std::ffi::OsString::from("systemctl")
-        }
+    let Ok(conn) = connect_bus(true).await else {
+        return HashSet::new();
     };
-    let run_cmd = async {
-        let mut cmd = crate::exec::new_tokio_command(bin);
-        cmd.args(&args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        cmd.output().await
+    let manager_path = zbus::zvariant::ObjectPath::from_static_str_unchecked(SYSTEMD_MANAGER_PATH);
+    let Ok(manager_proxy) = build_systemd_proxy(&conn, manager_path, SYSTEMD_MANAGER_IFACE).await
+    else {
+        return HashSet::new();
     };
 
-    match timeout(Duration::from_millis(1000), run_cmd).await {
-        Ok(Ok(output)) if output.status.success() => {
-            let stdout_str = String::from_utf8_lossy(&output.stdout);
-            parse_systemctl_show_transient(&stdout_str, &candidates)
+    let mut ignored = HashSet::new();
+    for unit_name in candidates {
+        let Ok(Ok(unit_path)) = timeout(
+            TRANSIENT_QUERY_TIMEOUT,
+            manager_proxy.call::<_, _, OwnedObjectPath>("GetUnit", &(unit_name,)),
+        )
+        .await
+        else {
+            continue;
+        };
+        if is_transient_desktop_app_unit_on(&conn, unit_name, &unit_path).await {
+            ignored.insert(unit_name.to_string());
         }
-        _ => HashSet::new(),
     }
+    ignored
 }
 
-pub fn parse_systemctl_failed_units(stdout: &str) -> Result<Vec<String>, String> {
-    let mut units = Vec::new();
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let lower = trimmed.to_ascii_lowercase();
-        if lower.starts_with("failed to ")
-            || lower.starts_with("error:")
-            || lower.starts_with("system has not been booted")
-        {
-            return Err(format!("systemctl error on stdout: {trimmed}"));
-        }
-        let cleaned = trimmed
-            .strip_prefix('●')
-            .map(|s| s.trim_start())
-            .unwrap_or(trimmed);
-        let mut parts = cleaned.split_whitespace();
-        let Some(unit) = parts.next() else {
-            return Err(format!("malformed systemctl unit line: {trimmed}"));
-        };
-        let Some(_load_state) = parts.next() else {
-            return Err(format!("malformed systemctl unit line: {trimmed}"));
-        };
-        if !unit.contains('.') {
-            return Err(format!("malformed systemctl unit line: {trimmed}"));
-        }
-        units.push(unit.to_string());
-    }
-    Ok(units)
+pub async fn query_failed_unit_entries_on(
+    conn: &zbus::Connection,
+) -> Result<Vec<(String, OwnedObjectPath)>, String> {
+    let manager_path = zbus::zvariant::ObjectPath::from_static_str_unchecked(SYSTEMD_MANAGER_PATH);
+    let proxy = build_systemd_proxy(conn, manager_path, SYSTEMD_MANAGER_IFACE).await?;
+    let rows: Vec<SystemdUnitRow> = timeout(
+        DBUS_QUERY_TIMEOUT,
+        proxy.call("ListUnitsFiltered", &(&["failed"][..],)),
+    )
+    .await
+    .map_err(|_| "systemd D-Bus ListUnitsFiltered timed out".to_string())?
+    .map_err(|e| format!("systemd D-Bus ListUnitsFiltered failed: {e}"))?;
+
+    Ok(rows.into_iter().map(|row| (row.0, row.6)).collect())
 }
 
 pub async fn query_failed_units(user_mode: bool) -> Result<Vec<String>, String> {
-    let mut args = vec!["--failed", "--no-legend", "--plain"];
-    if user_mode {
-        args.insert(0, "--user");
-    }
-
-    let bin = {
-        #[cfg(test)]
-        {
-            TEST_SYSTEMCTL_BIN
-                .with(|b| b.borrow().clone())
-                .map(|p| p.into_os_string())
-                .unwrap_or_else(|| std::ffi::OsString::from("systemctl"))
-        }
-        #[cfg(not(test))]
-        {
-            std::ffi::OsString::from("systemctl")
-        }
-    };
-    let run_cmd = async {
-        let mut cmd = crate::exec::new_tokio_command(bin);
-        cmd.args(&args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        cmd.output().await
-    };
-
-    match timeout(Duration::from_millis(1500), run_cmd).await {
-        Ok(Ok(output)) => {
-            if output.status.success() {
-                let stdout_str = String::from_utf8_lossy(&output.stdout);
-                parse_systemctl_failed_units(&stdout_str)
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let err_msg = if stderr.is_empty() {
-                    format!("systemctl failed with exit code {:?}", output.status.code())
-                } else {
-                    stderr
-                };
-                Err(err_msg)
-            }
-        }
-        Ok(Err(e)) => Err(format!("failed to spawn systemctl: {e}")),
-        Err(_) => Err("systemctl query timed out".to_string()),
-    }
+    let conn = connect_bus(user_mode).await?;
+    let entries = query_failed_unit_entries_on(&conn).await?;
+    Ok(entries.into_iter().map(|(name, _)| name).collect())
 }
 
 pub async fn check_failed_services() -> FailedServicesStatus {
-    let system = query_failed_units(false).await.unwrap_or_default();
-    let (user, user_manager_available) = match query_failed_units(true).await {
-        Ok(raw_user) => {
-            let ignored_user = get_transient_desktop_app_units(&raw_user).await;
-            let user = raw_user
-                .into_iter()
-                .filter(|u| !ignored_user.contains(u))
-                .collect();
-            (user, true)
+    let system = match query_failed_units(false).await {
+        Ok(units) => units,
+        Err(err) => {
+            eprintln!("syspilot-core: system systemd D-Bus query failed: {err}");
+            Vec::new()
         }
-        Err(_) => (Vec::new(), false),
+    };
+    let (user, user_manager_available) = match connect_bus(true).await {
+        Ok(user_conn) => match query_failed_unit_entries_on(&user_conn).await {
+            Ok(entries) => {
+                let mut user = Vec::new();
+                for (unit_name, unit_path) in entries {
+                    if is_candidate_app_unit(&unit_name)
+                        && is_transient_desktop_app_unit_on(&user_conn, &unit_name, &unit_path)
+                            .await
+                    {
+                        continue;
+                    }
+                    user.push(unit_name);
+                }
+                (user, true)
+            }
+            Err(err) => {
+                eprintln!("syspilot-core: user systemd D-Bus ListUnitsFiltered failed: {err}");
+                (Vec::new(), false)
+            }
+        },
+        Err(err) => {
+            eprintln!("syspilot-core: user systemd D-Bus unavailable: {err}");
+            (Vec::new(), false)
+        }
     };
 
     FailedServicesStatus {

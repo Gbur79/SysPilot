@@ -5351,6 +5351,191 @@ fn test_build_ai_telemetry_markdown_standalone_tools() {
     assert!(md_c.contains("- **Standalone Tools**: 1 pending (standalone tools)"));
 }
 
+#[test]
+fn test_patch050_sanitizer_alpm_packages_and_gpu_crash_bundle_matrix() {
+    use crate::copilot::{
+        build_ai_telemetry_markdown_at, collect_gpu_kernel_packages_at, export_gpu_crash_bundle_at,
+        sanitize_telemetry_text_at, set_test_copilot_journalctl_bin,
+    };
+    use crate::exec::{reset_spawn_count, spawn_count};
+    use crate::mock_rig::MockRig;
+    use std::os::unix::fs::PermissionsExt;
+
+    let rig = MockRig::endeavouros_nvidia_dkms();
+    rig.write("/etc/hostname", "archbox\n");
+    rig.write("/sys/class/dmi/id/bios_version", "F12\n");
+    rig.write("/sys/class/dmi/id/bios_date", "05/01/2026\n");
+    rig.write("/sys/bus/pci/devices/0000:01:00.0/class", "0x030000\n");
+    rig.write(
+        "/sys/bus/pci/devices/0000:01:00.0/current_link_width",
+        "16\n",
+    );
+    rig.write("/sys/bus/pci/devices/0000:01:00.0/max_link_width", "16\n");
+    rig.write(
+        "/sys/bus/pci/devices/0000:01:00.0/current_link_speed",
+        "8.0 GT/s PCIe\n",
+    );
+    rig.write(
+        "/sys/bus/pci/devices/0000:01:00.0/max_link_speed",
+        "8.0 GT/s PCIe\n",
+    );
+    rig.write(
+        "/var/lib/pacman/local/lib32-nvidia-580xx-utils-580.95.05-1/desc",
+        "%NAME%\nlib32-nvidia-580xx-utils\n\n%VERSION%\n580.95.05-1\n",
+    );
+    rig.write(
+        "/var/lib/pacman/local/linux-zen-7.2.14.zen1-1/desc",
+        "%NAME%\nlinux-zen\n\n%VERSION%\n7.2.14.zen1-1\n",
+    );
+    rig.write(
+        "/var/lib/pacman/local/bash-5.2-1/desc",
+        "%NAME%\nbash\n\n%VERSION%\n5.2-1\n",
+    );
+    let mesa_prefix = "%NAME%\nmesa\n\n%VERSION%\n24.0-1\n";
+    let exact_desc = format!("{mesa_prefix}{}", " ".repeat(8192 - mesa_prefix.len()));
+    assert_eq!(exact_desc.len(), 8192);
+    rig.write("/var/lib/pacman/local/mesa-24.0-1/desc", exact_desc);
+    rig.write(
+        "/var/lib/pacman/local/vulkan-tools-1.0-1/desc",
+        format!(
+            "%NAME%\nvulkan-tools\n\n%VERSION%\n1.0-1\n{}",
+            " ".repeat(8200)
+        ),
+    );
+
+    let pkgs = collect_gpu_kernel_packages_at(rig.root());
+    assert_eq!(
+        pkgs,
+        vec![
+            "lib32-nvidia-580xx-utils=580.95.05-1".to_string(),
+            "linux-zen=7.2.14.zen1-1".to_string(),
+            "mesa=24.0-1".to_string(),
+        ]
+    );
+
+    let raw = concat!(
+        "Host archbox architecture /home/john.doe_1-test/notes\n",
+        "NIC aa:bb:cc:dd:ee:ff BDF 0000:01:00.0 time 10:15:23\n",
+        "BadMAC xaa:bb:cc:dd:ee:ff aa:bb:cc:dd:ee:ffx aa:bb:cc:dd:ee:ff:00 az:bb:cc:dd:ee:ff aa-bb:cc:dd:ee:ff\n",
+        "IP 10.42.0.99 max 255.255.255.254 local 127.0.0.1 zero 0.0.0.0 bad 256.1.1.1 five 1.2.3.4.5 ver 580.95.05\n",
+        "UUID 550e8400-e29b-41d4-a716-446655440000\n",
+        "BadUUID a550e8400-e29b-41d4-a716-446655440000 550e8400-e29b-41d4-a716-446655440000a 550e8400x-e29b-41d4-a716-446655440000 550e8400-e29b-41d4-a716-44665544000g\n",
+        "machine-id: deadbeef123456\n",
+        "Serial: SN-998877\n"
+    );
+    let clean = sanitize_telemetry_text_at(rig.root(), raw);
+    assert!(clean.contains("Host <HOST> architecture /home/<USER>/notes"));
+    assert!(clean.contains("NIC <MAC> BDF 0000:01:00.0 time 10:15:23"));
+    assert!(clean.contains("BadMAC xaa:bb:cc:dd:ee:ff aa:bb:cc:dd:ee:ffx aa:bb:cc:dd:ee:ff:00 az:bb:cc:dd:ee:ff aa-bb:cc:dd:ee:ff"));
+    assert!(clean.contains(
+        "IP <IP> max <IP> local 127.0.0.1 zero 0.0.0.0 bad 256.1.1.1 five 1.2.3.4.5 ver 580.95.05"
+    ));
+    assert!(clean.contains("UUID <UUID>\n"));
+    assert!(clean.contains(
+        "BadUUID a550e8400-e29b-41d4-a716-446655440000 550e8400-e29b-41d4-a716-446655440000a"
+    ));
+    assert!(clean.contains("machine-id: <REDACTED>"));
+    assert!(clean.contains("Serial: <REDACTED>"));
+    assert_eq!(sanitize_telemetry_text_at(rig.root(), &clean), clean);
+
+    let h_rig = MockRig::empty();
+    h_rig.write("/etc/hostname", "eos\n");
+    assert_eq!(sanitize_telemetry_text_at(h_rig.root(), "eos"), "<HOST>");
+    assert_eq!(sanitize_telemetry_text_at(h_rig.root(), "eo"), "eo");
+    assert_eq!(
+        sanitize_telemetry_text_at(h_rig.root(), "eos node"),
+        "<HOST> node"
+    );
+    h_rig.write("/etc/hostname", "ab\n");
+    assert_eq!(
+        sanitize_telemetry_text_at(h_rig.root(), "ab node"),
+        "ab node"
+    );
+    h_rig.write("/etc/hostname", "høst\n");
+    assert_eq!(
+        sanitize_telemetry_text_at(h_rig.root(), "høst node"),
+        "høst node"
+    );
+
+    rig.write("/sys/bus/pci/devices/0000:02:00.0/class", "0x030000\n");
+    rig.write(
+        "/sys/bus/pci/devices/0000:02:00.0/power/runtime_status",
+        "suspended\n",
+    );
+
+    let status_path = rig.root().join("status.json");
+    std::fs::write(
+        &status_path,
+        r#"{"schema_version":"1.0","status":"PRE_FLIGHT_ATTENTION","updates":{"total":0,"core_count":0,"regular_count":0,"aur_count":0},"sys_health":{"available":true,"warnings":3,"actionable_remediations":[{"code":"GPU_BUS_DROP_HW_SUSPECT","summary":"Xid 79"},{"code":"PCIE_LINK_DEGRADED","summary":"x4 < x16"},{"code":"PREV_BOOT_GPU_FAULT","summary":"ring timeout"}]}}"#,
+    )
+    .unwrap();
+    reset_spawn_count();
+    let md = build_ai_telemetry_markdown_at(rig.root(), &status_path);
+    assert_eq!(spawn_count(), 0);
+    assert!(md.contains("DMI BIOS**: F12 (05/01/2026)"));
+    assert!(md.contains("PCIe Link (0000:01:00.0)**: width=x16/x16"));
+    assert!(
+        md.contains("PCIe Link (0000:02:00.0)**: width=unknown, speed= / , state=D3cold suspended")
+    );
+    assert!(md.contains("linux-zen=7.2.14.zen1-1"));
+    assert!(md.contains("GPU/PCIe Alerts**: GPU_BUS_DROP_HW_SUSPECT: Xid 79; PCIE_LINK_DEGRADED: x4 < x16; PREV_BOOT_GPU_FAULT: ring timeout"));
+
+    let exact = "a".repeat(65_536);
+    assert_eq!(crate::copilot::cap_bundle_markdown(exact.clone()), exact);
+    let exact_over = "a".repeat(65_537);
+    assert_eq!(
+        crate::copilot::cap_bundle_markdown(exact_over).len(),
+        65_536
+    );
+    let over_utf8 = format!("{}•{}", "a".repeat(65_505), "b".repeat(40));
+    let capped = crate::copilot::cap_bundle_markdown(over_utf8);
+    assert!(capped.len() <= 65_536);
+    assert!(capped.ends_with("[TRUNCATED TO 64 KiB LIMIT]\n"));
+
+    let _guard = TERMINAL_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let state_dir = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let jctl = bin_dir.path().join("mock-jctl");
+    std::fs::write(
+        &jctl,
+        "#!/usr/bin/env bash\nif [[ \"$*\" == *\"-b -1\"* ]]; then echo 'NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus on archbox'; echo 'ext4: clean'; else echo 'nvidia: module loaded'; echo 'ext4: ignored'; fi\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&jctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+    set_test_copilot_journalctl_bin(Some(Some(jctl.clone())));
+
+    let report = export_gpu_crash_bundle_at(rig.root(), &status_path, state_dir.path()).unwrap();
+    assert_eq!(report.fault_count, 1);
+    assert!(report.markdown.contains("<HOST>"));
+    assert!(!report.markdown.contains("ext4: ignored"));
+    assert!(
+        !report
+            .markdown
+            .contains(&state_dir.path().to_string_lossy().to_string())
+    );
+    let mode = std::fs::metadata(&report.bundle_path)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+
+    std::fs::write(&jctl, "#!/usr/bin/env bash\necho 'ext4: clean'\n").unwrap();
+    let clean_jctl =
+        export_gpu_crash_bundle_at(rig.root(), &status_path, state_dir.path()).unwrap();
+    assert_eq!(clean_jctl.fault_count, 0);
+    assert!(clean_jctl.markdown.contains("no GPU/PCIe fault lines"));
+
+    set_test_copilot_journalctl_bin(Some(None));
+    let no_bin = export_gpu_crash_bundle_at(rig.root(), &status_path, state_dir.path()).unwrap();
+    assert_eq!(no_bin.fault_count, 0);
+    assert!(no_bin.markdown.contains("journalctl binary unavailable"));
+
+    set_test_copilot_journalctl_bin(None);
+}
+
 #[tokio::test]
 async fn test_patch035_mirrors_discovery_probe_and_evaluation() {
     use crate::mock_rig::MockRig;

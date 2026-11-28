@@ -944,7 +944,17 @@ export component AppWindow inherits Window {
                             }
 
                             LcarsMaintenanceRow {
-                                code: "05 // CUSTOM";
+                                code: "05 // GPU TRIAGE";
+                                title: "GPU & Crash Triage Bundle";
+                                description: "Collects sanitized -b 0/-b -1 GPU/PCIe logs, BIOS, and driver versions.";
+                                action-text: "EXPORT BUNDLE";
+                                accent-color: Theme.okuda-amber;
+                                action-color: Theme.okuda-orange;
+                                clicked => { root.copilot_playbook_clicked("gpu_triage"); }
+                            }
+
+                            LcarsMaintenanceRow {
+                                code: "06 // CUSTOM";
                                 title: "User Tactical Playbooks (playbooks)";
                                 description: root.custom_playbook_desc;
                                 action-text: "RUN SCRIPT";
@@ -1533,6 +1543,14 @@ export component AppWindow inherits Window {
                             action-text: "Repair Runner";
                             action-color: Theme.status-cyan;
                             clicked => { root.copilot_playbook_clicked("faf"); }
+                        }
+
+                        MaintenanceCard {
+                            title: "🖥 GPU & Crash Triage (Sanitized Bundle)";
+                            description: "Exports sanitized kernel crash logs (-b 0/-b -1), PCIe link state, BIOS, and GPU packages for AI/support.";
+                            action-text: "Export & Triage";
+                            action-color: Theme.status-amber;
+                            clicked => { root.copilot_playbook_clicked("gpu_triage"); }
                         }
 
                         MaintenanceCard {

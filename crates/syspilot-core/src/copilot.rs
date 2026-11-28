@@ -1,9 +1,28 @@
-use std::fs;
+#[cfg(test)]
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
 use tokio::time::timeout;
+
+const MAX_ALPM_DESC_BYTES: u64 = 8192;
+const MAX_BUNDLE_BYTES: usize = 65_536;
+const BUNDLE_TRUNCATED_SUFFIX: &str = "\n\n[TRUNCATED TO 64 KiB LIMIT]\n";
+
+#[cfg(test)]
+thread_local! {
+    static TEST_COPILOT_JOURNALCTL_BIN: RefCell<Option<Option<PathBuf>>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn set_test_copilot_journalctl_bin(bin: Option<Option<PathBuf>>) {
+    TEST_COPILOT_JOURNALCTL_BIN.with(|b| *b.borrow_mut() = bin);
+}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CopilotInfo {
@@ -570,12 +589,266 @@ pub fn discover_user_playbooks() -> Vec<UserPlaybook> {
     discover_user_playbooks_at(&default_dir)
 }
 
+fn match_uuid_at(bytes: &[u8], i: usize) -> bool {
+    let Some(s) = bytes.get(i..i + 36) else {
+        return false;
+    };
+    let is_uuid_char = |b: u8| b.is_ascii_alphanumeric() || b == b'-';
+    if (i > 0 && is_uuid_char(bytes[i - 1])) || bytes.get(i + 36).is_some_and(|b| is_uuid_char(*b))
+    {
+        return false;
+    }
+    let mut pos = 0;
+    for (idx, len) in [8usize, 4, 4, 4, 12].into_iter().enumerate() {
+        if !s[pos..pos + len].iter().all(|b| b.is_ascii_hexdigit()) {
+            return false;
+        }
+        pos += len;
+        if idx < 4 {
+            if s[pos] != b'-' {
+                return false;
+            }
+            pos += 1;
+        }
+    }
+    true
+}
+
+fn match_mac_at(bytes: &[u8], i: usize) -> bool {
+    let Some(s) = bytes.get(i..i + 17) else {
+        return false;
+    };
+    let is_mac_char = |b: u8| b.is_ascii_alphanumeric() || b == b':';
+    if (i > 0 && is_mac_char(bytes[i - 1])) || bytes.get(i + 17).is_some_and(|b| is_mac_char(*b)) {
+        return false;
+    }
+    (0..6).all(|oct| {
+        let base = oct * 3;
+        s[base].is_ascii_hexdigit()
+            && s[base + 1].is_ascii_hexdigit()
+            && (oct == 5 || s[base + 2] == b':')
+    })
+}
+
+fn match_ipv4_at(bytes: &[u8], i: usize) -> Option<usize> {
+    if i > 0 && (bytes[i - 1].is_ascii_digit() || bytes[i - 1] == b'.') {
+        return None;
+    }
+    let mut idx = i;
+    let mut octets = [0u16; 4];
+    for (slot, octet) in octets.iter_mut().enumerate() {
+        let mut val = 0u16;
+        let mut count = 0usize;
+        while let Some(&b) = bytes.get(idx) {
+            if !b.is_ascii_digit() || count >= 3 {
+                break;
+            }
+            val = val * 10 + u16::from(b - b'0');
+            idx += 1;
+            count += 1;
+        }
+        if count == 0 || val > 255 {
+            return None;
+        }
+        *octet = val;
+        if slot < 3 {
+            if bytes.get(idx) != Some(&b'.') {
+                return None;
+            }
+            idx += 1;
+        }
+    }
+    if bytes
+        .get(idx)
+        .is_some_and(|b| b.is_ascii_digit() || *b == b'.')
+    {
+        return None;
+    }
+    if octets == [127, 0, 0, 1] || octets == [0, 0, 0, 0] {
+        return None;
+    }
+    Some(idx - i)
+}
+
+fn redact_home_paths(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(pos) = rest.find("/home/") {
+        out.push_str(&rest[..pos + 6]);
+        let after = &rest[pos + 6..];
+        let user_len = after
+            .bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-' || *b == b'.')
+            .count();
+        if user_len > 0 {
+            out.push_str("<USER>");
+            rest = &after[user_len..];
+        } else {
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn redact_hostname_tokens(input: &str, hostname: &str) -> String {
+    let host = hostname.trim();
+    let bytes = input.as_bytes();
+    let host_bytes = host.as_bytes();
+    if host.len() < 3 || !host.is_ascii() || bytes.len() < host_bytes.len() {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut skip_to = 0;
+    let mut last_copy = 0;
+    for i in 0..=bytes.len() - host_bytes.len() {
+        if i < skip_to {
+            continue;
+        }
+        let left_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+        let right_ok = bytes
+            .get(i + host_bytes.len())
+            .is_none_or(|b| !b.is_ascii_alphanumeric());
+        if left_ok && right_ok && bytes[i..i + host_bytes.len()].eq_ignore_ascii_case(host_bytes) {
+            out.push_str(&input[last_copy..i]);
+            out.push_str("<HOST>");
+            skip_to = i + host_bytes.len();
+            last_copy = skip_to;
+        }
+    }
+    out.push_str(&input[last_copy..]);
+    out
+}
+
+fn redact_tokens_and_lines(input: &str) -> String {
+    let mut lines_out = Vec::new();
+    for line in input.split_inclusive('\n') {
+        let has_nl = line.ends_with('\n');
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        let lower = body.to_ascii_lowercase();
+        if lower.contains("machine-id") || lower.contains("serial") {
+            if let Some(sep) = body.find([':', '=']) {
+                let mut redacted = format!("{} <REDACTED>", &body[..=sep]);
+                if has_nl {
+                    redacted.push('\n');
+                }
+                lines_out.push(redacted);
+                continue;
+            }
+        }
+        let bytes = body.as_bytes();
+        let mut out = String::with_capacity(body.len());
+        let mut last_copy = 0;
+        for i in 0..bytes.len() {
+            if match_uuid_at(bytes, i) {
+                out.push_str(&body[last_copy..i]);
+                out.push_str("<UUID>");
+                last_copy = i + 36;
+            } else if match_mac_at(bytes, i) {
+                out.push_str(&body[last_copy..i]);
+                out.push_str("<MAC>");
+                last_copy = i + 17;
+            } else if let Some(ip_len) = match_ipv4_at(bytes, i) {
+                out.push_str(&body[last_copy..i]);
+                out.push_str("<IP>");
+                last_copy = i + ip_len;
+            }
+        }
+        out.push_str(&body[last_copy..]);
+        if has_nl {
+            out.push('\n');
+        }
+        lines_out.push(out);
+    }
+    lines_out.concat()
+}
+
+pub fn sanitize_telemetry_text_at(root: &Path, input: &str) -> String {
+    let hostname = fs::read_to_string(crate::sys_root::sub_path(root, "/etc/hostname"))
+        .ok()
+        .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+        .unwrap_or_default();
+    let step1 = redact_home_paths(input);
+    let step2 = redact_hostname_tokens(&step1, &hostname);
+    redact_tokens_and_lines(&step2)
+}
+
+fn is_gpu_kernel_pkg(name: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "linux",
+        "nvidia",
+        "lib32-nvidia",
+        "mesa",
+        "lib32-mesa",
+        "vulkan-",
+        "xf86-video-",
+        "dkms",
+    ];
+    let lower = name.to_ascii_lowercase();
+    PREFIXES.iter().any(|p| lower.starts_with(p))
+}
+
+fn parse_alpm_desc_name_version(content: &str) -> Option<(String, String)> {
+    let mut name: Option<String> = None;
+    let mut version: Option<String> = None;
+    let mut lines = content.lines();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if trimmed == "%NAME%" {
+            name = lines
+                .next()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
+        } else if trimmed == "%VERSION%" {
+            version = lines
+                .next()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
+        }
+    }
+    Some((name?, version?))
+}
+
+pub fn collect_gpu_kernel_packages_at(root: &Path) -> Vec<String> {
+    let db_dir = crate::sys_root::sub_path(root, "/var/lib/pacman/local");
+    let Ok(entries) = fs::read_dir(db_dir) else {
+        return Vec::new();
+    };
+    let mut found = BTreeSet::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let desc_path = entry.path().join("desc");
+        let Ok(file) = File::open(&desc_path) else {
+            continue;
+        };
+        let mut bytes = Vec::new();
+        if file
+            .take(MAX_ALPM_DESC_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .is_err()
+            || bytes.len() as u64 > MAX_ALPM_DESC_BYTES
+        {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        if let Some((name, ver)) = parse_alpm_desc_name_version(&text)
+            && is_gpu_kernel_pkg(&name)
+        {
+            found.insert(format!("{name}={ver}"));
+        }
+    }
+    found.into_iter().take(24).collect()
+}
+
 pub fn build_ai_telemetry_markdown_at(root: &Path, status_path: &Path) -> String {
     let snap = crate::models::read_system_snapshot_or_fallback(status_path);
     let gpu = crate::models::detect_gpu_at(root);
     let safety = crate::reboot_safety::check_reboot_safety_at(root);
     let gaming = crate::gaming::check_gaming_readiness_at(root);
     let pacnew = crate::triage::find_pacnew_files_at(root);
+    let gpu_pkgs = collect_gpu_kernel_packages_at(root);
 
     let mut md = String::new();
     md.push_str("### SysPilot AI Telemetry\n");
@@ -588,6 +861,35 @@ pub fn build_ai_telemetry_markdown_at(root: &Path, status_path: &Path) -> String
         snap.os, snap.kernel
     ));
     md.push_str(&format!("- **GPU**: {}\n", gpu));
+    if let Some(bios) = &safety.bios_info {
+        md.push_str(&format!(
+            "- **DMI BIOS**: {} ({})\n",
+            bios.version, bios.date
+        ));
+    }
+    for link in &safety.pcie_links {
+        let w = match (link.current_width, link.effective_max_width) {
+            (Some(c), Some(m)) => format!("x{c}/x{m}"),
+            _ => "unknown".to_string(),
+        };
+        let state = if link.runtime_suspended {
+            "D3cold suspended"
+        } else if link.degraded {
+            link.detail.as_deref().unwrap_or("DEGRADED")
+        } else {
+            "nominal"
+        };
+        md.push_str(&format!(
+            "- **PCIe Link ({})**: width={w}, speed={} / {}, state={state}\n",
+            link.bdf, link.current_speed, link.max_speed
+        ));
+    }
+    if !gpu_pkgs.is_empty() {
+        md.push_str(&format!(
+            "- **Kernel/GPU Packages**: {}\n",
+            gpu_pkgs.join(", ")
+        ));
+    }
     md.push_str(&format!(
         "- **Updates**: {} total ({} core, {} regular, {} AUR) [State: {:?}]\n",
         snap.updates_total,
@@ -608,8 +910,8 @@ pub fn build_ai_telemetry_markdown_at(root: &Path, status_path: &Path) -> String
         ));
     }
     md.push_str(&format!(
-        "- **Reboot Safety**: Pending={}, BlackScreenRisk={}\n",
-        snap.reboot_pending, safety.black_screen_risk
+        "- **Reboot Safety**: Pending={}, BlackScreenRisk={}, PcieDegraded={}\n",
+        snap.reboot_pending, safety.black_screen_risk, safety.pcie_degraded
     ));
     if !safety.issues.is_empty() {
         md.push_str(&format!(
@@ -628,6 +930,26 @@ pub fn build_ai_telemetry_markdown_at(root: &Path, status_path: &Path) -> String
         ));
     }
     md.push_str(&format!("- **Pacnew Count**: {}\n", pacnew.len()));
+    let gpu_alerts: Vec<String> = snap
+        .actionable_remediations
+        .iter()
+        .filter(|r| {
+            r.code.as_deref().is_some_and(|c| {
+                c.starts_with("GPU_") || c.starts_with("PCIE_") || c.starts_with("PREV_BOOT_GPU")
+            })
+        })
+        .map(|r| {
+            let code = r.code.as_deref().unwrap_or("");
+            let sum = r.summary.as_deref().unwrap_or("");
+            format!("{code}: {sum}")
+        })
+        .collect();
+    if !gpu_alerts.is_empty() {
+        md.push_str(&format!(
+            "- **GPU/PCIe Alerts**: {}\n",
+            gpu_alerts.join("; ")
+        ));
+    }
     if !snap.status_reasons.is_empty() {
         md.push_str(&format!(
             "- **Status Reasons**: {}\n",
@@ -641,10 +963,220 @@ pub fn build_ai_telemetry_markdown_at(root: &Path, status_path: &Path) -> String
         let m = crate::view::format_mirrorlist_state(snap.mirrors.as_ref());
         md.push_str(&format!("- **Mirrors**: {} ({})\n", m.status, m.details));
     }
-    md
+    sanitize_telemetry_text_at(root, &md)
 }
 
 pub fn build_ai_telemetry_markdown() -> String {
     let status_path = crate::models::get_status_path();
     build_ai_telemetry_markdown_at(Path::new("/"), &status_path)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuCrashBundleReport {
+    pub bundle_path: PathBuf,
+    pub markdown: String,
+    pub fault_count: usize,
+}
+
+fn resolve_copilot_journalctl_bin() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(override_bin) = TEST_COPILOT_JOURNALCTL_BIN.with(|b| b.borrow().clone()) {
+        return override_bin;
+    }
+    Some(PathBuf::from("journalctl"))
+}
+
+fn is_relevant_gpu_kernel_line(line: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "nvrm",
+        "nvidia",
+        "amdgpu",
+        "i915",
+        "pcieport",
+        "drm",
+        "kernel panic",
+        "oops:",
+    ];
+    if crate::previous_boot::classify_gpu_pcie_fault(line).is_some() {
+        return true;
+    }
+    let lower = line.to_ascii_lowercase();
+    KEYWORDS.iter().any(|kw| lower.contains(kw))
+}
+
+pub(crate) fn cap_bundle_markdown(mut text: String) -> String {
+    if text.len() <= MAX_BUNDLE_BYTES {
+        return text;
+    }
+    let max_cut = MAX_BUNDLE_BYTES - BUNDLE_TRUNCATED_SUFFIX.len();
+    let cut = text
+        .char_indices()
+        .map(|(idx, _)| idx)
+        .take_while(|&idx| idx <= max_cut)
+        .last()
+        .unwrap_or(0);
+    text.truncate(cut);
+    text.push_str(BUNDLE_TRUNCATED_SUFFIX);
+    text
+}
+
+fn write_bundle_atomic_0600(dest_path: &Path, content: &str) -> Result<(), String> {
+    let parent = dest_path
+        .parent()
+        .ok_or_else(|| "invalid bundle destination path".to_string())?;
+    let mut dir_builder = fs::DirBuilder::new();
+    dir_builder.recursive(true).mode(0o700);
+    dir_builder
+        .create(parent)
+        .map_err(|e| format!("failed to create bundle directory: {e}"))?;
+
+    let pid = unsafe { libc::getpid() };
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_path = parent.join(format!(".gpu-crash-bundle.md.tmp.{pid}.{nanos}"));
+    let write_res = (|| -> std::io::Result<()> {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp_path)?;
+        f.write_all(content.as_bytes())?;
+        f.flush()?;
+        f.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write_res {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(format!("failed to write bundle: {e}"));
+    }
+    if let Err(e) = fs::rename(&tmp_path, dest_path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(format!("failed to finalize bundle: {e}"));
+    }
+    Ok(())
+}
+
+async fn capture_kernel_journal_lines(bin: &Path, args: &[&str]) -> Result<Vec<String>, String> {
+    let mut cmd = crate::exec::new_tokio_command(bin);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let timeout_dur = Duration::from_millis(2500);
+    let out = match timeout(timeout_dur, cmd.output()).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return Err(format!("spawn failed: {e}")),
+        Err(_) => return Err("journalctl timed out".to_string()),
+    };
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if err.is_empty() {
+            format!("exit {}", out.status)
+        } else {
+            err
+        });
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    Ok(stdout
+        .lines()
+        .filter(|l| is_relevant_gpu_kernel_line(l))
+        .map(|l| l.trim().to_string())
+        .collect())
+}
+
+pub fn export_gpu_crash_bundle_at(
+    root: &Path,
+    status_path: &Path,
+    state_dir: &Path,
+) -> Result<GpuCrashBundleReport, String> {
+    let mut md = build_ai_telemetry_markdown_at(root, status_path);
+    md.push_str("\n### Kernel & Previous-Boot GPU/PCIe Forensics\n");
+
+    let mut fault_count = 0usize;
+    if let Some(bin) = resolve_copilot_journalctl_bin() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        let (b0_res, b1_res) = rt.block_on(async {
+            tokio::join!(
+                capture_kernel_journal_lines(
+                    &bin,
+                    &[
+                        "-b",
+                        "0",
+                        "-k",
+                        "-p",
+                        "0..4",
+                        "--output=cat",
+                        "--lines=120",
+                        "--no-pager"
+                    ]
+                ),
+                capture_kernel_journal_lines(
+                    &bin,
+                    &[
+                        "-b",
+                        "-1",
+                        "-k",
+                        "-p",
+                        "0..4",
+                        "--output=cat",
+                        "--lines=120",
+                        "--no-pager"
+                    ]
+                )
+            )
+        });
+        for (label, res) in [
+            ("Current Boot (-b 0)", b0_res),
+            ("Previous Boot (-b -1)", b1_res),
+        ] {
+            match res {
+                Ok(lines) if lines.is_empty() => {
+                    md.push_str(&format!("- **{label}**: no GPU/PCIe fault lines\n"));
+                }
+                Ok(lines) => {
+                    md.push_str(&format!("- **{label}**:\n"));
+                    for line in lines {
+                        if crate::previous_boot::classify_gpu_pcie_fault(&line).is_some() {
+                            fault_count += 1;
+                        }
+                        md.push_str(&format!(
+                            "  - {}\n",
+                            sanitize_telemetry_text_at(root, &line)
+                        ));
+                    }
+                }
+                Err(err) => {
+                    md.push_str(&format!(
+                        "- **{label}**: unavailable ({})\n",
+                        sanitize_telemetry_text_at(root, &err)
+                    ));
+                }
+            }
+        }
+    } else {
+        md.push_str("- **Journal Probe**: journalctl binary unavailable\n");
+    }
+
+    let final_md = cap_bundle_markdown(sanitize_telemetry_text_at(root, &md));
+    let dest_path = state_dir.join("syspilot/gpu-crash-bundle.md");
+    write_bundle_atomic_0600(&dest_path, &final_md)?;
+
+    Ok(GpuCrashBundleReport {
+        bundle_path: dest_path,
+        markdown: final_md,
+        fault_count,
+    })
+}
+
+pub fn export_gpu_crash_bundle() -> Result<GpuCrashBundleReport, String> {
+    let status_path = crate::models::get_status_path();
+    let state_dir = crate::models::state_base();
+    export_gpu_crash_bundle_at(Path::new("/"), &status_path, &state_dir)
 }

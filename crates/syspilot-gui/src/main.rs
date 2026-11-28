@@ -1022,15 +1022,33 @@ fn apply_tab_selection_to_window(ui_inst: &AppWindow, tab_idx: i32) {
     }
 }
 
-fn handle_playbook_click<FT, FS, FC>(
+static GPU_TRIAGE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+struct AtomicFlagGuard<'a>(&'a AtomicBool);
+
+impl Drop for AtomicFlagGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+fn try_acquire_flag(flag: &AtomicBool) -> Option<AtomicFlagGuard<'_>> {
+    flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .ok()
+        .map(|_| AtomicFlagGuard(flag))
+}
+
+fn handle_playbook_click<FT, FS, FC, FG>(
     playbook_id: &str,
     mut run_terminal: FT,
     mut run_shell: FS,
     mut run_custom: FC,
+    mut run_gpu_triage: FG,
 ) where
     FT: FnMut(&'static [&'static str], &'static str, bool),
     FS: FnMut(&'static str, &'static str),
     FC: FnMut(),
+    FG: FnMut(),
 {
     match playbook_id {
         "faf" => {
@@ -1050,6 +1068,9 @@ fn handle_playbook_click<FT, FS, FC>(
                 "echo '=== Resetting PipeWire & WirePlumber User Audio Stack ==='; systemctl --user restart pipewire pipewire-pulse wireplumber && sleep 1 && wpctl status",
                 "SysPilot Audio Stack Reset",
             );
+        }
+        "gpu_triage" => {
+            run_gpu_triage();
         }
         "custom" => {
             run_custom();
@@ -1649,6 +1670,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "SysPilot Custom Playbooks",
                     );
                 }
+            },
+            || {
+                let Some(guard) = try_acquire_flag(&GPU_TRIAGE_IN_FLIGHT) else {
+                    if let Some(ui_inst) = ui_for_pb.upgrade() {
+                        ui_inst.set_copilot_status_text(
+                            "⏳ GPU & Crash Triage bundle export already running...".into(),
+                        );
+                    }
+                    return;
+                };
+                if let Some(ui_inst) = ui_for_pb.upgrade() {
+                    ui_inst.set_copilot_status_text(
+                        "⏳ Collecting sanitized GPU & Crash Triage bundle...".into(),
+                    );
+                }
+                let ui_bg = ui_for_pb.clone();
+                std::thread::spawn(move || {
+                    let _guard = guard;
+                    let result = syspilot_core::export_gpu_crash_bundle();
+                    let _ = ui_bg.upgrade_in_event_loop(move |ui_inst| match result {
+                        Ok(report) => {
+                            ui_inst.set_sre_telemetry_export(report.markdown.as_str().into());
+                            ui_inst.set_copilot_status_text(
+                                format!(
+                                    "✔ Sanitized GPU & Crash bundle saved ({} fault(s)): {}",
+                                    report.fault_count,
+                                    report.bundle_path.display()
+                                )
+                                .into(),
+                            );
+                        }
+                        Err(err) => {
+                            ui_inst.set_copilot_status_text(
+                                format!("⚠ GPU & Crash Triage export failed: {err}").into(),
+                            );
+                        }
+                    });
+                });
             },
         );
     });
@@ -3065,6 +3124,7 @@ mod tests {
         let terminal_calls = std::cell::RefCell::new(Vec::new());
         let shell_calls = std::cell::RefCell::new(Vec::new());
         let custom_calls = std::cell::Cell::new(0);
+        let gpu_triage_calls = std::cell::Cell::new(0);
 
         let mut record_terminal =
             |args: &'static [&'static str], title: &'static str, post_triage: bool| {
@@ -3076,6 +3136,9 @@ mod tests {
         let mut record_custom = || {
             custom_calls.set(custom_calls.get() + 1);
         };
+        let mut record_gpu_triage = || {
+            gpu_triage_calls.set(gpu_triage_calls.get() + 1);
+        };
 
         // 1. faf
         handle_playbook_click(
@@ -3083,6 +3146,7 @@ mod tests {
             &mut record_terminal,
             &mut record_shell,
             &mut record_custom,
+            &mut record_gpu_triage,
         );
         assert_eq!(
             terminal_calls.borrow_mut().pop(),
@@ -3095,6 +3159,7 @@ mod tests {
             &mut record_terminal,
             &mut record_shell,
             &mut record_custom,
+            &mut record_gpu_triage,
         );
         assert_eq!(
             terminal_calls.borrow_mut().pop(),
@@ -3111,6 +3176,7 @@ mod tests {
             &mut record_terminal,
             &mut record_shell,
             &mut record_custom,
+            &mut record_gpu_triage,
         );
         let (cmd, title) = shell_calls.borrow_mut().pop().unwrap();
         assert_eq!(title, "SysPilot .pacnew Reviewer");
@@ -3122,54 +3188,95 @@ mod tests {
             &mut record_terminal,
             &mut record_shell,
             &mut record_custom,
+            &mut record_gpu_triage,
         );
         let (cmd, title) = shell_calls.borrow_mut().pop().unwrap();
         assert_eq!(title, "SysPilot Audio Stack Reset");
         assert!(cmd.contains("systemctl --user restart pipewire"));
 
-        // 5. custom
+        // 5. gpu_triage
+        handle_playbook_click(
+            "gpu_triage",
+            &mut record_terminal,
+            &mut record_shell,
+            &mut record_custom,
+            &mut record_gpu_triage,
+        );
+        assert_eq!(gpu_triage_calls.get(), 1);
+
+        // 6. custom
         handle_playbook_click(
             "custom",
             &mut record_terminal,
             &mut record_shell,
             &mut record_custom,
+            &mut record_gpu_triage,
         );
         assert_eq!(custom_calls.get(), 1);
 
-        // 6. audit
+        // 7. audit
         handle_playbook_click(
             "audit",
             &mut record_terminal,
             &mut record_shell,
             &mut record_custom,
+            &mut record_gpu_triage,
         );
         assert_eq!(
             terminal_calls.borrow_mut().pop(),
             Some((&["--audit"][..], "SysPilot Diagnostic Audit", true))
         );
 
-        // 7. repair
+        // 8. repair
         handle_playbook_click(
             "repair",
             &mut record_terminal,
             &mut record_shell,
             &mut record_custom,
+            &mut record_gpu_triage,
         );
         assert_eq!(
             terminal_calls.borrow_mut().pop(),
             Some((&["--audit"][..], "SysPilot Diagnostic Audit", true))
         );
 
-        // 8. unknown
+        // 9. unknown
         handle_playbook_click(
             "unknown",
             &mut record_terminal,
             &mut record_shell,
             &mut record_custom,
+            &mut record_gpu_triage,
         );
         assert!(terminal_calls.borrow().is_empty());
         assert!(shell_calls.borrow().is_empty());
         assert_eq!(custom_calls.get(), 1);
+        assert_eq!(gpu_triage_calls.get(), 1);
+    }
+
+    #[test]
+    fn test_gpu_triage_flag_guard_and_dual_skin_headless_callback() {
+        let local_flag = AtomicBool::new(false);
+        {
+            let guard = try_acquire_flag(&local_flag);
+            assert!(guard.is_some());
+            assert!(try_acquire_flag(&local_flag).is_none());
+        }
+        assert!(try_acquire_flag(&local_flag).is_some());
+
+        init_headless_platform();
+        let ui = AppWindow::new().unwrap();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen_clone = seen.clone();
+        ui.on_copilot_playbook_clicked(move |id| {
+            seen_clone.borrow_mut().push(id.to_string());
+        });
+        for skin in [true, false] {
+            ui.set_is_lcars_skin(skin);
+            ui.set_active_tab(2);
+            ui.invoke_copilot_playbook_clicked("gpu_triage".into());
+        }
+        assert_eq!(*seen.borrow(), vec!["gpu_triage", "gpu_triage"]);
     }
 
     #[test]

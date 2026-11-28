@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.10] - 2026-11-28
+
+### Added / Copilot "GPU & Crash Triage" Playbook & Sanitized Support Bundle Export (`PATCH-050`)
+- **Zero-Subprocess Telemetry & PII Sanitizer (`crates/syspilot-core/src/copilot.rs`):** Extended `build_ai_telemetry_markdown_at(root, status_path)` (`spawn_count() == 0`) with DMI BIOS metadata, PCIe link negotiation/AER state, pure-Rust ALPM `%NAME%`/`%VERSION%` kernel/GPU package alignment (`collect_gpu_kernel_packages_at`), and token-bounded PII redaction (`sanitize_telemetry_text_at`: hostname, MAC, non-loopback IPv4, RFC-4122 UUID, `/home/<user>`, `serial`/`machine-id`).
+- **On-Demand Sanitized Bundle & Dual-Skin Playbook (`crates/syspilot-gui/{ui/appwindow.slint,src/main.rs}`):** Added `export_gpu_crash_bundle_at` (bounded `-b 0`/`-b -1` `journalctl -k -p 0..4`, `<= 64 KiB` cap, TOCTOU-free `0600` atomic write) wired to Dual-Skin `"gpu_triage"` playbook action (`05 // GPU TRIAGE` in LCARS, `MaintenanceCard` in Classic) with `AtomicBool` + RAII in-flight guard.
+
 ## [2.1.9] - 2026-11-28
 
 ### Added / Native Cross-Boot GPU/PCIe Forensics, `Xid` Decoder & PCIe Link Telemetry (`PATCH-049`)

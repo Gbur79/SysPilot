@@ -70,8 +70,8 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
   - Intelligent pacman lock monitor: distinguishes active package manager operations from orphaned `/var/lib/pacman/db.lck` files.
 - **Native Rust CLI Fast-Path (`crates/syspilot-cli`):** Zero-fork Rust `syspilot` entrypoint handles `-s`/`--status`, `-j`/`--json`, `--tray`, `--gui`, `-v`, and `-h` directly via `syspilot-core::models` (`O_NOFOLLOW | O_NONBLOCK` + `fstat`, SIGHUP-isolated `--gui` spawn), delegating heavy/interactive operations (`--audit`, `--upgrade`, `--copilot`, `--self-update`) to `bin/syspilot` fallback (`lib/syspilot/bin/syspilot`).
 - **Zero-Subprocess `systemd1` D-Bus & ALPM Local DB Probes (`services.rs`, `orphans.rs`, `updater.rs`):** Queries failed system/user units natively over `zbus` (`org.freedesktop.systemd1`), classifies orphan packages directly from `/var/lib/pacman/local/*/desc` without `pacman` forks, and checks standalone tool update caches via `btime`-gated local JSON (`spawn_count() == 0`).
-- **Cross-Boot Telemetry Freshness & Previous-Boot Integrity (`previous_boot.rs`):** Gates cached pre-boot `summary.json` against `/proc/stat` `btime`, verifies previous boot shutdown status via unprivileged `journalctl --list-boots` (cached per `/proc/sys/kernel/random/boot_id`), and flags stale pre-boot caches in `syspilot -s` (`(PRE-BOOT)`) while keeping real unclean-shutdown alerts visible.
-- **Universal Post-Update Reboot & Kernel/DKMS Safety Guard (`reboot_safety.rs`):** Zero-subprocess inspection of `/usr/lib/modules/<version>` (`modules.dep`, `modules.builtin`, `.ko`/`.ko.zst` zstd header verification) for active PCI `0x03` GPU drivers (`nvidia`, `amdgpu`, `i915`, `xe`), escalating to `ACTION_REQUIRED` (`CRITICAL REBOOT RISK`) before a broken kernel/DKMS update causes a black screen on reboot.
+- **Cross-Boot Telemetry Freshness & Previous-Boot GPU/PCIe Forensics (`previous_boot.rs`):** Gates cached pre-boot `summary.json` against `/proc/stat` `btime`, verifies previous boot shutdown status and GPU/PCIe hardware faults (`NVRM: Xid` decoding, PCIe AER fatal/nonfatal errors, `nvidia-drm` modeset failures) via bounded unprivileged `journalctl` probes (`boot_id`-cached), and flags stale caches (`(PRE-BOOT)`) while keeping unclean-shutdown and GPU fault alerts visible.
+- **Universal Post-Update Reboot, Kernel/DKMS & PCIe Link Safety Guard (`reboot_safety.rs`):** Zero-subprocess inspection of `/usr/lib/modules/<version>` (`modules.dep`, `modules.builtin`, `.ko`/`.ko.zst` zstd header verification), DMI SMBIOS BIOS metadata, and sysfs PCIe link width/speed negotiation for active PCI `0x03` GPUs (`nvidia`, `amdgpu`, `i915`, `xe`), escalating to `ACTION_REQUIRED` (`CRITICAL REBOOT RISK`) on broken modules or surfacing degraded PCIe links across Dashboard, Tray, and Copilot telemetry.
 - **Zero-Subprocess Gaming & Vulkan Readiness Probe (`gaming.rs`):** Instant verification of driver-matched 64-bit and 32-bit Vulkan ICDs (`/usr/lib` and `/usr/lib32` for Steam/Proton), CPU `scaling_governor`, hybrid GPU `runtime_status`, and battery power state with zero external subprocesses.
 - **Arch Trust Triad (Zero-Root Invariant):** Hard `libc::getuid() == 0` refusal in both `syspilot-tray` and `syspilot-gui`; all mutating maintenance operations run transparently in the user's interactive terminal.
 - **Asynchronous Package Update Intelligence:**
@@ -95,7 +95,7 @@ By having the local Rust sentinel and triage engine perform 100% of the heavy li
 - **Native Slint Desktop Cockpit (`syspilot-gui`):**
   - Ultra-fast native GUI built with Slint 1.19 and dual renderers (FemtoVG OpenGL + software CPU rasterizer fallback).
   - Single instance locking via non-blocking `libc::flock`.
-  - Dynamic **Hardware Platform & GPU** telemetry row detecting CPU architecture, GPU model, and active driver stack without hardcoded assumptions.
+  - Dynamic **Hardware Platform & GPU** telemetry row detecting CPU architecture, GPU model, active driver stack, and PCIe link width/speed negotiation (`DOWNGRADED` alert on link degradation) without hardcoded assumptions.
   - Responsive status synchronization & dual-skin `ATTENTION` / `RED ALERT` warning banners driven by the semantic `syspilot-core::view` layer (`RowSeverity`, `AttentionView`).
 - **🖖 Star Trek Okuda 1987 LCARS Dual-Skin Cockpit:**
   - **Authentic LCARS 1987 Architecture:** Faithful recreation of Michael Okuda's iconic Star Trek interface design, featuring curved 2D structural elbows, segmented pill pods, authentic color accents (Pumpkin `#ffaa66`, Gold `#ffcc00`, Lavender `#cc99cc`, Ice Blue `#99ccff`, Alert Red `#ef4444`), and typography powered by the embedded Antonio condensed font.
@@ -144,8 +144,8 @@ The cockpit is organized into 3 streamlined, high-density tabs with proportional
    - 7) **Pre-Cache Packages:** Interactively pre-downloads large packages ahead of maintenance without locking pacman.
    - 8) **SysPilot Suite Self-Update & GitHub Sync:** Synchronizes with upstream GitHub releases with 1-click atomic rebuild and restart.
 3. **🛡 Tactical Playbooks & AI Telemetry (03 PLAYBOOKS):** Deterministic SRE diagnostic hub featuring:
-   - 1-click battle-tested playbooks: **FAF Client Repair**, **Steam / Proton Readiness**, **Reconcile .pacnew**, **PipeWire Audio Fix**, and **Custom User Playbooks** auto-discovered from `~/.config/syspilot/playbooks/*.sh`.
-   - **Passive SRE Telemetry Export (`Copy SRE Telemetry for AI`):** Generates clean zero-subprocess Markdown diagnostics (`build_ai_telemetry_markdown`) and copies them natively via Slint's clipboard (`TextInput`) for pasting into any external AI assistant.
+   - 1-click battle-tested playbooks: **GPU & Crash Triage**, **FAF Client Repair**, **Steam / Proton Readiness**, **Reconcile .pacnew**, **PipeWire Audio Fix**, and **Custom User Playbooks** auto-discovered from `~/.config/syspilot/playbooks/*.sh`.
+   - **Passive SRE Telemetry & Sanitized Bundle Export (`Copy SRE Telemetry for AI` / `Export Sanitized Bundle`):** Generates zero-subprocess Markdown diagnostics enriched with ALPM kernel/GPU driver versions, PCIe link state, BIOS version, and previous-boot GPU/Xid anomalies, scrubs home paths, usernames, IPs, and MAC addresses in pure Rust, and exports atomic `0600` (`<= 64 KiB`) crash bundles to `~/.local/state/syspilot/exports/`.
    - Pluggable multi-agent CLI launcher (`--copilot-shell`): Seamlessly routes interactive sessions to Google Antigravity CLI (`agy`), Goose, or custom local runners.
 
 ---
@@ -271,7 +271,7 @@ sysPilot/
 ├── autostart/
 │   └── syspilot.desktop         # XDG autostart entry for background tray sentinel
 ├── packaging/
-│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.1.8)
+│   ├── PKGBUILD                 # Pure Rust Arch Linux / AUR package specification (v2.1.10)
 │   └── syspilot.desktop         # Application menu desktop launcher (Exec=syspilot --gui)
 └── systemd/
     └── syspilot-tray.service    # User systemd service for 24/7 Rust Sentinel

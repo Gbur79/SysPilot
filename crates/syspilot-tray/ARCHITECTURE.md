@@ -1,6 +1,6 @@
 # SysPilot Rust Tray (`syspilot-tray`) — Dokumentacja Architektury i Stanu Obecnego
 
-**Wersja:** 2.1.8 (Rust Edition 2024, workspace `syspilot-tray`)  
+**Wersja:** 2.1.10 (Rust Edition 2024, workspace `syspilot-tray`)  
 **Środowisko:** Arch Linux / EndeavourOS / KDE Plasma Wayland & X11  
 **Cel komponentu:** Ultralekki daemon rezydentny (StatusNotifierItem) monitorujący zdrowie stacji roboczej 24/7 z minimalnym narzutem CPU i pamięci RAM, z bezblokującym startem SNI oraz natywnym D-Bus.
 
@@ -81,7 +81,7 @@ Implementacja w `tray.rs` zarządza integracją z panelem KDE Plasma Wayland / X
 
 ### 3.2. Szczegółowy Tooltip (`tool_tip()`)
 Po najechaniu kursorem na ikonę zasobnika generowany jest ustrukturyzowany blok informacji:
-* **Tytuł:** Kontekstowy status (np. `SysPilot — GameMode active` lub `SysPilot — Status: FLIGHT_READY`).
+* **Tytuł:** Kontekstowy status (np. `SysPilot — GPU/PCIe Fault` przy anomaliach cross-boot/PCIe, `SysPilot — GameMode active` lub `SysPilot — Status: FLIGHT_READY`).
 * **Opis wieloliniowy:**
   ```text
   Kernel: <kernel>
@@ -89,7 +89,7 @@ Po najechaniu kursorem na ikonę zasobnika generowany jest ustrukturyzowany blok
   Errors: 0 | Warnings: 0 | Reboot: no
   Cache age: 42s
   ```
-  *(Dodatkowo przy aktywnych anomaliach wyświetlane są skrócone wpisy z `build_dashboard_anomalies()`, narzędzia standalone oraz ostrzeżenia mirrorlist).*
+  *(Dodatkowo przy aktywnych anomaliach wyświetlane są skrócone wpisy z `build_dashboard_anomalies()` — w tym błędy GPU Xid / PCIe AER / degradacja linku PCIe — narzędzia standalone oraz ostrzeżenia mirrorlist).*
 
 ### 3.3. Interakcja z Użytkownikiem
 * **Lewy Klik (`activate`):** Uruchamia `terminal::spawn_detached_gui()` (`syspilot --gui`), otwierając natywny Dashboard Slint 1.19 (LCARS / Classic) z blokadą jednej instancji (`libc::flock`).

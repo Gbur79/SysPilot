@@ -35,6 +35,18 @@ pub struct DashboardAnomaly {
 }
 
 fn format_remediation_label(check: &str, code: &str) -> String {
+    if code.eq_ignore_ascii_case("GPU_BUS_DROP_HW_SUSPECT") {
+        return "GPU BUS DROP".to_string();
+    }
+    if code.eq_ignore_ascii_case("PCIE_AER_ERROR") {
+        return "PCIE AER FAULT".to_string();
+    }
+    if code.eq_ignore_ascii_case("PREV_BOOT_GPU_FAULT") {
+        return "PREV BOOT GPU".to_string();
+    }
+    if code.eq_ignore_ascii_case("PCIE_LINK_DEGRADED") {
+        return "PCIE LINK".to_string();
+    }
     if code.eq_ignore_ascii_case("SYS_UNCLEAN_SHUTDOWN")
         || code.eq_ignore_ascii_case("SYS_SPURIOUS_WAKEUP")
     {
@@ -390,6 +402,7 @@ pub fn compute_attention_view(
         snapshot.source_error.is_some() || snapshot.cache_stale || snapshot.status == "DEGRADED";
 
     let attention_triggered = reboot_safety.black_screen_risk
+        || reboot_safety.pcie_degraded
         || snapshot.effective_status() == "ACTION_REQUIRED"
         || snapshot.effective_status() == "PRE_FLIGHT_ATTENTION"
         || (gaming.applicable && !gaming.ready);
@@ -458,6 +471,15 @@ pub fn compute_attention_view(
         } else {
             format!("{} package update(s) available", snapshot.updates_total)
         }
+    } else if reboot_safety.pcie_degraded {
+        reboot_safety
+            .pcie_links
+            .iter()
+            .find_map(|l| l.detail.as_ref())
+            .cloned()
+            .unwrap_or_else(|| {
+                "Discrete GPU PCIe link degraded or reporting AER errors".to_string()
+            })
     } else if let Some(warn) = gaming.warnings.first().filter(|s| !s.trim().is_empty()) {
         format!("Gaming Readiness: {warn}")
     } else {

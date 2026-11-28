@@ -88,6 +88,39 @@ fn format_gpu_telemetry(
     }
 }
 
+fn format_gpu_telemetry_with_pcie(
+    base_gpu: &str,
+    gaming: &syspilot_core::GamingReadinessStatus,
+    reboot_safety: &syspilot_core::RebootSafetyStatus,
+) -> (&'static str, (u8, u8, u8), String) {
+    let (status, rgb, mut details) = format_gpu_telemetry(base_gpu, gaming);
+    if reboot_safety.pcie_degraded {
+        let pcie_msg = reboot_safety
+            .pcie_links
+            .iter()
+            .find_map(|l| l.detail.as_deref())
+            .unwrap_or("PCIE LINK DEGRADED");
+        return (
+            "WARN",
+            RowTone::Warn.rgb(),
+            format!(
+                "{} • {}",
+                base_gpu.to_uppercase(),
+                pcie_msg.to_ascii_uppercase()
+            ),
+        );
+    }
+    if let Some(link) = reboot_safety
+        .pcie_links
+        .iter()
+        .find(|l| !l.runtime_suspended && l.current_width.is_some())
+        && let Some(cw) = link.current_width
+    {
+        details = format!("{details} • PCIE X{cw}");
+    }
+    (status, rgb, details)
+}
+
 pub fn format_aur_updates(count: u32) -> (&'static str, (u8, u8, u8), String) {
     if count > 0 {
         let details = if count == 1 {
@@ -508,7 +541,8 @@ impl DashboardViewModel {
             format_root_storage(sentinels.root_used_pct, sentinels.root_avail_gb);
         let (fw_status, fw_rgb, fw_details) = format_firewall_status(snapshot.firewall_active);
         let (svc_status, svc_rgb, svc_details) = format_failed_services(snapshot.errors);
-        let (gpu_status, gpu_rgb, gpu_details) = format_gpu_telemetry(gpu_name, gaming);
+        let (gpu_status, gpu_rgb, gpu_details) =
+            format_gpu_telemetry_with_pcie(gpu_name, gaming, reboot_safety);
         let (cve_status, cve_rgb, cve_details) = format_cve_status(snapshot.security_high_risk);
         let (core_status, core_rgb, core_details) = format_core_updates(snapshot.core_updates);
         let (repo_status, repo_rgb, repo_details) = format_repo_updates_row(snapshot);
@@ -3737,5 +3771,78 @@ mod tests {
             assert!(!ui.get_has_attention());
             assert_eq!(ui.get_anomalies().row_count(), 0);
         }
+    }
+
+    #[test]
+    fn test_dashboard_view_model_gpu_pcie_degraded_and_nominal() {
+        let snap = syspilot_core::SystemSnapshot {
+            status: "FLIGHT_READY".into(),
+            cache_stale: false,
+            ..Default::default()
+        };
+        let gaming = syspilot_core::GamingReadinessStatus {
+            applicable: true,
+            ready: true,
+            vulkan_64_ready: true,
+            vulkan_32_ready: true,
+            ..Default::default()
+        };
+        let degraded_safety = syspilot_core::RebootSafetyStatus {
+            pcie_degraded: true,
+            pcie_links: vec![syspilot_core::PcieLinkStatus {
+                bdf: "0000:01:00.0".into(),
+                current_width: Some(4),
+                effective_max_width: Some(16),
+                degraded: true,
+                detail: Some("0000:01:00.0: PCIe link degraded x4 < x16".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let vm_deg = DashboardViewModel::from_snapshot_inputs(
+            &snap,
+            &degraded_safety,
+            &syspilot_core::SentinelStatus::default(),
+            &gaming,
+            "NVIDIA GeForce GTX 970",
+            env!("CARGO_PKG_VERSION"),
+        );
+        assert_eq!(vm_deg.gpu.status, "WARN");
+        assert!(vm_deg.gpu.details.contains("PCIE LINK DEGRADED X4 < X16"));
+        assert!(vm_deg.has_attention);
+        assert!(vm_deg.attention_message.contains("x4 < x16"));
+
+        let nominal_safety = syspilot_core::RebootSafetyStatus {
+            pcie_degraded: false,
+            pcie_links: vec![
+                syspilot_core::PcieLinkStatus {
+                    bdf: "0000:02:00.0".into(),
+                    current_width: Some(1),
+                    effective_max_width: Some(16),
+                    runtime_suspended: true,
+                    degraded: false,
+                    ..Default::default()
+                },
+                syspilot_core::PcieLinkStatus {
+                    bdf: "0000:01:00.0".into(),
+                    current_width: Some(16),
+                    effective_max_width: Some(16),
+                    degraded: false,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let vm_nom = DashboardViewModel::from_snapshot_inputs(
+            &snap,
+            &nominal_safety,
+            &syspilot_core::SentinelStatus::default(),
+            &gaming,
+            "NVIDIA GeForce GTX 970",
+            env!("CARGO_PKG_VERSION"),
+        );
+        assert_eq!(vm_nom.gpu.status, "PASS");
+        assert!(vm_nom.gpu.details.contains("PCIE X16"));
+        assert!(!vm_nom.has_attention);
     }
 }

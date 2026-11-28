@@ -43,10 +43,47 @@ const MISSING_PREV_BOOT_MARKERS: &[&str] = &[
     "no such boot id",
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuPcieFaultClass {
+    BusDropHw,
+    PcieAer,
+    DriverFault,
+}
+
+impl GpuPcieFaultClass {
+    pub const fn remediation_code(self) -> &'static str {
+        match self {
+            Self::BusDropHw => "GPU_BUS_DROP_HW_SUSPECT",
+            Self::PcieAer => "PCIE_AER_ERROR",
+            Self::DriverFault => "PREV_BOOT_GPU_FAULT",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::BusDropHw => "Previous boot GPU bus drop / hardware Xid",
+            Self::PcieAer => "Previous boot uncorrected PCIe AER fault",
+            Self::DriverFault => "Previous boot GPU driver/ring fault",
+        }
+    }
+
+    const fn priority(self) -> u8 {
+        match self {
+            Self::BusDropHw => 3,
+            Self::PcieAer => 2,
+            Self::DriverFault => 1,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreviousBootVerdict {
     Clean,
     Unclean(String),
+    GpuFault {
+        class: GpuPcieFaultClass,
+        summary: String,
+    },
     Inconclusive(String),
 }
 
@@ -143,6 +180,75 @@ pub fn parse_prev_kernel_panic_output(stdout: &str) -> Option<String> {
     find_matching_line(stdout, KERNEL_PANIC_MARKERS)
 }
 
+fn contains_word_token(haystack: &str, word: &str) -> bool {
+    haystack
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|tok| tok == word)
+}
+
+pub fn classify_gpu_pcie_fault(line: &str) -> Option<GpuPcieFaultClass> {
+    let lower = line.to_ascii_lowercase();
+    if let Some(idx) = lower.find("nvrm: xid") {
+        let mut rest = lower[idx + "nvrm: xid".len()..].trim_start();
+        if let Some(after_colon) = rest.strip_prefix(':') {
+            rest = after_colon.trim_start();
+        }
+        if rest.starts_with('(') {
+            let close = rest.find(')')?;
+            rest = rest[close + 1..].trim_start();
+            if let Some(after_colon) = rest.strip_prefix(':') {
+                rest = after_colon.trim_start();
+            }
+        }
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(code) = digits.parse::<u32>() {
+            if matches!(code, 48 | 61 | 62 | 79) || lower.contains("gpu has fallen off the bus") {
+                return Some(GpuPcieFaultClass::BusDropHw);
+            }
+            return Some(GpuPcieFaultClass::DriverFault);
+        }
+        if lower.contains("gpu has fallen off the bus") {
+            return Some(GpuPcieFaultClass::BusDropHw);
+        }
+        return Some(GpuPcieFaultClass::DriverFault);
+    }
+    if lower.contains("gpu has fallen off the bus") {
+        return Some(GpuPcieFaultClass::BusDropHw);
+    }
+    if lower.contains("pcieport")
+        && lower.contains("aer")
+        && (lower.contains("uncorrected") || lower.contains("fatal"))
+    {
+        return Some(GpuPcieFaultClass::PcieAer);
+    }
+    let is_amdgpu_fault = lower.contains("amdgpu")
+        && ((lower.contains("ring") && lower.contains("timeout"))
+            || lower.contains("gpu reset")
+            || lower.contains("job_timedout"));
+    let is_intel_hang =
+        (lower.contains("i915") || contains_word_token(&lower, "xe")) && lower.contains("gpu hang");
+    if is_amdgpu_fault || is_intel_hang {
+        return Some(GpuPcieFaultClass::DriverFault);
+    }
+    None
+}
+
+pub fn parse_prev_gpu_pcie_fault_output(stdout: &str) -> Option<(GpuPcieFaultClass, String)> {
+    let mut best: Option<(GpuPcieFaultClass, String)> = None;
+    for line in stdout.lines().rev() {
+        let Some(class) = classify_gpu_pcie_fault(line) else {
+            continue;
+        };
+        if best
+            .as_ref()
+            .is_none_or(|(best_class, _)| class.priority() > best_class.priority())
+        {
+            best = Some((class, line.trim().to_string()));
+        }
+    }
+    best
+}
+
 fn has_permission_blind_spot(probe: Result<&JournalProbeOutput, &str>) -> bool {
     let Ok(out) = probe else {
         return false;
@@ -162,6 +268,12 @@ pub fn evaluate_previous_boot_probes(
 ) -> PreviousBootVerdict {
     if let Ok(pk) = prev_kernel {
         if pk.success {
+            if let Some((class, hit)) = parse_prev_gpu_pcie_fault_output(&pk.stdout) {
+                return PreviousBootVerdict::GpuFault {
+                    class,
+                    summary: format!("{}: {}", class.label(), truncate_chars(&hit, 96)),
+                };
+            }
             if let Some(hit) = parse_prev_kernel_panic_output(&pk.stdout) {
                 return PreviousBootVerdict::Unclean(format!(
                     "Kernel crash in previous boot: {}",
@@ -269,9 +381,9 @@ pub async fn check_previous_boot_integrity_at(_root: &Path) -> PreviousBootVerdi
         "-1",
         "-k",
         "-p",
-        "0..2",
+        "0..4",
         "--output=cat",
-        "--lines=200",
+        "--lines=400",
         "--no-pager",
     ];
 

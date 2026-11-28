@@ -7435,3 +7435,377 @@ fn test_canonical_summary_parser_and_pre_boot_helper() {
         .is_err()
     );
 }
+
+#[test]
+fn test_patch049_xid_classifier_precedence_and_benign_p04_clean() {
+    use crate::previous_boot::{
+        GpuPcieFaultClass, JournalProbeOutput, PreviousBootVerdict, classify_gpu_pcie_fault,
+        evaluate_previous_boot_probes, parse_prev_gpu_pcie_fault_output,
+    };
+    use crate::triage::{apply_pcie_link_audit, apply_previous_boot_verdict};
+
+    assert_eq!(
+        classify_gpu_pcie_fault("NVRM: Xid (PCI:0000:61:00): 13, pid=123"),
+        Some(GpuPcieFaultClass::DriverFault)
+    );
+    assert_eq!(
+        classify_gpu_pcie_fault("NVRM: Xid (PCI:0000:01:00): 790, pid=123"),
+        Some(GpuPcieFaultClass::DriverFault)
+    );
+    assert_eq!(classify_gpu_pcie_fault("NVRM: Xid (PCI:0000:61:00"), None);
+    for code in [48, 61, 62, 79] {
+        let line = format!("NVRM: Xid (PCI:0000:01:00): {code}, pid=1");
+        assert_eq!(
+            classify_gpu_pcie_fault(&line),
+            Some(GpuPcieFaultClass::BusDropHw)
+        );
+    }
+    assert_eq!(
+        classify_gpu_pcie_fault("NVRM: GPU has fallen off the bus."),
+        Some(GpuPcieFaultClass::BusDropHw)
+    );
+    assert_eq!(
+        classify_gpu_pcie_fault("pcieport 0000:00:01.0: AER: Uncorrected (Fatal) error"),
+        Some(GpuPcieFaultClass::PcieAer)
+    );
+    assert_eq!(
+        classify_gpu_pcie_fault("amdgpu 0000:03:00.0: amdgpu: ring gfx_0.0.0 timeout"),
+        Some(GpuPcieFaultClass::DriverFault)
+    );
+    assert_eq!(
+        classify_gpu_pcie_fault("i915 0000:00:02.0: [drm] *ERROR* GPU HANG: ecode"),
+        Some(GpuPcieFaultClass::DriverFault)
+    );
+    assert_eq!(
+        classify_gpu_pcie_fault("xe 0000:03:00.0: [drm] *ERROR* GPU HANG"),
+        Some(GpuPcieFaultClass::DriverFault)
+    );
+    assert_eq!(classify_gpu_pcie_fault("exe 0000:03:00.0: GPU HANG"), None);
+    assert_eq!(
+        classify_gpu_pcie_fault("my_xe 0000:03:00.0: GPU HANG"),
+        None
+    );
+    assert_eq!(
+        classify_gpu_pcie_fault("pcieport 0000:00:01.0: link up"),
+        None
+    );
+    assert_eq!(
+        classify_gpu_pcie_fault("pcieport 0000:00:01.0: AER: Corrected error"),
+        None
+    );
+    assert_eq!(
+        classify_gpu_pcie_fault("kernel: AER: Uncorrected error"),
+        None
+    );
+    assert_eq!(
+        classify_gpu_pcie_fault("amdgpu 0000:03:00.0: ring gfx initialized"),
+        None
+    );
+    assert_eq!(
+        classify_gpu_pcie_fault("amdgpu 0000:03:00.0: init timeout"),
+        None
+    );
+    assert_eq!(classify_gpu_pcie_fault("usb 1-1: GPU reset"), None);
+    assert_eq!(
+        classify_gpu_pcie_fault("amdgpu 0000:03:00.0: amdgpu: GPU reset"),
+        Some(GpuPcieFaultClass::DriverFault)
+    );
+    assert_eq!(
+        classify_gpu_pcie_fault("amdgpu 0000:03:00.0: amdgpu: job_timedout"),
+        Some(GpuPcieFaultClass::DriverFault)
+    );
+
+    let multi_log = concat!(
+        "NVRM: Xid (PCI:0000:01:00): 48, DBE error\n",
+        "NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus\n",
+        "pcieport 0000:00:01.0: AER: Uncorrected (Fatal) error\n",
+        "amdgpu 0000:03:00.0: amdgpu: GPU reset\n"
+    );
+    let (cls, hit) = parse_prev_gpu_pcie_fault_output(multi_log).unwrap();
+    assert_eq!(cls, GpuPcieFaultClass::BusDropHw);
+    assert!(hit.contains("79"));
+
+    let aer_over_drv = concat!(
+        "pcieport 0000:00:01.0: AER: Uncorrected error\n",
+        "amdgpu 0000:03:00.0: amdgpu: job_timedout\n"
+    );
+    let (cls2, _) = parse_prev_gpu_pcie_fault_output(aer_over_drv).unwrap();
+    assert_eq!(cls2, GpuPcieFaultClass::PcieAer);
+
+    let ok_b0 = JournalProbeOutput {
+        success: true,
+        stdout: "Journal started\n".into(),
+        stderr: String::new(),
+    };
+    let benign_pk = JournalProbeOutput {
+        success: true,
+        stdout: "WARNING: CPU: 0 PID: 1 at foo\nusb 1-1: error -71\nCall Trace:\n".into(),
+        stderr: String::new(),
+    };
+    assert_eq!(
+        evaluate_previous_boot_probes(Ok(&ok_b0), Ok(&benign_pk)),
+        PreviousBootVerdict::Clean
+    );
+
+    for (line, expected_cls, expected_label) in [
+        (
+            "NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus\n",
+            GpuPcieFaultClass::BusDropHw,
+            "Previous boot GPU bus drop / hardware Xid",
+        ),
+        (
+            "pcieport 0000:00:01.0: AER: Uncorrected error\n",
+            GpuPcieFaultClass::PcieAer,
+            "Previous boot uncorrected PCIe AER fault",
+        ),
+        (
+            "amdgpu 0000:03:00.0: amdgpu: GPU reset\n",
+            GpuPcieFaultClass::DriverFault,
+            "Previous boot GPU driver/ring fault",
+        ),
+    ] {
+        let pk = JournalProbeOutput {
+            success: true,
+            stdout: line.into(),
+            stderr: String::new(),
+        };
+        match evaluate_previous_boot_probes(Ok(&ok_b0), Ok(&pk)) {
+            PreviousBootVerdict::GpuFault { class, summary } => {
+                assert_eq!(class, expected_cls);
+                assert!(summary.contains(expected_label));
+            }
+            other => panic!("expected GpuFault, got {other:?}"),
+        }
+    }
+
+    let mut sh = SysHealth::default();
+    apply_previous_boot_verdict(
+        &mut sh,
+        &PreviousBootVerdict::GpuFault {
+            class: GpuPcieFaultClass::BusDropHw,
+            summary: "Xid 79".into(),
+        },
+    );
+    assert_eq!(sh.warnings, 1);
+    assert_eq!(
+        sh.actionable_remediations[0].code.as_deref(),
+        Some("GPU_BUS_DROP_HW_SUSPECT")
+    );
+    apply_previous_boot_verdict(&mut sh, &PreviousBootVerdict::Unclean("dup".into()));
+    assert_eq!(sh.warnings, 1);
+
+    for existing_code in [
+        "PCIE_AER_ERROR",
+        "PREV_BOOT_GPU_FAULT",
+        "SYS_UNCLEAN_SHUTDOWN",
+    ] {
+        let mut sh_dedup = SysHealth {
+            available: true,
+            warnings: 1,
+            actionable_remediations: vec![ActionableRemediation {
+                code: Some(existing_code.into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        apply_previous_boot_verdict(
+            &mut sh_dedup,
+            &PreviousBootVerdict::GpuFault {
+                class: GpuPcieFaultClass::PcieAer,
+                summary: "dup".into(),
+            },
+        );
+        assert_eq!(sh_dedup.warnings, 1);
+    }
+
+    let links = vec![crate::reboot_safety::PcieLinkStatus {
+        bdf: "0000:01:00.0".into(),
+        degraded: true,
+        detail: Some("0000:01:00.0: PCIe link degraded x4 < x16".into()),
+        ..Default::default()
+    }];
+    apply_pcie_link_audit(&mut sh, &links);
+    apply_pcie_link_audit(&mut sh, &links);
+    assert_eq!(sh.warnings, 2);
+    assert!(
+        sh.actionable_remediations
+            .iter()
+            .any(|r| r.code.as_deref() == Some("PCIE_LINK_DEGRADED"))
+    );
+}
+
+#[test]
+fn test_patch049_pcie_link_audit_5_archetypes_and_view_labels() {
+    use crate::mock_rig::MockRig;
+    use crate::reboot_safety::{audit_gpu_pcie_links_at, read_dmi_bios_info_at};
+    use crate::view::build_dashboard_anomalies;
+
+    let rig = MockRig::endeavouros_nvidia_dkms();
+    rig.write("/sys/bus/pci/devices/0000:01:00.0/class", "0x030000\n");
+    rig.write("/sys/class/dmi/id/bios_version", "V1.15\n");
+    rig.write("/sys/class/dmi/id/bios_date", "04/12/2025\n");
+    rig.write(
+        "/sys/bus/pci/devices/0000:01:00.0/current_link_width",
+        "16\n",
+    );
+    rig.write("/sys/bus/pci/devices/0000:01:00.0/max_link_width", "16\n");
+    rig.write(
+        "/sys/bus/pci/devices/0000:01:00.0/current_link_speed",
+        "2.5 GT/s PCIe\n",
+    );
+    rig.write(
+        "/sys/bus/pci/devices/0000:01:00.0/max_link_speed",
+        "8.0 GT/s PCIe\n",
+    );
+    rig.write(
+        "/sys/bus/pci/devices/0000:01:00.0/aer_dev_fatal",
+        "TOTAL_ERR_FATAL 0\nOTHER_ERR_RX 5\n",
+    );
+    // Parent devices dir max_link_width must NOT cap direct entry in /sys/bus/pci/devices
+    rig.write("/sys/bus/pci/devices/max_link_width", "1\n");
+    let bios = read_dmi_bios_info_at(rig.root()).unwrap();
+    assert_eq!(bios.version, "V1.15");
+    assert_eq!(bios.date, "04/12/2025");
+    let links = audit_gpu_pcie_links_at(rig.root());
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].effective_max_width, Some(16));
+    assert_eq!(links[0].aer_fatal, 0);
+    assert!(!links[0].degraded);
+
+    rig.write(
+        "/sys/bus/pci/devices/0000:01:00.0/current_link_width",
+        "4\n",
+    );
+    let deg = audit_gpu_pcie_links_at(rig.root());
+    assert!(deg[0].degraded);
+    let deg_detail = deg[0].detail.as_deref().unwrap();
+    assert!(deg_detail.contains("x4 < x16"));
+    assert!(deg_detail.contains("2.5 GT/s PCIe / 8.0 GT/s PCIe"));
+
+    rig.write("/sys/bus/pci/devices/0000:01:00.0/max_link_speed", "");
+    let deg_nospeed = audit_gpu_pcie_links_at(rig.root());
+    assert!(!deg_nospeed[0].detail.as_deref().unwrap().contains(" / "));
+
+    rig.write(
+        "/sys/bus/pci/devices/0000:01:00.0/current_link_width",
+        "1\n",
+    );
+    rig.write(
+        "/sys/bus/pci/devices/0000:01:00.0/power/runtime_status",
+        "suspended\n",
+    );
+    let susp = audit_gpu_pcie_links_at(rig.root());
+    assert!(!susp[0].degraded);
+    assert!(susp[0].runtime_suspended);
+
+    let rig_cap = MockRig::empty();
+    rig_cap.write("/sys/devices/pci0000:00/0000:00:01.0/max_link_width", "8\n");
+    rig_cap.write(
+        "/sys/devices/pci0000:00/0000:00:01.0/0000:01:00.0/class",
+        "0x030000\n",
+    );
+    rig_cap.write(
+        "/sys/devices/pci0000:00/0000:00:01.0/0000:01:00.0/current_link_width",
+        "8\n",
+    );
+    rig_cap.write(
+        "/sys/devices/pci0000:00/0000:00:01.0/0000:01:00.0/max_link_width",
+        "16\n",
+    );
+    rig_cap.symlink(
+        "/sys/devices/pci0000:00/0000:00:01.0/0000:01:00.0",
+        "/sys/bus/pci/devices/0000:01:00.0",
+    );
+    let cap_links = audit_gpu_pcie_links_at(rig_cap.root());
+    assert_eq!(cap_links[0].effective_max_width, Some(8));
+    assert!(!cap_links[0].degraded);
+
+    rig_cap.write(
+        "/sys/devices/pci0000:00/0000:00:01.0/0000:01:00.0/aer_dev_fatal",
+        "TOTAL_ERR_FATAL 1\n",
+    );
+    let aer_fatal_only = audit_gpu_pcie_links_at(rig_cap.root());
+    assert!(aer_fatal_only[0].degraded);
+    assert_eq!(aer_fatal_only[0].aer_fatal, 1);
+    assert_eq!(aer_fatal_only[0].aer_nonfatal, 0);
+
+    rig_cap.write(
+        "/sys/devices/pci0000:00/0000:00:01.0/0000:01:00.0/aer_dev_fatal",
+        "TOTAL_ERR_FATAL 0\n",
+    );
+    rig_cap.write(
+        "/sys/devices/pci0000:00/0000:00:01.0/0000:01:00.0/aer_dev_nonfatal",
+        "2\n",
+    );
+    let aer_links = audit_gpu_pcie_links_at(rig_cap.root());
+    assert!(aer_links[0].degraded);
+    assert_eq!(aer_links[0].aer_fatal, 0);
+    assert_eq!(aer_links[0].aer_nonfatal, 2);
+
+    // Symlink escaping root must NOT read outside parent max_link_width
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("max_link_width"), "1\n").unwrap();
+    let outside_dev = outside.path().join("0000:02:00.0");
+    std::fs::create_dir_all(&outside_dev).unwrap();
+    std::fs::write(outside_dev.join("class"), "0x030000\n").unwrap();
+    std::fs::write(outside_dev.join("current_link_width"), "16\n").unwrap();
+    std::fs::write(outside_dev.join("max_link_width"), "16\n").unwrap();
+    let esc_rig = MockRig::empty();
+    std::os::unix::fs::symlink(
+        &outside_dev,
+        esc_rig.sub("/sys/bus/pci/devices/0000:02:00.0"),
+    )
+    .unwrap();
+    let esc_links = audit_gpu_pcie_links_at(esc_rig.root());
+    assert_eq!(esc_links[0].effective_max_width, Some(16));
+    assert!(!esc_links[0].degraded);
+
+    let empty_rig = MockRig::empty();
+    assert_eq!(read_dmi_bios_info_at(empty_rig.root()), None);
+    empty_rig.write("/sys/class/dmi/id/bios_version", "V2.0\n");
+    assert_eq!(
+        read_dmi_bios_info_at(empty_rig.root()).unwrap().version,
+        "V2.0"
+    );
+    empty_rig.write("/sys/bus/pci/devices/0000:00:02.0/class", "0x030000\n");
+    empty_rig.write(
+        "/sys/bus/pci/devices/0000:00:02.0/current_link_width",
+        "255\n",
+    );
+    empty_rig.write(
+        "/sys/bus/pci/devices/0000:00:02.0/max_link_width",
+        "Unknown\n",
+    );
+    let igpu = audit_gpu_pcie_links_at(empty_rig.root());
+    assert_eq!(igpu[0].current_width, None);
+    assert!(!igpu[0].degraded);
+
+    let mut snap = SystemSnapshot::default();
+    for (chk, code) in [
+        ("previous_boot", "GPU_BUS_DROP_HW_SUSPECT"),
+        ("previous_boot", "PCIE_AER_ERROR"),
+        ("previous_boot", "PREV_BOOT_GPU_FAULT"),
+        ("gpu", "PCIE_LINK_DEGRADED"),
+    ] {
+        snap.actionable_remediations.push(ActionableRemediation {
+            check: Some(chk.into()),
+            severity: Some("WARN".into()),
+            code: Some(code.into()),
+            summary: Some("detail".into()),
+            ..Default::default()
+        });
+    }
+    let labels: Vec<String> = build_dashboard_anomalies(&snap)
+        .into_iter()
+        .map(|a| a.label)
+        .collect();
+    assert_eq!(
+        labels,
+        vec![
+            "GPU BUS DROP",
+            "PCIE AER FAULT",
+            "PREV BOOT GPU",
+            "PCIE LINK"
+        ]
+    );
+}

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.9] - 2026-11-28
+
+### Added / Native Cross-Boot GPU/PCIe Forensics, `Xid` Decoder & PCIe Link Telemetry (`PATCH-049`)
+- **Cross-Boot GPU/PCIe Forensics & `Xid` Classifier (`crates/syspilot-core/src/previous_boot.rs`):** Extended `journalctl -b -1 -k` probe window (`-p 0..4 --lines=400`, preserving 2-spawn budget) with pure-Rust `GpuPcieFaultClass` (`BusDropHw` > `PcieAer` > `DriverFault`) classifying NVIDIA `Xid` `48/61/62/79`, `GPU has fallen off the bus`, `pcieport AER Uncorrected/Fatal`, `amdgpu` timeouts/resets, `i915`/`xe` hangs, and routing `GPU_BUS_DROP_HW_SUSPECT` / `PCIE_AER_ERROR` / `PREV_BOOT_GPU_FAULT` instead of generic `SYS_UNCLEAN_SHUTDOWN`.
+- **Hermetic PCIe Link & DMI BIOS Probes (`crates/syspilot-core/src/{reboot_safety,triage,view}.rs`):** Added zero-subprocess `audit_gpu_pcie_links_at(root)` (parent-bridge `max_link_width` capped, D3cold `suspended`-safe, `aer_dev_fatal`/`aer_dev_nonfatal`, ASPM idle speed-tolerant) and `read_dmi_bios_info_at(root)`, emitting `PCIE_LINK_DEGRADED` and surfacing crisp labels across `syspilot-tray` and Dual-Skin `syspilot-gui` (`POD 00`, Classic Exception Telemetry, GPU telemetry row).
+
 ## [2.1.8] - 2026-11-22
 
 ### Added & Hardened / Zero-Fork Native Rust Fast-Path, Cross-Boot Integrity & Dependency Modernization (`PATCH-046`, `PATCH-047a`, `PATCH-047b`, `PATCH-047c`, `PATCH-048`)

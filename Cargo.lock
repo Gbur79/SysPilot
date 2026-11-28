@@ -4398,7 +4398,7 @@ dependencies = [
 
 [[package]]
 name = "syspilot-cli"
-version = "2.1.8"
+version = "2.1.9"
 dependencies = [
  "libc",
  "serde_json",
@@ -4408,7 +4408,7 @@ dependencies = [
 
 [[package]]
 name = "syspilot-core"
-version = "2.1.8"
+version = "2.1.9"
 dependencies = [
  "insta",
  "libc",
@@ -4421,7 +4421,7 @@ dependencies = [
 
 [[package]]
 name = "syspilot-gui"
-version = "2.1.8"
+version = "2.1.9"
 dependencies = [
  "libc",
  "slint",
@@ -4432,7 +4432,7 @@ dependencies = [
 
 [[package]]
 name = "syspilot-tray"
-version = "2.1.8"
+version = "2.1.9"
 dependencies = [
  "ksni",
  "libc",

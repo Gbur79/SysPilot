@@ -210,6 +210,17 @@ impl Tray for SysPilotTray {
             )
         } else if syspilot_core::is_primary_mirror_dead(self.snapshot.mirrors.as_ref()) {
             "SysPilot — Primary Arch mirror DEAD (refresh mirrors)".into()
+        } else if let Some(gpu_anom) = anomalies.iter().find(|a| {
+            matches!(
+                a.label.as_str(),
+                "GPU BUS DROP" | "PCIE AER FAULT" | "PCIE LINK" | "PREV BOOT GPU"
+            )
+        }) {
+            format!(
+                "SysPilot — {} ({})",
+                self.snapshot.effective_status(),
+                gpu_anom.label
+            )
         } else if total_updates > 0 {
             format!("SysPilot — {total_updates} updates available ({core_updates} core)")
         } else if self.gamemode_active {

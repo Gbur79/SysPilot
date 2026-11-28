@@ -708,28 +708,89 @@ pub fn apply_previous_boot_verdict(
     sys_health: &mut SysHealth,
     verdict: &crate::previous_boot::PreviousBootVerdict,
 ) {
-    if let crate::previous_boot::PreviousBootVerdict::Unclean(reason) = verdict {
-        let already_present = sys_health.actionable_remediations.iter().any(|r| {
-            r.code
-                .as_deref()
-                .is_some_and(|c| c.trim().eq_ignore_ascii_case("SYS_UNCLEAN_SHUTDOWN"))
-        });
-        sys_health.available = true;
-        if !already_present {
-            sys_health.warnings = sys_health.warnings.saturating_add(1);
-            sys_health
-                .actionable_remediations
-                .push(ActionableRemediation {
-                    check: Some("previous_boot".to_string()),
-                    severity: Some("WARN".to_string()),
-                    code: Some("SYS_UNCLEAN_SHUTDOWN".to_string()),
-                    summary: Some(reason.clone()),
-                    suggested_fix: Some(
-                        "Run sys-health --audit and inspect journalctl -b -1".to_string(),
-                    ),
-                    risk: Some("low".to_string()),
-                });
+    let (code, summary, suggested_fix, risk) = match verdict {
+        crate::previous_boot::PreviousBootVerdict::Unclean(reason) => (
+            "SYS_UNCLEAN_SHUTDOWN",
+            reason.clone(),
+            "Run sys-health --audit and inspect journalctl -b -1",
+            "low",
+        ),
+        crate::previous_boot::PreviousBootVerdict::GpuFault { class, summary } => {
+            let fix = match class {
+                crate::previous_boot::GpuPcieFaultClass::BusDropHw => {
+                    "Inspect GPU PCIe power cables/PSU rails, reseat GPU in PCIe x16 slot, check UEFI/BIOS updates, and test under another OS to rule out hardware failure"
+                }
+                crate::previous_boot::GpuPcieFaultClass::PcieAer => {
+                    "Inspect PCIe slot seating, PSU cables, UEFI/BIOS updates, and riser/motherboard stability"
+                }
+                crate::previous_boot::GpuPcieFaultClass::DriverFault => {
+                    "Inspect previous boot kernel/compositor logs (journalctl -b -1 -k) and verify GPU driver/kernel alignment"
+                }
+            };
+            (class.remediation_code(), summary.clone(), fix, "HIGH")
         }
+        crate::previous_boot::PreviousBootVerdict::Clean
+        | crate::previous_boot::PreviousBootVerdict::Inconclusive(_) => return,
+    };
+
+    let already_present = sys_health.actionable_remediations.iter().any(|r| {
+        r.code.as_deref().is_some_and(|c| {
+            let t = c.trim();
+            t.eq_ignore_ascii_case("SYS_UNCLEAN_SHUTDOWN")
+                || t.eq_ignore_ascii_case("GPU_BUS_DROP_HW_SUSPECT")
+                || t.eq_ignore_ascii_case("PCIE_AER_ERROR")
+                || t.eq_ignore_ascii_case("PREV_BOOT_GPU_FAULT")
+        })
+    });
+    sys_health.available = true;
+    if !already_present {
+        sys_health.warnings = sys_health.warnings.saturating_add(1);
+        sys_health
+            .actionable_remediations
+            .push(ActionableRemediation {
+                check: Some("previous_boot".to_string()),
+                severity: Some("WARN".to_string()),
+                code: Some(code.to_string()),
+                summary: Some(summary),
+                suggested_fix: Some(suggested_fix.to_string()),
+                risk: Some(risk.to_string()),
+            });
+    }
+}
+
+pub fn apply_pcie_link_audit(
+    sys_health: &mut SysHealth,
+    pcie_links: &[crate::reboot_safety::PcieLinkStatus],
+) {
+    let degraded_details: Vec<&str> = pcie_links
+        .iter()
+        .filter(|l| l.degraded)
+        .filter_map(|l| l.detail.as_deref())
+        .collect();
+    if degraded_details.is_empty() {
+        return;
+    }
+    let already_present = sys_health.actionable_remediations.iter().any(|r| {
+        r.code
+            .as_deref()
+            .is_some_and(|c| c.trim().eq_ignore_ascii_case("PCIE_LINK_DEGRADED"))
+    });
+    sys_health.available = true;
+    if !already_present {
+        sys_health.warnings = sys_health.warnings.saturating_add(1);
+        sys_health
+            .actionable_remediations
+            .push(ActionableRemediation {
+                check: Some("gpu".to_string()),
+                severity: Some("WARN".to_string()),
+                code: Some("PCIE_LINK_DEGRADED".to_string()),
+                summary: Some(degraded_details.join("; ")),
+                suggested_fix: Some(
+                    "Reseat GPU in primary PCIe x16 slot, check PSU power connectors, remove unstable risers, and inspect UEFI/BIOS PCIe settings"
+                        .to_string(),
+                ),
+                risk: Some("HIGH".to_string()),
+            });
     }
 }
 
@@ -808,12 +869,13 @@ pub async fn run_triage(check_pkgs: bool, gamemode_active: bool) -> StatusJson {
     let security = check_security_vulnerabilities(skip_slow_probes).await;
     let firmware = check_firmware_updates(skip_slow_probes).await;
     let firewall = check_host_firewall().await;
-    let reboot_safety = crate::reboot_safety::check_reboot_safety();
+    let reboot_safety = crate::reboot_safety::check_reboot_safety_at(&active_triage_root());
     let gaming_readiness = crate::gaming::check_gaming_readiness();
     let mirrors = crate::mirrors::check_mirrors(skip_slow_probes).await;
-    let sys_health =
+    let mut sys_health =
         resolve_sys_health_with_previous_boot_at(&active_triage_state(), &active_triage_root())
             .await;
+    apply_pcie_link_audit(&mut sys_health, &reboot_safety.pcie_links);
 
     let (mut status, mut status_reasons, mut informational_reasons) =
         compute_flight_status(FlightStatusInputs {

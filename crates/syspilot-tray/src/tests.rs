@@ -1913,3 +1913,30 @@ fn test_pre_boot_stale_summary_cleared_in_tray_after_clean_reboot() {
         panic!("Expected StandardItem header");
     }
 }
+
+#[test]
+fn test_tray_tooltip_prioritizes_gpu_and_pcie_anomalies() {
+    use crate::tray::SysPilotTray;
+    use ksni::Tray;
+
+    let mut snap = SystemSnapshot {
+        status: "PRE_FLIGHT_ATTENTION".into(),
+        cache_stale: false,
+        updates_total: 2,
+        core_updates: 1,
+        ..Default::default()
+    };
+    snap.actionable_remediations
+        .push(syspilot_core::ActionableRemediation {
+            check: Some("previous_boot".into()),
+            severity: Some("WARN".into()),
+            code: Some("GPU_BUS_DROP_HW_SUSPECT".into()),
+            summary: Some("Xid 79".into()),
+            ..Default::default()
+        });
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let tray = SysPilotTray::new(snap, SentinelStatus::default(), None, false, None, tx);
+    let tt = tray.tool_tip();
+    assert_eq!(tt.title, "SysPilot — PRE_FLIGHT_ATTENTION (GPU BUS DROP)");
+    assert!(tt.description.contains("GPU BUS DROP: XID 79"));
+}
